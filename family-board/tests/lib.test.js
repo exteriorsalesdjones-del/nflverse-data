@@ -79,3 +79,21 @@ test("odds rows match candidates by name and team", () => {
 test("csv escaping", () => {
   assert.strictEqual(FB.csv([{ a: 'x,"y"' }], [{ label: "A", get: (r) => r.a }]), 'A\n"x,""y"""');
 });
+
+test("parlay settlement: void legs dropped, any loss loses", () => {
+  assert.strictEqual(FB.settleParlay(["win", "win"]).state, "win");
+  assert.strictEqual(FB.settleParlay(["win", "void"]).state, "win");
+  assert.strictEqual(FB.settleParlay(["void", "void"]).state, "void");
+  assert.strictEqual(FB.settleParlay(["win", "pending"]).state, "pending");
+  assert.strictEqual(FB.settleParlay(["loss", "pending"]).state, "loss");
+  assert.strictEqual(FB.settleParlay(["win", "needs_review"]).state, "needs_review");
+});
+
+test("parlay locks at the first leg's kickoff", () => {
+  const games = { a: { kickoff_et: "2026-11-15T13:00", status: "upcoming" }, b: { kickoff_et: "2026-11-15T16:25", status: "upcoming" } };
+  const legs = [{ game_id: "a" }, { game_id: "b" }];
+  assert.strictEqual(FB.parlayLocked(legs, games, Date.parse("2026-11-15T17:59:00Z")), false);
+  assert.strictEqual(FB.parlayLocked(legs, games, Date.parse("2026-11-15T18:00:00Z")), true);
+  const c = FB.parlayChance([{ p: 0.5, game_id: "a" }, { p: 0.4, game_id: "a" }]);
+  assert.ok(Math.abs(c.p - 0.2) < 1e-9 && c.sameGame);
+});

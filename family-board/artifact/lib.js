@@ -104,6 +104,30 @@
     return { state: "loss", why: "Played, no touchdown." };
   }
 
+  /* Parlay: locks at the first leg's kickoff. legs: [{game_id, gsis_id}], gameById: {id: game} */
+  function parlayLocked(legs, gameById, nowMs) {
+    return (legs || []).some(function (l) { return isLocked(gameById[l.game_id], nowMs); });
+  }
+  /* Settle a parlay. legResults: list of settle()-style states for each leg ("win","loss","void","pending","needs_review").
+     House rule: a void leg (player didn't play) is dropped; the rest must all score. */
+  function settleParlay(legResults) {
+    var s = legResults || [];
+    if (!s.length) return { state: "needs_review", why: "No legs." };
+    if (s.indexOf("loss") !== -1) return { state: "loss", why: "A leg didn't score." };
+    if (s.indexOf("draft") !== -1) return { state: "draft", why: "Not submitted." };
+    if (s.indexOf("needs_review") !== -1) return { state: "needs_review", why: "A leg needs review." };
+    if (s.indexOf("pending") !== -1) return { state: "pending", why: "Games still to play." };
+    var live = s.filter(function (x) { return x !== "void"; });
+    if (!live.length) return { state: "void", why: "No leg's player played." };
+    return { state: "win", why: live.length === s.length ? "Every leg scored." : "Every leg that played scored (" + (s.length - live.length) + " void leg dropped)." };
+  }
+  /* Model chance that every leg scores. Legs in the same game are treated as independent; flagged. */
+  function parlayChance(legs) {
+    var p = 1, games = {}, same = false;
+    (legs || []).forEach(function (l) { p *= l.p || 0; if (games[l.game_id]) same = true; games[l.game_id] = 1; });
+    return { p: (legs || []).length ? p : null, sameGame: same };
+  }
+
   /* Suggested research slates. candidates: [{gsis_id, player, team, game_id, p, quality}] */
   function suggestSlate(candidates, legs, rule) {
     var pool = candidates.filter(function (c) { return c.quality !== "unavailable" && c.p > 0; })
@@ -144,6 +168,6 @@
   var api = { etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
-    normName: normName, matchOdds: matchOdds };
+    normName: normName, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };
   if (typeof module !== "undefined") module.exports = api; else root.FB = api;
 })(this);

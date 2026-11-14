@@ -36,7 +36,17 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
     for f in Path(picks_dir, "picks").glob("*.json"):
         doc = json.loads(f.read_text())
         picks[f.stem] = (doc.get("data") or doc).get("items", {})
+    # parlays: exported the same way (ArtifactData list collection=parlays out_dir=<dir>) -> <dir>/parlays/<uid>.json
+    gmap = {g["game_id"]: g for g in games}
+    parlays = {}
+    for f in Path(picks_dir, "parlays").glob("*.json"):
+        doc = json.loads(f.read_text())
+        parlays[f.stem] = (doc.get("data") or doc).get("items", {})
+    def first_game(par):
+        gs = [gmap[l["game_id"]] for l in par.get("legs", []) if l.get("game_id") in gmap]
+        return min(gs, key=lambda g: kickoff_utc(g["kickoff_et"]))["game_id"] if gs else None
     wanted = {p["game_id"] for items in picks.values() for p in items.values() if p.get("status") == "submitted"}
+    wanted |= {first_game(par) for items in parlays.values() for par in items.values()} - {None}
     made = []
     out = Path(out_dir, "locks")
     out.mkdir(parents=True, exist_ok=True)
@@ -50,7 +60,12 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
                     for k, p in items.items() if p.get("game_id") == gid and p.get("status") == "submitted"}
             if mine:
                 frozen[uid] = mine
-        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen}))
+        fpar = {}
+        for uid, items in parlays.items():
+            for pid, par in items.items():
+                if first_game(par) == gid:
+                    fpar.setdefault(uid, {})[pid] = [l["gsis_id"] for l in par.get("legs", [])]
+        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen, "parlays": fpar}))
         made.append(gid)
     return made
 

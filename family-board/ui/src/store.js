@@ -9,7 +9,7 @@ const S = {
   meta: null, games: [], gameById: {}, tds: [], weekly: [], slate: null, validation: null, played: {}, recon: {},
   loadError: null,
   db: null, user: null, uid: null, canWrite: false, isAdmin: false, names: {},
-  allPicks: {}, odds: {}, locks: {}, reviews: {}, overrides: {}, extrasLoaded: false, dbState: "connecting", downloads: null, sample: null,
+  allPicks: {}, odds: {}, locks: {}, reviews: {}, overrides: {}, extrasLoaded: false, lines: {}, parlaysAll: {}, draft: [], dbState: "connecting", downloads: null, sample: null,
   version: 0,
 };
 const subs = new Set();
@@ -62,6 +62,17 @@ export async function connect() {
   }, fail);
   db.collection("odds").onSnapshot((s) => { S.odds = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
   db.collection("locks").onSnapshot((s) => { S.locks = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
+  // shared lines: one marker doc per uploader, their rows for each week in a subcollection
+  const lineSubs = {};
+  db.collection("lines").onSnapshot((s) => {
+    s.docs.forEach((d) => {
+      if (lineSubs[d.id] || !S.slate) return;
+      lineSubs[d.id] = db.doc(`lines/${d.id}/weeks/w${S.slate.week}`).onSnapshot((w) => {
+        S.lines[d.id] = w.exists ? (w.data().rows || []) : []; emit();
+      }, () => {});
+    });
+  }, fail);
+  db.collection("parlays").onSnapshot((s) => { S.parlaysAll = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
   db.collection("overrides").onSnapshot((s) => { S.overrides = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
   db.collection("reviews").onSnapshot((s) => { S.reviews = Object.fromEntries(s.docs.map((d) => [d.id.replace("~", ":"), d.data()])); emit(); }, fail);
   window.claude.use("downloads").then((d) => { S.downloads = d; });
@@ -71,7 +82,7 @@ export async function connect() {
 
 async function resolveNames() {
   if (!S.user) return;
-  const ids = Object.keys(S.allPicks);
+  const ids = [...new Set([...Object.keys(S.allPicks), ...Object.keys(S.parlaysAll), ...Object.keys(S.lines)])];
   if (S.uid) ids.push(S.uid);
   try { S.names = await S.user.profiles(ids); emit(); } catch (e) { /* names are optional */ }
 }
@@ -91,9 +102,14 @@ export function effCand(c) {
 }
 export const slateCands = () => (S.slate ? S.slate.games.flatMap((g) => g.teams.flatMap((t) => t.candidates)) : []);
 export const myItems = () => (S.allPicks[S.uid] && S.allPicks[S.uid].items) || {};
-const liveOddsRows = (week) => { const d = S.odds["w" + week]; return d && d.status === "live" ? d.rows || [] : []; };
-export function priceFor(c, week) {
-  const rows = liveOddsRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === "anytime_td");
+const liveOddsRows = (week) => { const d = S.odds["w" + week]; return d && d.status === "live" ? (d.rows || []).map((r) => ({ ...r, uploaded_by: d.reviewed_by || d.imported_by })) : []; };
+/* Every live price row for the slate week: admin imports plus everyone's uploads. */
+export function allLineRows(week) {
+  const up = S.slate && week === S.slate.week ? Object.entries(S.lines).flatMap(([uid, rows]) => rows.map((r) => ({ ...r, uploaded_by: uid }))) : [];
+  return liveOddsRows(week).concat(up);
+}
+export function priceFor(c, week, market = "anytime_td") {
+  const rows = allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market);
   rows.sort((a, b) => Date.parse(b.captured_at) - Date.parse(a.captured_at));
   return rows[0] || null;
 }
@@ -205,7 +221,14 @@ export async function freeze(games) {
       const mine = Object.values(d.items || {}).filter((p) => p.game_id === g.game_id && p.status === "submitted");
       if (mine.length) picks[uid] = Object.fromEntries(mine.map((p) => [p.key, { gsis_id: p.gsis_id, status: p.status, price: p.price || null }]));
     }
-    try { await S.db.doc("locks/" + g.game_id).set({ frozen_at: new Date().toISOString(), by: "admin page", picks }); }
+    const parlays = {};
+    for (const [uid, d] of Object.entries(S.parlaysAll)) {
+      for (const par of Object.values(d.items || {})) {
+        const first = par.legs.map((l) => S.gameById[l.game_id]).filter(Boolean).sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et))[0];
+        if (first && first.game_id === g.game_id) (parlays[uid] ||= {})[par.id] = par.legs.map((l) => l.gsis_id);
+      }
+    }
+    try { await S.db.doc("locks/" + g.game_id).set({ frozen_at: new Date().toISOString(), by: "admin page", picks, parlays }); }
     catch (e) { toast("Couldn't snapshot " + g.game_id); return; }
   }
   toast("Snapshots saved.");
@@ -235,4 +258,102 @@ export async function exportCsv(rows) {
     catch (e) { if (e && e.code === "declined") return null; }
   }
   return text; // caller shows a copy dialog
+}
+
+/* ---------- lines (anyone signed in can upload) ---------- */
+export const MARKETS = { anytime_td: "Anytime TD", "2plus_td": "2+ TDs" };
+export function normMarket(m) {
+  const x = String(m || "").toLowerCase().replace(/[^a-z0-9+]/g, "");
+  if (!x || x.includes("any")) return "anytime_td";
+  if (x.includes("2") || x.includes("two")) return "2plus_td";
+  return null; // other markets are ignored
+}
+export function parseLinesCsv(text) {
+  return text.split(/\n/).map((l) => l.trim()).filter((l) => l && !/^player\s*,/i.test(l)).map((l) => {
+    const c = l.split(",").map((x) => x.trim());
+    // player,team,book,market,american[,captured_at]  (market optional: player,team,book,american[,captured_at])
+    const num = (x) => Number(String(x || "").replace("+", "")); const isPrice = (x) => isFinite(num(x)) && Math.abs(num(x)) >= 100;
+    const hasMarket = c.length >= 5 && isPrice(c[4]) && !isPrice(c[3]);
+    const [player, team, book] = c; const market = hasMarket ? c[3] : ""; const american = hasMarket ? c[4] : c[3]; const when = hasMarket ? c[5] : c[4];
+    return { player, team: (team || "").toUpperCase(), book, market: normMarket(market), american: Number(String(american).replace("+", "")), captured_at: when || new Date().toISOString() };
+  }).filter((r) => r.player && r.market && isFinite(r.american) && Math.abs(r.american) >= 100);
+}
+export async function uploadLines(rows, source) {
+  if (!S.uid || !S.db) { toast("Sign in to Claude to upload lines."); return false; }
+  rows = rows.filter((r) => r.player && r.market && isFinite(r.american) && Math.abs(r.american) >= 100);
+  if (!rows.length) { toast("No usable prices found. Each needs a player and a price like +180."); return false; }
+  const cands = slateCands(); const now = new Date().toISOString();
+  rows = rows.map((r) => { const m = FB.matchOdds(r, cands); return { ...r, gsis_id: m ? m.gsis_id : null, team: r.team || (m ? m.team : ""), player: m ? (m.full_name || m.player) : r.player, source, uploaded_at: now }; });
+  const week = S.slate.week; const key = (r) => `${r.gsis_id || r.player}|${r.book}|${r.market}`;
+  const merged = Object.fromEntries((S.lines[S.uid] || []).map((r) => [key(r), r]));
+  rows.forEach((r) => { merged[key(r)] = r; });
+  try {
+    await S.db.doc(`lines/${S.uid}`).set({ updated_at: now });
+    await S.db.doc(`lines/${S.uid}/weeks/w${week}`).set({ rows: Object.values(merged).slice(-600), updated_at: now });
+    const un = rows.filter((r) => !r.gsis_id).length;
+    toast(`Added ${rows.length} price${rows.length > 1 ? "s" : ""}${un ? ` (${un} couldn't be matched to a player)` : ""}. Live for everyone now.`);
+    return true;
+  } catch (e) { toast(e && e.code === "invalid_argument" ? "Your access is view-only, so lines can't be saved." : "Couldn't save the lines."); return false; }
+}
+export async function deleteLines(uid, filter) {
+  const week = S.slate.week; const rows = (S.lines[uid] || []).filter((r) => !filter(r));
+  try { await S.db.doc(`lines/${uid}/weeks/w${week}`).set({ rows, updated_at: new Date().toISOString() }); toast("Removed."); }
+  catch (e) { toast("Couldn't remove those lines."); }
+}
+export async function readLinesShot(file, book) {
+  if (!file) return;
+  const sample = S.sample || (window.claude && (await window.claude.use("sample")));
+  if (!sample) { toast("Screenshot reading isn't available here. Paste the prices instead."); return; }
+  S.sample = sample; toast("Reading the screenshot…");
+  try {
+    const rows = await sample.json("Read this sportsbook screenshot of NFL player touchdown odds. Return a JSON array of objects {player, team, market, american} for every price visible in these markets only: Anytime Touchdown Scorer (market \"anytime\") and 2+ Touchdowns / To Score 2 or More (market \"2+\"). team is the NFL abbreviation if shown, else empty. american is a number like 180 or -120. Skip First TD, Last TD and every other market. Return only the array.", { images: [file] });
+    await uploadLines((rows || []).map((r) => ({ player: r.player, team: (r.team || "").toUpperCase(), market: normMarket(r.market), american: Number(String(r.american).replace("+", "")), book: book || "Screenshot", captured_at: new Date(file.lastModified || Date.now()).toISOString() })), "screenshot");
+  } catch (e) { toast(e && e.code === "not_granted" ? "Screenshot reading was declined." : "Couldn't read that screenshot. Paste the prices instead."); }
+}
+
+/* ---------- parlays ---------- */
+const draftKey = "fb_parlay_draft";
+try { S.draft = JSON.parse(localStorage.getItem(draftKey) || "[]"); } catch (e) { S.draft = []; }
+const saveDraft = () => { try { localStorage.setItem(draftKey, JSON.stringify(S.draft)); } catch (e) {} emit(); };
+export const myParlays = () => (S.parlaysAll[S.uid] && S.parlaysAll[S.uid].items) || {};
+export function addLeg(c) {
+  if (S.draft.some((l) => l.gsis_id === c.gsis_id)) { toast(`${c.full_name || c.player} is already in your parlay.`); return; }
+  S.draft = S.draft.concat([{ gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, game_id: c.game_id, p: c.p }]);
+  saveDraft(); toast(`Added ${c.full_name || c.player} to your parlay (${S.draft.length} leg${S.draft.length > 1 ? "s" : ""}).`);
+}
+export function removeLeg(gsis) { S.draft = S.draft.filter((l) => l.gsis_id !== gsis); saveDraft(); }
+export function setDraft(legs) { S.draft = legs.map((c) => ({ gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, game_id: c.game_id, p: c.p })); saveDraft(); }
+export async function saveParlay(name) {
+  if (!S.uid || !S.db) { toast("Sign in to Claude to save parlays."); return false; }
+  const legs = S.draft.filter((l) => S.gameById[l.game_id]);
+  if (legs.length < 2) { toast("A parlay needs at least 2 legs."); return false; }
+  if (FB.parlayLocked(legs, S.gameById, Date.now())) { toast("One of these games has started. Remove it to save."); return false; }
+  const id = "p" + Date.now().toString(36); const now = new Date().toISOString();
+  const items = structuredClone(myParlays());
+  items[id] = { id, name: name || `${legs.length}-leg parlay`, week: S.slate.week, status: "submitted", created_at: now,
+    legs: legs.map((l) => ({ ...l, price: (() => { const pr = priceFor(l, S.slate.week); return pr ? { american: pr.american, book: pr.book, captured_at: pr.captured_at } : null; })() })),
+    model_p: FB.parlayChance(legs).p };
+  try { await S.db.doc("parlays/" + S.uid).set({ items, updated_at: now }); S.draft = []; saveDraft(); toast("Parlay saved. It locks when its first game kicks off."); return true; }
+  catch (e) { toast(e && e.code === "invalid_argument" ? "Your access is view-only, so parlays can't be saved." : "Couldn't save the parlay."); return false; }
+}
+export async function deleteParlay(id) {
+  const items = structuredClone(myParlays()); const p = items[id]; if (!p) return;
+  if (FB.parlayLocked(p.legs, S.gameById, Date.now())) { toast("This parlay is locked."); return; }
+  delete items[id];
+  try { await S.db.doc("parlays/" + S.uid).set({ items, updated_at: new Date().toISOString() }); toast("Parlay removed."); } catch (e) { toast("Couldn't remove it."); }
+}
+export function settleParlayFor(uid, par) {
+  const legStates = par.legs.map((l) => {
+    const g = S.gameById[l.game_id];
+    return FB.settle({ key: "leg", gsis_id: l.gsis_id, status: "submitted" }, g, S.tds.filter((t) => t.game_id === l.game_id), S.played[l.game_id], { leg: { gsis_id: l.gsis_id, status: "submitted" } }, Date.now()).state;
+  });
+  const res = FB.settleParlay(legStates);
+  if (FB.parlayLocked(par.legs, S.gameById, Date.now())) {
+    const first = par.legs.map((l) => S.gameById[l.game_id]).filter(Boolean).sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et))[0];
+    const lock = first && S.locks[first.game_id];
+    if (!lock) return { ...res, state: res.state === "pending" ? "pending" : "needs_review", why: "Waiting for the kickoff snapshot.", legStates };
+    const frozen = lock.parlays && lock.parlays[uid] && lock.parlays[uid][par.id];
+    if (!frozen || frozen.join(",") !== par.legs.map((l) => l.gsis_id).join(",")) return { state: "needs_review", why: "Not in the kickoff snapshot: changed after the first game started.", legStates };
+  }
+  return { ...res, legStates };
 }

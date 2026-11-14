@@ -3,9 +3,10 @@ import { createRoot } from "react-dom/client";
 import { AppBar, Box, BottomNavigation, BottomNavigationAction, Button, ButtonBase, Container, CssBaseline, IconButton, Paper, Snackbar, Stack, ThemeProvider, Toolbar, Typography, createTheme, Alert } from "@mui/material";
 import { FB, useStore, loadData, connect, setToast, myItems } from "./store.js";
 import { Icon, P } from "./icons.jsx";
-import { WeekView, TouchdownsView, PicksView, BoardView, AdminView } from "./views.jsx";
+import { WeekView, TouchdownsView, BoardView, AdminView, ParlaysView, LinesView } from "./views.jsx";
 
-const TABS = [["week", "This week", P.week], ["touchdowns", "Touchdowns", P.tds], ["picks", "My picks", P.picks], ["board", "Board", P.board], ["admin", "Admin", P.admin]];
+const TABS = [["week", "This week", P.week], ["parlays", "Parlays", P.parlays], ["lines", "Lines", P.lines], ["touchdowns", "Touchdowns", P.tds], ["board", "Board", P.board]];
+const ROUTES = ["week", "parlays", "lines", "touchdowns", "board", "picks", "admin"];
 
 /* Follows the viewer's theme: an explicit data-theme on <html>, otherwise the OS setting. */
 function useMode() {
@@ -56,7 +57,7 @@ function makeTheme(mode) {
   });
 }
 
-const hashTab = () => { const t = (location.hash || "#week").slice(1); return TABS.some(([k]) => k === t) ? t : "week"; };
+const hashTab = () => { const t = (location.hash || "#week").slice(1); return ROUTES.includes(t) ? t : "week"; };
 
 function SlateBar() {
   const S = useStore();
@@ -80,9 +81,9 @@ function App() {
     const on = () => { setTab(hashTab()); setMsg(null); window.scrollTo(0, 0); };
     window.addEventListener("hashchange", on); return () => window.removeEventListener("hashchange", on);
   }, []);
-  const tabs = TABS.filter(([k]) => k !== "admin" || S.isAdmin);
+  const tabs = TABS; const navValue = tab === "picks" ? "board" : tab === "admin" ? false : tab;
   const fresh = S.meta && `Updated ${FB.fmtEt(Date.parse(S.meta.refreshed_at), { month: "short", day: "numeric" })} ET${(Date.now() - Date.parse(S.meta.refreshed_at)) / 3600e3 > 36 ? " · may be out of date" : ""}`;
-  const View = { week: WeekView, touchdowns: TouchdownsView, picks: PicksView, board: BoardView, admin: AdminView }[tab];
+  const View = { week: WeekView, parlays: ParlaysView, lines: LinesView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView }[tab];
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -90,6 +91,7 @@ function App() {
         <Toolbar sx={{ minHeight: 52, px: "max(16px, env(safe-area-inset-left, 0px))", gap: 1 }}>
           <Typography component="h1" sx={{ fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 700, fontSize: 22, textTransform: "uppercase", letterSpacing: "0.02em", flex: 1 }} noWrap>Anytime TD Family Board</Typography>
           <Typography variant="caption" sx={{ opacity: 0.85, display: { xs: "none", sm: "block" } }}>{fresh}</Typography>
+          {S.isAdmin && <Button color="inherit" startIcon={<Icon d={P.admin} />} onClick={() => { location.hash = "admin"; }} sx={{ minHeight: 44 }}>Admin</Button>}
         </Toolbar>
       </AppBar>
       <Container maxWidth="md" sx={{ pt: 2, pb: "calc(150px + env(safe-area-inset-bottom, 0px))", px: "max(16px, env(safe-area-inset-left, 0px))" }}>
@@ -101,7 +103,7 @@ function App() {
       <Box sx={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 1100 }}>
         {tab === "week" && <Box sx={{ px: "max(12px, env(safe-area-inset-left, 0px))", pb: 1, maxWidth: 900, mx: "auto" }}><SlateBar /></Box>}
         <Paper elevation={8} square sx={{ pb: "env(safe-area-inset-bottom, 0px)" }}>
-          <BottomNavigation showLabels value={tab} onChange={(e, v) => { location.hash = v; }} sx={{ height: 60, maxWidth: 900, mx: "auto" }}>
+          <BottomNavigation showLabels value={navValue} onChange={(e, v) => { location.hash = v; }} sx={{ height: 60, maxWidth: 900, mx: "auto" }}>
             {tabs.map(([k, l, d]) => <BottomNavigationAction key={k} value={k} label={l} icon={<Icon d={d} />} />)}
           </BottomNavigation>
         </Paper>

@@ -19,10 +19,10 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
    after a page change. Omit `capabilities` so the stored rules carry forward.
 5. Kickoff snapshots:
    - `ArtifactData list collection=locks` and note the existing ids.
-   - `ArtifactData list collection=picks out_dir=<tmp>`.
+   - `ArtifactData list collection=picks out_dir=<tmp>` and `ArtifactData list collection=parlays out_dir=<tmp>`.
    - `python3 refresh/make_locks.py <tmp> <tmp>/out <existing ids...>`
    - For each file printed, `ArtifactData set collection=locks doc_id=<game_id> file_path=<file>`
      (create only; never overwrite an existing lock).
 6. Report: final games, reconciled games, touchdowns, new snapshots, and any failure.
 
-Never write to `picks`, `odds` or `reviews` from the refresh. Those belong to members and admins.
+Never write to `picks`, `parlays`, `lines`, `odds`, `overrides` or `reviews` from the refresh. Those belong to members and admins.

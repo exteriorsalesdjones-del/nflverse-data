@@ -6,7 +6,8 @@ import {
 } from "@mui/material";
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
-  exportCsv, parseOddsCsv, stageOdds, setOddsStatus, readShot, freeze, saveReview, setOverride, toast,
+  exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot,
+  addLeg, removeLeg, setDraft, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 
@@ -73,12 +74,12 @@ export function WeekView() {
         <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · research odds, no sportsbook prices yet</Typography>
       </Box>
       {open.length === 0 && <Empty>Every game this week has kicked off. The next slate appears after the Tuesday refresh.</Empty>}
+      <Typography variant="caption" color="text.secondary">Tap a game to see every player.</Typography>
       {open.map((g) => <GameCard key={g.game_id} g={g} onOpen={setSheet} />)}
       {locked.length > 0 && (
         <Button variant="outlined" size="large" onClick={() => setShowLocked(!showLocked)}>{showLocked ? "Hide" : "Show"} {locked.length} started or final game{locked.length > 1 ? "s" : ""}</Button>
       )}
       {showLocked && locked.map((g) => <GameCard key={g.game_id} g={g} onOpen={setSheet} />)}
-      <Fold title="Suggested slates" summary="3, 5, 7, 10-leg and full-week ideas from open games"><Slates /></Fold>
       <Fold title="Matchup boosts" summary="Who the opponent's defense helps or hurts (untested)"><Matchups onOpen={setSheet} /></Fold>
       <HowItWorks open={how} onClose={() => setHow(false)} />
       <PlayerSheet c={sheet} onClose={() => setSheet(null)} />
@@ -87,34 +88,34 @@ export function WeekView() {
 }
 
 function GameCard({ g, onOpen }) {
-  const [all, setAll] = useState(false);
+  const [open, setOpen] = useState(false);
   const locked = FB.isLocked(g, Date.now());
   const status = g.status === "final" ? `Final ${g.away_score}–${g.home_score}` : locked ? "Locked" : "Open";
   return (
     <Card variant="outlined" sx={{ borderRadius: 2 }}>
-      <CardContent sx={{ display: "grid", gap: 1, p: 1.5, "&:last-child": { pb: 1.5 } }}>
-        <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-          <Typography variant="h6" component="h3" sx={{ flex: 1 }}>{g.away} at {g.home}</Typography>
-          <Chip size="small" label={status} color={locked ? "default" : "primary"} variant={locked ? "outlined" : "filled"} />
-        </Stack>
-        <Typography variant="body2" color="text.secondary">{kick(g)}{g.roof ? ` · ${g.roof}` : ""}</Typography>
+      <ButtonBase onClick={() => setOpen(!open)} aria-expanded={open} sx={{ display: "flex", width: "100%", textAlign: "left", px: 1.5, py: 1.25, gap: 1, minHeight: 56 }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="h6" component="h3">{g.away} at {g.home}</Typography>
+          <Typography variant="body2" color="text.secondary">{kick(g)}{g.teams.every((t) => t.implied_points != null) ? ` · ${g.away} ${g.teams[0].implied_points}, ${g.home} ${g.teams[1].implied_points} pts` : ""}</Typography>
+        </Box>
+        <Chip size="small" label={status} color={locked ? "default" : "primary"} variant={locked ? "outlined" : "filled"} />
+        <Icon d={P.expand} sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s", color: "text.secondary" }} />
+      </ButtonBase>
+      <Box sx={{ px: 1.5, pb: 1.25 }}>
         {g.teams.map((t) => {
           const cands = t.candidates.map(effCand);
           const avail = cands.filter((c) => c.quality !== "unavailable"); const out = cands.filter((c) => c.quality === "unavailable");
-          const shown = all ? avail : avail.slice(0, 3);
+          const shown = open ? avail : avail.slice(0, 1);
           return (
-            <Box key={t.team} sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
-              <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 2 }}>
-                {t.team} · {t.implied_points != null ? `${t.implied_points} implied pts` : "no line yet"}
-              </Typography>
-              {shown.map((c) => <PlayerRow key={c.gsis_id} c={c} g={g} locked={locked} onOpen={onOpen} />)}
-              {all && out.length > 0 && <Typography variant="body2" color="text.secondary" sx={{ py: 0.5 }}>Not available: {out.map((c) => `${c.full_name || c.player} (${c.injury})`).join(", ")}</Typography>}
-              {all && (t.removed || []).length > 0 && <Typography variant="body2" color="text.secondary" sx={{ pb: 0.5 }}>Off the active roster: {t.removed.map((d) => `${d.player} (${d.why})`).join(", ")}</Typography>}
+            <Box key={t.team} sx={{ borderTop: 1, borderColor: "divider", pt: 0.5 }}>
+              {open && <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 2 }}>{t.team} · {t.implied_points != null ? `${t.implied_points} implied pts` : "no line yet"}</Typography>}
+              {shown.map((c) => <PlayerRow key={c.gsis_id} c={c} g={g} locked={locked} onOpen={onOpen} team={!open} />)}
+              {open && out.length > 0 && <Typography variant="body2" color="text.secondary" sx={{ py: 0.5 }}>Not available: {out.map((c) => `${c.full_name || c.player} (${c.injury})`).join(", ")}</Typography>}
+              {open && (t.removed || []).length > 0 && <Typography variant="body2" color="text.secondary" sx={{ pb: 0.5 }}>Off the active roster: {t.removed.map((d) => `${d.player} (${d.why})`).join(", ")}</Typography>}
             </Box>
           );
         })}
-        <Button onClick={() => setAll(!all)} sx={{ minHeight: 44 }}>{all ? "Show top 3 per team" : "Show all players"}</Button>
-      </CardContent>
+      </Box>
     </Card>
   );
 }
@@ -130,14 +131,14 @@ function PickButton({ c, g, locked, size = "medium" }) {
     </Button>
   );
 }
-function PlayerRow({ c, g, locked, onOpen }) {
+function PlayerRow({ c, g, locked, onOpen, team }) {
   const mu = c.p_matchup != null && Math.abs(c.matchup_pct) >= 8 ? c.matchup_pct : null;
   return (
     <Stack direction="row" sx={{ alignItems: "center", gap: 1, py: 0.75 }}>
       <ButtonBase onClick={() => onOpen({ ...c, _g: g })} sx={{ flex: 1, minWidth: 0, justifyContent: "flex-start", textAlign: "left", borderRadius: 1, minHeight: 44, display: "block" }}>
         <Stack direction="row" sx={{ alignItems: "baseline", gap: 0.75, flexWrap: "wrap" }}>
           <Typography sx={{ fontWeight: 600 }} noWrap>{c.full_name || c.player}</Typography>
-          <Typography variant="caption" color="text.secondary">{c.pos}</Typography>
+          <Typography variant="caption" color="text.secondary">{team ? `${c.team} ` : ""}{c.pos}</Typography>
           {c.injury && <Chip size="small" color={c.quality === "unavailable" ? "error" : "warning"} variant="outlined" label={c.injury} sx={{ height: 20 }} />}
           {mu != null && <Typography variant="caption" sx={{ color: mu > 0 ? "success.main" : "error.main", fontWeight: 600 }}>matchup {mu > 0 ? "+" : ""}{Math.round(mu)}%</Typography>}
         </Stack>
@@ -157,12 +158,14 @@ function PlayerSheet({ c, onClose }) {
   const g = c._g; const locked = FB.isLocked(g, Date.now());
   const pr = priceFor(c, g.week); const e = pr ? FB.edge(c.p, pr.american) : null;
   const rows = [["Chance to score", pct1(c.p)], ["Fair odds", am(c.fair_american)],
-    ["Sportsbook price", pr ? `${pr.book} ${am(pr.american)} (${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not imported yet"],
+    ["Anytime TD price", pr ? `${pr.book} ${am(pr.american)} (${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)}` : "Not uploaded yet (Lines tab)"],
     ...(e ? [["Edge", `${e.edgePts.toFixed(1)} pts · EV ${e.evPerDollar >= 0 ? "+" : ""}${e.evPerDollar.toFixed(2)} per $1${FB.priceFresh(pr, Date.now(), 120) ? "" : " · price is stale"}`]] : []),
+    ["2+ TDs price", (() => { const p2 = priceFor(c, g.week, "2plus_td"); return p2 ? `${p2.book} ${am(p2.american)} · ${et(p2.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not uploaded"; })()],
     ["With matchup (untested)", c.p_matchup != null ? `${pct1(c.p_matchup)} (${c.matchup_pct > 0 ? "+" : ""}${c.matchup_pct}%)` : "—"],
     ["Usage", `${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10 · ${c.games} games`]];
   return (
-    <Sheet open onClose={onClose} title={`${c.full_name || c.player} · ${c.pos || ""} ${c.team}`} actions={<PickButton c={c} g={g} locked={locked} size="large" />}>
+    <Sheet open onClose={onClose} title={`${c.full_name || c.player} · ${c.pos || ""} ${c.team}`}
+      actions={<>{!locked && c.quality !== "unavailable" && <Button size="large" variant="outlined" onClick={() => addLeg({ ...c, game_id: g.game_id })}>Add to parlay</Button>}<PickButton c={c} g={g} locked={locked} size="large" /></>}>
       <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {kick(g)}</Typography>
       {c.injury && <Alert severity={c.quality === "unavailable" ? "error" : "warning"} sx={{ borderRadius: 2 }}>{c.injury}{c.override ? ` (set by an admin${c.override.note ? `: ${c.override.note}` : ""})` : " on the injury report"}</Alert>}
       <Box component="dl" sx={{ display: "grid", gridTemplateColumns: "minmax(110px, max-content) minmax(0,1fr)", gap: "6px 12px", m: 0 }}>
@@ -193,6 +196,7 @@ function Slates() {
             {s.short > 0 && <Typography variant="body2" color="error">Only {s.legs.length} of {n} legs available.</Typography>}
             <Typography variant="body2">{s.legs.map((l) => `${l.full_name || l.player} ${pct(l.p)}`).join(" · ") || "—"}</Typography>
             {rule === "team" && <Typography variant="caption" color="text.secondary">{s.jointNote}</Typography>}
+            {s.legs.length >= 2 && <Box><Button variant="outlined" onClick={() => { setDraft(s.legs); toast(`Loaded ${s.legs.length} legs into your builder.`); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Use in my builder</Button></Box>}
           </Box>
         );
       })}
@@ -487,15 +491,13 @@ function ReviewForm({ t, a, onDone }) {
 }
 
 /* =========================== MY PICKS =========================== */
-export function PicksView() {
+function MyPicks() {
   const S = useStore();
-  if (!S.uid) return <Stack spacing={1.5}><H2>My picks</H2><DbNote /></Stack>;
+  if (!S.uid) return <DbNote />;
   const items = Object.values(myItems()).sort((a, b) => b.week - a.week || FB.etToUtcMs((S.gameById[a.game_id] || {}).kickoff_et) - FB.etToUtcMs((S.gameById[b.game_id] || {}).kickoff_et));
   const weeks = [...new Set(items.map((p) => p.week))];
   return (
     <Stack spacing={1.5}>
-      <H2>My picks</H2>
-      <DbNote />
       {!items.length && <Empty>No picks yet. Open This Week and tap Pick on a player. You can change picks until each game kicks off.</Empty>}
       {weeks.map((w) => {
         const list = items.filter((p) => p.week === w); const rs = list.map((p) => settlePick(S.uid, p));
@@ -533,17 +535,17 @@ export function PicksView() {
 }
 
 /* =========================== FAMILY BOARD =========================== */
-export function BoardView() {
+function FamilyBoard() {
   const S = useStore();
   const all = Object.entries(S.allPicks).flatMap(([uid, d]) => Object.values(d.items || {}).filter((p) => p.status === "submitted").map((p) => ({ uid, p, r: settlePick(uid, p) })));
   const weeks = [...new Set(all.map((x) => x.p.week))].sort((a, b) => b - a);
   const totals = {}; all.forEach(({ uid, r }) => { const t = (totals[uid] ||= { win: 0, loss: 0, void: 0, pending: 0, needs_review: 0 }); t[r.state] = (t[r.state] || 0) + 1; });
   const standings = Object.entries(totals).sort((a, b) => b[1].win - a[1].win || a[1].loss - b[1].loss);
+  const parl = Object.entries(S.parlaysAll).flatMap(([uid, d]) => Object.values(d.items || {}).map((par) => ({ uid, par, r: settleParlayFor(uid, par) })))
+    .sort((a, b) => b.par.week - a.par.week || String(b.par.created_at).localeCompare(String(a.par.created_at)));
   return (
     <Stack spacing={1.5}>
-      <H2>Family board</H2>
-      <DbNote />
-      {!all.length && <Empty>No picks yet. Picks show up here as soon as anyone makes one.</Empty>}
+      {!all.length && !parl.length && <Empty>No picks yet. Picks show up here as soon as anyone makes one.</Empty>}
       {standings.length > 0 && (
         <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
           <Typography variant="overline" color="text.secondary">Season standings</Typography>
@@ -556,6 +558,12 @@ export function BoardView() {
             </Stack>
           ))}
         </CardContent></Card>
+      )}
+      {parl.length > 0 && (
+        <Box>
+          <Typography variant="overline" color="text.secondary">Parlays</Typography>
+          <Stack spacing={1}>{parl.slice(0, 30).map(({ uid, par, r }) => <ParlayCard key={uid + par.id} uid={uid} par={par} r={r} />)}</Stack>
+        </Box>
       )}
       {weeks.map((w) => {
         const wk = all.filter((x) => x.p.week === w); const members = [...new Set(wk.map((x) => x.uid))];
@@ -588,11 +596,11 @@ export function BoardView() {
 
 /* =========================== ADMIN =========================== */
 export function AdminView() {
-  const S = useStore(); const [csv, setCsv] = useState(""); const [book, setBook] = useState(""); const [play, setPlay] = useState(null);
+  const S = useStore(); const [play, setPlay] = useState(null);
   const [who, setWho] = useState(null); const [st, setSt] = useState("Out"); const [note, setNote] = useState("");
   const cands = useMemo(() => slateCands().map((c) => ({ ...c, label: `${c.full_name || c.player} · ${c.pos || ""} ${c.team}` })), [S.slate]);
   if (!S.isAdmin) return <Empty>Admins only.</Empty>;
-  const week = S.slate.week; const d = S.odds["w" + week]; const now = Date.now();
+  const week = S.slate.week; const now = Date.now();
   const started = S.slate.games.filter((g) => FB.isLocked(g, now));
   const ov = (S.overrides["w" + week] || {}).players || {};
   const queue = S.extrasLoaded ? S.tds.filter((t) => t.unit === "offense" && effAttr(t).status !== "verified_individual").slice(-20).reverse() : [];
@@ -615,22 +623,6 @@ export function AdminView() {
           </Stack>
         ))}
       </Fold>
-      <Fold title={`Odds import · week ${week}`} summary="Paste CSV or read a screenshot; prices stay pending until you approve">
-        <TextField multiline minRows={4} label="CSV rows" placeholder={"player,team,book,american,captured_at\nTrey McBride,ARI,FanDuel,+180,2026-11-15T10:05:00-05:00"} value={csv} onChange={(e) => setCsv(e.target.value)} slotProps={{ input: { sx: { fontFamily: "var(--fb-mono)", fontSize: 12 } } }} />
-        <Button variant="contained" size="large" onClick={() => stageOdds(parseOddsCsv(csv), "csv")}>Stage CSV rows</Button>
-        {S.sample ? <Stack direction="row" sx={{ gap: 1 }}>
-          <TextField label="Book" value={book} onChange={(e) => setBook(e.target.value)} sx={{ flex: 1 }} />
-          <Button component="label" variant="outlined" size="large">Read screenshot<input hidden type="file" accept="image/*" onChange={(e) => readShot(e.target.files[0], book)} /></Button>
-        </Stack> : <Typography variant="caption" color="text.secondary">Screenshot reading isn't available in this view.</Typography>}
-        {d && <>
-          <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap" }}>
-            <Chip color={d.status === "live" ? "success" : "warning"} label={d.status} />
-            <Typography variant="caption" color="text.secondary">{(d.rows || []).length} rows · {d.source} · {et(d.imported_at, { hour: "numeric", minute: "2-digit" })}</Typography>
-          </Stack>
-          {d.status !== "live" ? <Button variant="contained" size="large" onClick={() => setOddsStatus("live")}>Approve and publish</Button> : <Button variant="outlined" size="large" onClick={() => setOddsStatus("pending")}>Withdraw</Button>}
-          {(d.rows || []).map((r, i) => <Typography key={i} variant="body2">{r.player} {r.team} · {r.book} <Num>{am(r.american)}</Num> {r.gsis_id ? "" : <Box component="span" sx={{ color: "error.main" }}>· unmatched</Box>}</Typography>)}
-        </>}
-      </Fold>
       <Fold title="Kickoff snapshots" summary="Settlement only counts picks frozen at kickoff">
         {S.slate.games.map((g) => <Stack key={g.game_id} direction="row" sx={{ gap: 1, alignItems: "center" }}><Typography sx={{ flex: 1 }}>{g.away} at {g.home}</Typography>
           {S.locks[g.game_id] ? <Chip size="small" color="success" variant="outlined" label={"frozen " + et(S.locks[g.game_id].frozen_at, { hour: "numeric", minute: "2-digit" })} />
@@ -648,6 +640,176 @@ export function AdminView() {
         <Typography variant="body2" color="text.secondary">Roster check: players must be on their team's active roster (week {S.slate.roster_week}).</Typography>
       </Fold>
       {play && <PlayDialog t={play} onClose={() => setPlay(null)} />}
+    </Stack>
+  );
+}
+
+/* =========================== BOARD (Mine | Family) =========================== */
+export function BoardView({ mine: startMine }) {
+  const [view, setView] = useState(startMine ? "mine" : "family");
+  return (
+    <Stack spacing={1.5}>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+        <H2 sx={{ flex: 1 }}>{view === "mine" ? "My picks" : "Family board"}</H2>
+        <ToggleButtonGroup exclusive size="small" value={view} onChange={(e, v) => v && setView(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 2, textTransform: "none" } }}>
+          <ToggleButton value="family">Family</ToggleButton><ToggleButton value="mine">Mine</ToggleButton>
+        </ToggleButtonGroup>
+      </Stack>
+      <DbNote />
+      {view === "mine" ? <><MyPicks /><MyParlays /></> : <FamilyBoard />}
+    </Stack>
+  );
+}
+function ParlayCard({ uid, par, r, onDelete }) {
+  const S = useStore(); const ch = FB.parlayChance(par.legs);
+  return (
+    <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 }, display: "grid", gap: 0.5 }}>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+        <Typography sx={{ fontWeight: 700, flex: 1, minWidth: 0 }} noWrap>{uid ? `${nameOf(uid)} · ` : ""}{par.name}</Typography>
+        <Result r={r} />
+      </Stack>
+      <Typography variant="caption" color="text.secondary">Week {par.week} · {par.legs.length} legs · model chance all score {pct1(ch.p)}{ch.sameGame ? " (has same-game legs)" : ""}</Typography>
+      {par.legs.map((l, i) => {
+        const st = r.legStates ? r.legStates[i] : "pending"; const g = S.gameById[l.game_id] || {};
+        return (
+          <Stack key={l.gsis_id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
+            <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>{l.player} <Typography component="span" variant="caption" color="text.secondary">{l.team} · {g.away} at {g.home}</Typography></Typography>
+            <Chip size="small" variant="outlined" color={RESULT[st] ? RESULT[st][1] : "default"} label={RESULT[st] ? RESULT[st][0] : st} />
+          </Stack>
+        );
+      })}
+      {onDelete && <Box><Button onClick={onDelete}>Delete parlay</Button></Box>}
+    </CardContent></Card>
+  );
+}
+function MyParlays() {
+  const S = useStore(); if (!S.uid) return null;
+  const list = Object.values(myParlays()).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  if (!list.length) return null;
+  return (
+    <Box>
+      <Typography variant="overline" color="text.secondary">My parlays</Typography>
+      <Stack spacing={1}>{list.map((par) => <ParlayCard key={par.id} par={par} r={settleParlayFor(S.uid, par)}
+        onDelete={FB.parlayLocked(par.legs, S.gameById, Date.now()) ? null : () => deleteParlay(par.id)} />)}</Stack>
+    </Box>
+  );
+}
+
+/* =========================== PARLAYS =========================== */
+export function ParlaysView() {
+  const S = useStore(); const [name, setName] = useState(""); const [pick, setPick] = useState(null);
+  const now = Date.now();
+  const openGames = S.slate.games.filter((g) => !FB.isLocked(g, now));
+  const options = openGames.flatMap((g) => g.teams.flatMap((t) => t.candidates.map(effCand))).filter((c) => c.quality !== "unavailable")
+    .sort((a, b) => b.p - a.p).map((c) => ({ ...c, label: `${c.full_name || c.player} · ${c.pos || ""} ${c.team} · ${pct(c.p)}` }));
+  const legs = S.draft; const ch = FB.parlayChance(legs);
+  const stale = legs.filter((l) => FB.isLocked(S.gameById[l.game_id], now));
+  return (
+    <Stack spacing={1.5}>
+      <H2>Parlays</H2>
+      <DbNote />
+      <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 1.25, p: 1.5, "&:last-child": { pb: 1.5 } }}>
+        <Typography variant="h6" component="h3">Build a parlay</Typography>
+        <Autocomplete options={options} value={pick} onChange={(e, v) => { if (v) { addLeg(v); setPick(null); } }} getOptionLabel={(o) => o.label}
+          isOptionEqualToValue={(a, b) => a.gsis_id === b.gsis_id} renderInput={(p) => <TextField {...p} label="Add a player (open games)" />} />
+        {!legs.length && <Typography variant="body2" color="text.secondary">Add players here, from a player's details on This week, or load a suggested slate below.</Typography>}
+        {legs.map((l) => { const g = S.gameById[l.game_id] || {}; return (
+          <Stack key={l.gsis_id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
+            <Box sx={{ flex: 1, minWidth: 0 }}><Typography sx={{ fontWeight: 600 }} noWrap>{l.player} <Typography component="span" variant="caption" color="text.secondary">{l.pos} {l.team}</Typography></Typography>
+              <Typography variant="caption" color="text.secondary">{g.away} at {g.home} · {pct(l.p)}{FB.isLocked(g, now) ? " · started" : ""}</Typography></Box>
+            <Button onClick={() => removeLeg(l.gsis_id)} sx={{ minHeight: 44 }}>Remove</Button>
+          </Stack>); })}
+        {legs.length > 0 && <>
+          <Typography variant="body2"><b>Chance every leg scores:</b> {pct1(ch.p)}{ch.p ? ` · fair odds ${am(FB.probToAmerican(ch.p))}` : ""}</Typography>
+          {ch.sameGame && <Alert severity="info" sx={{ borderRadius: 2 }}>Two legs are in the same game. Their touchdowns are linked, so the combined chance is only a rough estimate.</Alert>}
+          {stale.length > 0 && <Alert severity="warning" sx={{ borderRadius: 2 }}>{stale.map((l) => l.player).join(", ")} {stale.length > 1 ? "are" : "is"} in a game that has started. Remove to save.</Alert>}
+          <Typography variant="caption" color="text.secondary">Locks when its first game kicks off. If a player doesn't play, that leg is dropped and the rest still count. Sportsbook parlay odds are never quoted here.</Typography>
+          <TextField label="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+          <Stack direction="row" sx={{ gap: 1 }}>
+            <Button variant="contained" size="large" sx={{ flex: 1 }} disabled={legs.length < 2 || !S.uid || stale.length > 0} onClick={async () => { if (await saveParlay(name)) setName(""); }}>Save parlay ({legs.length} legs)</Button>
+            <Button size="large" onClick={() => setDraft([])}>Clear</Button>
+          </Stack>
+        </>}
+      </CardContent></Card>
+      <Fold title="Suggested slates" summary="Highest chances, one player per game" defaultExpanded><Slates /></Fold>
+      <MyParlays />
+    </Stack>
+  );
+}
+
+/* =========================== LINES =========================== */
+export function LinesView() {
+  const S = useStore(); const week = S.slate.week;
+  const [book, setBook] = useState(""); const [text, setText] = useState(""); const [market, setMarket] = useState("anytime_td");
+  const [who, setWho] = useState(null); const [mPrice, setMPrice] = useState(""); const [mMarket, setMMarket] = useState("anytime_td");
+  const cands = useMemo(() => slateCands().map(effCand).map((c) => ({ ...c, label: `${c.full_name || c.player} · ${c.pos || ""} ${c.team}` })), [S.slate, S.overrides]);
+  const byId = Object.fromEntries(cands.map((c) => [c.gsis_id, c]));
+  const rows = allLineRows(week).filter((r) => (r.market || "anytime_td") === market);
+  const latest = {}; rows.forEach((r) => { const k = `${r.gsis_id || r.player}|${r.book}`; if (!latest[k] || Date.parse(r.captured_at) > Date.parse(latest[k].captured_at)) latest[k] = r; });
+  const list = Object.values(latest).sort((a, b) => FB.americanToProb(b.american) - FB.americanToProb(a.american));
+  const canWrite = !!S.uid && S.dbState === "ok";
+  async function fromFile(f) {
+    if (!f) return;
+    if (f.type.startsWith("image/")) return readLinesShot(f, book);
+    const t = await f.text(); const parsed = parseLinesCsv(t).map((r) => ({ ...r, book: r.book || book || "Upload" }));
+    await uploadLines(parsed, "file");
+  }
+  const mine = (S.lines[S.uid] || []).length;
+  return (
+    <Stack spacing={1.5}>
+      <H2>Lines · week {week}</H2>
+      <DbNote />
+      <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 1.25, p: 1.5, "&:last-child": { pb: 1.5 } }}>
+        <Typography variant="h6" component="h3">Upload current lines</Typography>
+        <Typography variant="body2" color="text.secondary">Anytime TD and 2+ TDs only. Prices go live for everyone right away, labeled with your name and the time.</Typography>
+        <TextField label="Sportsbook (e.g. DraftKings, FanDuel)" value={book} onChange={(e) => setBook(e.target.value)} />
+        <Stack direction="row" sx={{ gap: 1 }}>
+          <Button component="label" variant="contained" size="large" disabled={!canWrite} startIcon={<Icon d={P.upload} />} sx={{ flex: 1 }}>
+            Screenshot<input hidden type="file" accept="image/*" onChange={(e) => { fromFile(e.target.files[0]); e.target.value = ""; }} /></Button>
+          <Button component="label" variant="outlined" size="large" disabled={!canWrite} sx={{ flex: 1 }}>
+            CSV file<input hidden type="file" accept=".csv,.txt,text/csv,text/plain" onChange={(e) => { fromFile(e.target.files[0]); e.target.value = ""; }} /></Button>
+        </Stack>
+        <Accordion disableGutters variant="outlined" sx={{ borderRadius: 2, "&:before": { display: "none" } }}>
+          <AccordionSummary expandIcon={<Icon d={P.expand} />} sx={{ minHeight: 48 }}><Typography>Type or paste prices</Typography></AccordionSummary>
+          <AccordionDetails sx={{ display: "grid", gap: 1.25 }}>
+            <Autocomplete options={cands} value={who} onChange={(e, v) => setWho(v)} getOptionLabel={(o) => o.label} isOptionEqualToValue={(a, b) => a.gsis_id === b.gsis_id} renderInput={(p) => <TextField {...p} label="Player" />} />
+            <Stack direction="row" sx={{ gap: 1 }}>
+              <TextField select label="Market" value={mMarket} onChange={(e) => setMMarket(e.target.value)} sx={{ flex: 1 }}>{Object.entries(MARKETS).map(([k, l]) => <MenuItem key={k} value={k}>{l}</MenuItem>)}</TextField>
+              <TextField label="Price" placeholder="+180" value={mPrice} onChange={(e) => setMPrice(e.target.value)} sx={{ width: 110 }} slotProps={{ htmlInput: { inputMode: "numeric" } }} />
+            </Stack>
+            <Button variant="contained" size="large" disabled={!canWrite || !who || !mPrice} onClick={async () => {
+              const ok = await uploadLines([{ player: who.full_name || who.player, team: who.team, market: mMarket, american: Number(String(mPrice).replace("+", "")), book: book || "Manual", captured_at: new Date().toISOString() }], "manual");
+              if (ok) { setWho(null); setMPrice(""); } }}>Add price</Button>
+            <TextField multiline minRows={3} label="Or paste rows" placeholder={"player,team,book,market,price\nTrey McBride,ARI,FanDuel,anytime,+180"} value={text} onChange={(e) => setText(e.target.value)} slotProps={{ input: { sx: { fontFamily: "var(--fb-mono)", fontSize: 12 } } }} />
+            <Button variant="outlined" size="large" disabled={!canWrite || !text.trim()} onClick={async () => { if (await uploadLines(parseLinesCsv(text).map((r) => ({ ...r, book: r.book || book || "Paste" })), "paste")) setText(""); }}>Add pasted rows</Button>
+          </AccordionDetails>
+        </Accordion>
+        {mine > 0 && <Button onClick={() => deleteLines(S.uid, () => true)}>Remove all {mine} of my week {week} prices</Button>}
+      </CardContent></Card>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+        <Typography variant="h6" component="h3" sx={{ flex: 1 }}>{list.length} price{list.length === 1 ? "" : "s"}</Typography>
+        <ToggleButtonGroup exclusive size="small" value={market} onChange={(e, v) => v && setMarket(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 1.5, textTransform: "none" } }}>
+          {Object.entries(MARKETS).map(([k, l]) => <ToggleButton key={k} value={k}>{l}</ToggleButton>)}
+        </ToggleButtonGroup>
+      </Stack>
+      {!list.length && <Empty>No {MARKETS[market]} prices yet this week. Upload a sportsbook screenshot above.</Empty>}
+      {list.map((r) => {
+        const c = byId[r.gsis_id]; const imp = FB.americanToProb(r.american); const e = c && market === "anytime_td" ? FB.edge(c.p, r.american) : null;
+        const canDel = r.uploaded_by === S.uid || S.isAdmin;
+        return (
+          <Card key={`${r.gsis_id || r.player}|${r.book}|${r.uploaded_by}`} variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 }, display: "grid", gap: 0.25 }}>
+            <Stack direction="row" sx={{ alignItems: "baseline", gap: 1 }}>
+              <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>{r.player} <Typography component="span" variant="caption" color="text.secondary">{r.team}</Typography></Typography>
+              <Typography sx={{ fontWeight: 700 }}><Num>{am(r.american)}</Num></Typography>
+            </Stack>
+            <Typography variant="body2" color="text.secondary">{r.book} · implied {pct1(imp)}{e ? ` · model ${pct1(c.p)} · edge ${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} pts` : ""}{!r.gsis_id ? " · not matched to a player" : ""}</Typography>
+            <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>{nameOf(r.uploaded_by)} · {r.source || "upload"} · {et(r.captured_at, { hour: "numeric", minute: "2-digit" })}{FB.priceFresh(r, Date.now(), 120) ? "" : " · older than 2 hours"}</Typography>
+              {canDel && r.uploaded_by && S.lines[r.uploaded_by] && <Button size="small" onClick={() => deleteLines(r.uploaded_by, (x) => x.player === r.player && x.book === r.book && (x.market || "anytime_td") === market)}>Remove</Button>}
+            </Stack>
+          </CardContent></Card>
+        );
+      })}
     </Stack>
   );
 }
