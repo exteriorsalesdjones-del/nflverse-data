@@ -32,6 +32,18 @@ def implied(a):
     return 100 / (a + 100) if a > 0 else -a / (-a + 100)
 
 
+def record(rows: list) -> dict:
+    if not rows:
+        return {}
+    y = [r["y"] for r in rows]; p = [r["p"] for r in rows]; base = float(np.mean(y)); weeks = sorted({r["week"] for r in rows})
+    wk = lambda w: [r for r in rows if r["week"] == w]
+    return {"n": len(rows), "weeks": weeks, "log_loss": round(ll(p, y), 4), "log_loss_constant": round(ll([base] * len(y), y), 4),
+            "brier": round(float(np.mean((np.array(p) - np.array(y)) ** 2)), 4),
+            "by_week": [{"week": w, "n": len(wk(w)), "log_loss": round(ll([r["p"] for r in wk(w)], [r["y"] for r in wk(w)]), 4), "scored": sum(r["y"] for r in wk(w))} for w in weeks],
+            "calibration": [{"bin": f"{lo:.0%}-{hi:.0%}", "n": len(b), "pred": round(float(np.mean([r["p"] for r in b])), 3), "actual": round(float(np.mean([r["y"] for r in b])), 3)}
+                            for lo, hi in ((0, .1), (.1, .2), (.2, .3), (.3, .45), (.45, 1)) for b in [[r for r in rows if lo <= r["p"] < hi]] if b]}
+
+
 def main(lines_dir: str | None = None) -> dict:
     preds = json.loads((D / "predictions.json").read_text()) if (D / "predictions.json").exists() else {}
     games = {g["game_id"]: g for g in json.loads((D / "games.json").read_text())}
@@ -50,16 +62,11 @@ def main(lines_dir: str | None = None) -> dict:
             if pid in on:
                 rows.append({"game_id": gid, "week": g["week"], "pid": pid, "p": x["p"], "model": x.get("model"), "y": int(pid in scorers.get(gid, set())),
                              "kick": datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET)})
-    out = {"graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "model": {}, "market": {"n": 0}}
-    if rows:
-        y = [r["y"] for r in rows]; p = [r["p"] for r in rows]; base = float(np.mean(y))
-        weeks = sorted({r["week"] for r in rows})
-        out["model"] = {"n": len(rows), "weeks": weeks, "log_loss": round(ll(p, y), 4), "log_loss_constant": round(ll([base] * len(y), y), 4),
-                        "brier": round(float(np.mean((np.array(p) - np.array(y)) ** 2)), 4),
-                        "by_week": [{"week": w, "n": sum(1 for r in rows if r["week"] == w), "log_loss": round(ll([r["p"] for r in rows if r["week"] == w], [r["y"] for r in rows if r["week"] == w]), 4),
-                                     "scored": sum(r["y"] for r in rows if r["week"] == w)} for w in weeks],
-                        "calibration": [{"bin": f"{lo:.0%}-{hi:.0%}", "n": len(b), "pred": round(float(np.mean([r['p'] for r in b])), 3), "actual": round(float(np.mean([r['y'] for r in b])), 3)}
-                                        for lo, hi in ((0, .1), (.1, .2), (.2, .3), (.3, .45), (.45, 1)) for b in [[r for r in rows if lo <= r["p"] < hi]] if b]}
+    out = {"graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "model": {}, "backtest": {}, "market": {"n": 0},
+           "note": "Live = chances published before kickoff (top candidates per team). Backtest = weeks 1-9 rolling forecasts for every player who took a snap. Graded separately because the populations differ."}
+    out["backtest"] = record([r for r in rows if "backtest" in str(r.get("model"))])
+    out["model"] = record([r for r in rows if "backtest" not in str(r.get("model"))])
+    rows = [r for r in rows if "backtest" not in str(r.get("model"))]  # market comparison uses live pregame chances only
     # market
     prices = {}
     if lines_dir:

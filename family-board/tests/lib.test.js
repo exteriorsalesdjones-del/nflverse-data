@@ -112,3 +112,47 @@ test("matchup slates rank by boost with a 15% floor, one per game", () => {
   assert.ok(Math.abs(s.jointMatchupP - 0.32 * 0.24) < 1e-9 && Math.abs(s.jointP - 0.25 * 0.2) < 1e-9);
   assert.deepStrictEqual(FB.suggestSlate(c, 2, "game").legs.map((x) => x.gsis_id), ["a", "d"]);
 });
+
+test("American odds parsing: EVEN, signs, invalid values", () => {
+  assert.strictEqual(FB.parseAmerican("+180"), 180);
+  assert.strictEqual(FB.parseAmerican("-120"), -120);
+  assert.strictEqual(FB.parseAmerican("EVEN"), 100);
+  assert.ok(isNaN(FB.parseAmerican("+90")));
+  assert.ok(isNaN(FB.parseAmerican("1.85")));
+  assert.ok(isNaN(FB.parseAmerican("")));
+  assert.ok(Math.abs(FB.americanToProb(-110) - 110 / 210) < 1e-12);
+  assert.ok(Math.abs(FB.americanToDecimal(180) - 2.8) < 1e-12 && Math.abs(FB.americanToDecimal(-125) - 1.8) < 1e-12);
+});
+
+test("line parsing reports skipped rows instead of dropping them", () => {
+  const r = FB.parseLines("player,team,book,market,price\nTrey McBride,ARI,FanDuel,anytime,+180\nTrey McBride,ARI,FanDuel,2+,EVEN\nX,ARI,FD,first td,+500\nY,ARI,FD,anytime,+90\nZ,ARI,FD,+150", "2026-11-15T15:00:00.000Z");
+  assert.deepStrictEqual(r.rows.map((x) => [x.player, x.market, x.american]), [["Trey McBride", "anytime_td", 180], ["Trey McBride", "2plus_td", 100], ["Z", "anytime_td", 150]]);
+  assert.strictEqual(r.skipped.length, 2);
+  assert.match(r.skipped[0].why, /market/); assert.match(r.skipped[1].why, /price/);
+});
+
+test("best price: highest payout among fresh prices, latest per book, stale fallback", () => {
+  const now = Date.parse("2026-11-15T17:00:00Z");
+  const rows = [
+    { book: "FanDuel", american: 150, captured_at: "2026-11-15T16:30:00Z" },
+    { book: "FanDuel", american: 200, captured_at: "2026-11-15T12:00:00Z" },   // older FanDuel price ignored
+    { book: "DraftKings", american: 170, captured_at: "2026-11-15T16:00:00Z" },
+    { book: "BetMGM", american: 250, captured_at: "2026-11-14T16:00:00Z" },    // stale (>2h)
+  ];
+  const b = FB.bestPrice(rows, now, 120);
+  assert.strictEqual(b.book, "DraftKings"); assert.strictEqual(b.american, 170); assert.strictEqual(b.stale, false); assert.strictEqual(b.books, 2);
+  const s = FB.bestPrice([{ book: "BetMGM", american: 250, captured_at: "2026-11-14T16:00:00Z" }], now, 120);
+  assert.strictEqual(s.stale, true);
+  assert.strictEqual(FB.bestPrice([], now, 120), null);
+  assert.strictEqual(FB.bestPrice([{ book: "A", american: -150, captured_at: "2026-11-15T16:50:00Z" }, { book: "B", american: -130, captured_at: "2026-11-15T16:50:00Z" }], now, 120).book, "B");
+});
+
+test("uploaded prices: started games, future and old timestamps are rejected", () => {
+  const g = { kickoff_et: "2026-11-15T13:00", status: "upcoming" };
+  const before = Date.parse("2026-11-15T17:30:00Z"), after = Date.parse("2026-11-15T18:30:00Z");
+  assert.strictEqual(FB.lineProblem({ captured_at: "2026-11-15T17:20:00Z" }, g, before), null);
+  assert.match(FB.lineProblem({ captured_at: "2026-11-15T18:20:00Z" }, g, after), /started/);
+  assert.match(FB.lineProblem({ captured_at: "2026-11-15T19:00:00Z" }, g, before), /future/);
+  assert.match(FB.lineProblem({ captured_at: "2026-11-01T17:20:00Z" }, g, before), /7 days/);
+  assert.strictEqual(FB.lineProblem({ captured_at: "2026-11-15T17:20:00Z" }, null, before), null); // unmatched rows still allowed
+});

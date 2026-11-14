@@ -56,8 +56,15 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
             continue
         frozen = {}
         for uid, items in picks.items():
+            kick = kickoff_utc(g["kickoff_et"])
+            def before_kick(p):  # a pick timestamped after kickoff (device clock off) is left out and settles as "needs review"
+                t = p.get("submitted_at") or p.get("saved_at")
+                try:
+                    return t is None or datetime.fromisoformat(str(t).replace("Z", "+00:00")) <= kick
+                except ValueError:
+                    return True
             mine = {k: {"gsis_id": p["gsis_id"], "status": p["status"], "price": p.get("price")}
-                    for k, p in items.items() if p.get("game_id") == gid and p.get("status") == "submitted"}
+                    for k, p in items.items() if p.get("game_id") == gid and p.get("status") == "submitted" and before_kick(p)}
             if mine:
                 frozen[uid] = mine
         fpar = {}

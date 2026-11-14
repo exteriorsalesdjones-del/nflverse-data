@@ -172,7 +172,64 @@
     return hits.length === 1 ? hits[0] : null;
   }
 
-  var api = { etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  /* ---------- uploaded lines ---------- */
+  /* "+180", "-120", "180", "EVEN"/"EV" -> number; anything else (incl. -99..+99) -> NaN */
+  function parseAmerican(x) {
+    var t = String(x == null ? "" : x).trim().toUpperCase();
+    if (t === "EVEN" || t === "EV" || t === "EVS") return 100;
+    if (!/^[+-]?\d+(\.0+)?$/.test(t)) return NaN;
+    var n = Number(t.replace("+", ""));
+    return Math.abs(n) >= 100 ? n : NaN;
+  }
+  function normMarket(m) {
+    var x = String(m || "").toLowerCase().replace(/[^a-z0-9+]/g, "");
+    if (!x || x.indexOf("any") !== -1) return "anytime_td";
+    if (x.indexOf("2") !== -1 || x.indexOf("two") !== -1) return "2plus_td";
+    return null; // other markets are ignored
+  }
+  /* CSV/paste: player,team,book,market,price[,captured_at] or player,team,book,price[,captured_at].
+     Returns {rows, skipped:[{line, why}]} so nothing is dropped silently. */
+  function parseLines(text, nowIso) {
+    var rows = [], skipped = [];
+    String(text || "").split(/\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l && !/^player\s*,/i.test(l); }).forEach(function (l) {
+      var c = l.split(",").map(function (x) { return x.trim(); });
+      var hasMarket = c.length >= 5 && isFinite(parseAmerican(c[4])) && !isFinite(parseAmerican(c[3]));
+      var market = normMarket(hasMarket ? c[3] : ""), american = parseAmerican(hasMarket ? c[4] : c[3]), when = hasMarket ? c[5] : c[4];
+      if (!c[0]) return skipped.push({ line: l, why: "no player" });
+      if (!market) return skipped.push({ line: l, why: "market isn't Anytime TD or 2+ TDs" });
+      if (!isFinite(american)) return skipped.push({ line: l, why: "price isn't valid American odds (e.g. +180, -120, EVEN)" });
+      if (when && !isFinite(Date.parse(when))) return skipped.push({ line: l, why: "time isn't a date" });
+      rows.push({ player: c[0], team: (c[1] || "").toUpperCase(), book: c[2] || "", market: market, american: american, captured_at: when ? new Date(Date.parse(when)).toISOString() : (nowIso || new Date().toISOString()) });
+    });
+    return { rows: rows, skipped: skipped };
+  }
+  /* Is an uploaded price usable? game: the player's game (or null if unmatched). */
+  function lineProblem(row, game, nowMs) {
+    var t = Date.parse(row.captured_at);
+    if (!isFinite(t)) return "no capture time";
+    if (t > nowMs + 10 * 60000) return "capture time is in the future";
+    if (nowMs - t > 7 * 864e5) return "older than 7 days";
+    if (game && isLocked(game, nowMs)) return "game has started (pre-kickoff prices are kept)";
+    if (game && t >= etToUtcMs(game.kickoff_et)) return "captured after kickoff";
+    return null;
+  }
+  /* Best price for one player and market across books: highest payout among fresh prices (latest per book);
+     if none is fresh, the most recent price flagged stale. Returns null when there are no prices. */
+  function bestPrice(rows, nowMs, maxAgeMin) {
+    if (!rows || !rows.length) return null;
+    var perBook = {};
+    rows.forEach(function (r) { var k = r.book || "?"; if (!perBook[k] || Date.parse(r.captured_at) > Date.parse(perBook[k].captured_at)) perBook[k] = r; });
+    var latest = Object.keys(perBook).map(function (k) { return perBook[k]; });
+    var fresh = latest.filter(function (r) { return priceFresh(r, nowMs, maxAgeMin); });
+    var pool = fresh.length ? fresh : latest;
+    pool.sort(fresh.length ? function (a, b) { return americanToDecimal(b.american) - americanToDecimal(a.american); }
+                           : function (a, b) { return Date.parse(b.captured_at) - Date.parse(a.captured_at); });
+    var best = pool[0];
+    return Object.assign({}, best, { stale: !fresh.length, books: fresh.length || latest.length,
+      others: pool.slice(1).map(function (r) { return { book: r.book, american: r.american, captured_at: r.captured_at }; }) });
+  }
+
+  var api = { parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

@@ -145,10 +145,10 @@ export function allLineRows(week) {
   const up = S.slate && week === S.slate.week ? Object.entries(S.lines).flatMap(([uid, rows]) => rows.map((r) => ({ ...r, uploaded_by: uid }))) : [];
   return liveOddsRows(week).concat(up);
 }
+/* Best price across books (fresh = captured in the last 2 hours); stale fallback is flagged. */
 export function priceFor(c, week, market = "anytime_td") {
   const rows = allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market);
-  rows.sort((a, b) => Date.parse(b.captured_at) - Date.parse(a.captured_at));
-  return rows[0] || null;
+  return FB.bestPrice(rows, Date.now(), 120);
 }
 export function settlePick(uid, p) {
   const g = S.gameById[p.game_id];
@@ -307,28 +307,18 @@ export async function exportCsv(rows) {
 
 /* ---------- lines (anyone signed in can upload) ---------- */
 export const MARKETS = { anytime_td: "Anytime TD", "2plus_td": "2+ TDs" };
-export function normMarket(m) {
-  const x = String(m || "").toLowerCase().replace(/[^a-z0-9+]/g, "");
-  if (!x || x.includes("any")) return "anytime_td";
-  if (x.includes("2") || x.includes("two")) return "2plus_td";
-  return null; // other markets are ignored
-}
-export function parseLinesCsv(text) {
-  return text.split(/\n/).map((l) => l.trim()).filter((l) => l && !/^player\s*,/i.test(l)).map((l) => {
-    const c = l.split(",").map((x) => x.trim());
-    // player,team,book,market,american[,captured_at]  (market optional: player,team,book,american[,captured_at])
-    const num = (x) => Number(String(x || "").replace("+", "")); const isPrice = (x) => isFinite(num(x)) && Math.abs(num(x)) >= 100;
-    const hasMarket = c.length >= 5 && isPrice(c[4]) && !isPrice(c[3]);
-    const [player, team, book] = c; const market = hasMarket ? c[3] : ""; const american = hasMarket ? c[4] : c[3]; const when = hasMarket ? c[5] : c[4];
-    return { player, team: (team || "").toUpperCase(), book, market: normMarket(market), american: Number(String(american).replace("+", "")), captured_at: when || new Date().toISOString() };
-  }).filter((r) => r.player && r.market && isFinite(r.american) && Math.abs(r.american) >= 100);
-}
+export const normMarket = FB.normMarket;
+/* rows plus .skipped [{line, why}] so the upload message can say what was left out */
+export function parseLinesCsv(text) { const r = FB.parseLines(text); const rows = r.rows; rows.skipped = r.skipped; return rows; }
 export async function uploadLines(rows, source) {
   if (!S.uid || !S.db) { toast("Sign in to Claude to upload lines."); return false; }
-  rows = rows.filter((r) => r.player && r.market && isFinite(r.american) && Math.abs(r.american) >= 100);
-  if (!rows.length) { toast("No usable prices found. Each needs a player and a price like +180."); return false; }
+  const skipped = [...(rows.skipped || [])];
+  rows = rows.filter((r) => { const ok = r.player && r.market && isFinite(r.american) && Math.abs(r.american) >= 100; if (!ok) skipped.push({ line: `${r.player || "?"} ${r.american}`, why: "missing player, market or valid price" }); return ok; });
+  if (!rows.length) { S.lastSkipped = skipped; emit(); toast(skipped.length ? `Nothing saved: ${skipped.length} row(s) skipped (see list).` : "No usable prices found. Each needs a player and a price like +180."); return false; }
   const cands = slateCands(); const now = new Date().toISOString();
-  rows = rows.map((r) => { const m = FB.matchOdds(r, cands); return { ...r, gsis_id: m ? m.gsis_id : null, team: r.team || (m ? m.team : ""), player: m ? (m.full_name || m.player) : r.player, source, uploaded_at: now }; });
+  rows = rows.map((r) => { const m = FB.matchOdds(r, cands); return { ...r, gsis_id: m ? m.gsis_id : null, game_id: m ? m.game_id : null, team: r.team || (m ? m.team : ""), player: m ? (m.full_name || m.player) : r.player, source, uploaded_at: now }; });
+  rows = rows.filter((r) => { const why = FB.lineProblem(r, r.game_id ? S.gameById[r.game_id] : null, Date.now()); if (why) skipped.push({ line: `${r.player} ${r.book} ${r.american}`, why }); return !why; });
+  if (!rows.length) { toast(skipped.length ? `Nothing saved. ${skipped.length} skipped: ${skipped[0].why}.` : "No usable prices found."); return false; }
   const week = S.slate.week; const key = (r) => `${r.gsis_id || r.player}|${r.book}|${r.market}`;
   const merged = Object.fromEntries((S.lines[S.uid] || []).map((r) => [key(r), r]));
   rows.forEach((r) => { merged[key(r)] = r; });
@@ -336,7 +326,8 @@ export async function uploadLines(rows, source) {
     await S.db.doc(`lines/${S.uid}`).set({ updated_at: now });
     await S.db.doc(`lines/${S.uid}/weeks/w${week}`).set({ rows: Object.values(merged).slice(-600), updated_at: now });
     const un = rows.filter((r) => !r.gsis_id).length;
-    toast(`Added ${rows.length} price${rows.length > 1 ? "s" : ""}${un ? ` (${un} couldn't be matched to a player)` : ""}. Live for everyone now.`);
+    S.lastSkipped = skipped; emit();
+    toast(`Added ${rows.length} price${rows.length > 1 ? "s" : ""}${un ? ` (${un} couldn't be matched to a player)` : ""}${skipped.length ? `; skipped ${skipped.length} (see list)` : ""}. Live for everyone now.`);
     return true;
   } catch (e) { toast(e && e.code === "invalid_argument" ? "Your access is view-only, so lines can't be saved." : "Couldn't save the lines."); return false; }
 }
@@ -345,6 +336,14 @@ export async function deleteLines(uid, filter) {
   try { await S.db.doc(`lines/${uid}/weeks/w${week}`).set({ rows, updated_at: new Date().toISOString() }); toast("Removed."); }
   catch (e) { toast("Couldn't remove those lines."); }
 }
+export function setShotReview(rows) { S.shotReview = rows; emit(); }
+export function clearSkipped() { S.lastSkipped = null; emit(); }
+export async function confirmShot() {
+  const rows = (S.shotReview || []).map((r) => ({ ...r, american: FB.parseAmerican(r.raw ?? r.american) })).filter((r) => r.player && isFinite(r.american));
+  const bad = (S.shotReview || []).length - rows.length;
+  const r2 = rows.map(({ id, raw, ...r }) => r); r2.skipped = bad ? [{ line: `${bad} row(s)`, why: "missing player or invalid price" }] : [];
+  if (await uploadLines(r2, "screenshot")) { S.shotReview = null; emit(); }
+}
 export async function readLinesShot(file, book) {
   if (!file) return;
   const sample = S.sample || (window.claude && (await window.claude.use("sample")));
@@ -352,7 +351,11 @@ export async function readLinesShot(file, book) {
   S.sample = sample; toast("Reading the screenshot…");
   try {
     const rows = await sample.json("Read this sportsbook screenshot of NFL player touchdown odds. Return a JSON array of objects {player, team, market, american} for every price visible in these markets only: Anytime Touchdown Scorer (market \"anytime\") and 2+ Touchdowns / To Score 2 or More (market \"2+\"). team is the NFL abbreviation if shown, else empty. american is a number like 180 or -120. Skip First TD, Last TD and every other market. Return only the array.", { images: [file] });
-    await uploadLines((rows || []).map((r) => ({ player: r.player, team: (r.team || "").toUpperCase(), market: normMarket(r.market), american: Number(String(r.american).replace("+", "")), book: book || "Screenshot", captured_at: new Date(file.lastModified || Date.now()).toISOString() })), "screenshot");
+    // AI-read prices are staged for review; nothing goes live until the uploader confirms
+    S.shotReview = (rows || []).map((r, i) => ({ id: i, player: String(r.player || ""), team: (r.team || "").toUpperCase(), market: normMarket(r.market) || "anytime_td",
+      american: FB.parseAmerican(r.american), book: book || "Screenshot", captured_at: new Date(file.lastModified || Date.now()).toISOString() }));
+    emit();
+    toast(S.shotReview.length ? `Read ${S.shotReview.length} prices. Check them below, then confirm.` : "No anytime or 2+ TD prices found in that screenshot.");
   } catch (e) { toast(e && e.code === "not_granted" ? "Screenshot reading was declined." : "Couldn't read that screenshot. Paste the prices instead."); }
 }
 

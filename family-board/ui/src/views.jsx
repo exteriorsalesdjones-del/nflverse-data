@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 
@@ -230,9 +230,9 @@ function PlayerSheet({ c, onClose }) {
   const g = c._g; const locked = FB.isLocked(g, Date.now());
   const pr = priceFor(c, g.week); const e = pr ? FB.edge(c.p, pr.american) : null;
   const rows = [["Chance to score", pct1(c.p)], ["Fair odds", am(c.fair_american)],
-    ["Anytime TD price", pr ? `${pr.book} ${am(pr.american)} (${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)}` : "Not uploaded yet (Uploads tab)"],
-    ...(e ? [["Edge", `${e.edgePts.toFixed(1)} pts · EV ${e.evPerDollar >= 0 ? "+" : ""}${e.evPerDollar.toFixed(2)} per $1${FB.priceFresh(pr, Date.now(), 120) ? "" : " · price is stale"}`]] : []),
-    ["2+ TDs price", (() => { const p2 = priceFor(c, g.week, "2plus_td"); return p2 ? `${p2.book} ${am(p2.american)} · ${et(p2.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not uploaded"; })()],
+    ["Anytime TD price", pr ? `${pr.stale ? "Latest (stale)" : pr.books > 1 ? `Best of ${pr.books} books` : "Best"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)}${pr.others.length ? ` · also ${pr.others.map((o) => `${o.book} ${am(o.american)}`).join(", ")}` : ""}` : "Not uploaded yet (Uploads tab)"],
+    ...(e ? [["Model vs price", `${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} pts vs the implied chance (book margin included) · EV ${e.evPerDollar >= 0 ? "+" : ""}${e.evPerDollar.toFixed(2)} per $1 if the model is right${pr.stale ? " · price is over 2 hours old" : ""}. The model has not beaten sportsbook prices yet.`]] : []),
+    ["2+ TDs price", (() => { const p2 = priceFor(c, g.week, "2plus_td"); return p2 ? `${p2.stale ? "Latest (stale)" : "Best"}: ${p2.book} ${am(p2.american)} · ${et(p2.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not uploaded"; })()],
     ["Usage", `${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10 · ${c.games} games`],
     ...(c.team_games_2026 != null ? [
       ...(["RB", "QB"].includes(c.pos) || c.i5_carries ? [["Carries inside the 5", c.team_i5_carries ? `${c.i5_carries} of ${c.team}'s ${c.team_i5_carries} (${Math.round(100 * c.i5_carries / c.team_i5_carries)}%) · ${c.team_games_2026} games` : `None yet (${c.team} has no carries inside the 5 in 2026)`]] : []),
@@ -873,7 +873,7 @@ export function LinesView() {
   async function fromFile(f) {
     if (!f) return;
     if (f.type.startsWith("image/")) return readLinesShot(f, book);
-    const t = await f.text(); const parsed = parseLinesCsv(t).map((r) => ({ ...r, book: r.book || book || "Upload" }));
+    const t = await f.text(); const raw = parseLinesCsv(t); const parsed = Object.assign(raw.map((r) => ({ ...r, book: r.book || book || "Upload" })), { skipped: raw.skipped });
     await uploadLines(parsed, "file");
   }
   const mine = (S.lines[S.uid] || []).length;
@@ -911,9 +911,12 @@ export function LinesView() {
               const ok = await uploadLines([{ player: who.full_name || who.player, team: who.team, market: mMarket, american: Number(String(mPrice).replace("+", "")), book: book || "Manual", captured_at: new Date().toISOString() }], "manual");
               if (ok) { setWho(null); setMPrice(""); } }}>Add price</Button>
             <TextField multiline minRows={3} label="Or paste rows" placeholder={"player,team,book,market,price\nTrey McBride,ARI,FanDuel,anytime,+180"} value={text} onChange={(e) => setText(e.target.value)} slotProps={{ input: { sx: { fontFamily: "var(--fb-mono)", fontSize: 12 } } }} />
-            <Button variant="outlined" size="large" disabled={!canWrite || !text.trim()} onClick={async () => { if (await uploadLines(parseLinesCsv(text).map((r) => ({ ...r, book: r.book || book || "Paste" })), "paste")) setText(""); }}>Add pasted rows</Button>
+            <Button variant="outlined" size="large" disabled={!canWrite || !text.trim()} onClick={async () => { const raw = parseLinesCsv(text); if (await uploadLines(Object.assign(raw.map((r) => ({ ...r, book: r.book || book || "Paste" })), { skipped: raw.skipped }), "paste")) setText(""); }}>Add pasted rows</Button>
           </AccordionDetails>
         </Accordion>
+        {S.shotReview && <ShotReview />}
+        {S.lastSkipped && S.lastSkipped.length > 0 && <Alert severity="warning" sx={{ borderRadius: 2 }} onClose={clearSkipped}>
+          <b>Skipped {S.lastSkipped.length}:</b> {S.lastSkipped.slice(0, 6).map((x) => `${x.line} (${x.why})`).join(" · ")}{S.lastSkipped.length > 6 ? " …" : ""}</Alert>}
         {mine > 0 && <Button onClick={() => deleteLines(S.uid, () => true)}>Remove all {mine} of my week {week} prices</Button>}
       </CardContent></Card>
       <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
@@ -933,7 +936,7 @@ export function LinesView() {
               <Typography sx={{ fontWeight: 700 }}><Num>{am(r.american)}</Num></Typography>
             </Stack>
             {!r.gsis_id && r.uploaded_by === S.uid && <Autocomplete size="small" options={cands} getOptionLabel={(o) => o.label} onChange={(e, v) => v && matchLine(r, v)} renderInput={(p) => <TextField {...p} label={`Match "${r.player}" to a player`} />} />}
-            <Typography variant="body2" color="text.secondary">{r.book} · implied {pct1(imp)}{e ? ` · model ${pct1(c.p)} · edge ${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} pts` : ""}{!r.gsis_id ? " · not matched to a player" : ""}</Typography>
+            <Typography variant="body2" color="text.secondary">{r.book} · implied {pct1(imp)}{e ? ` · model ${pct1(c.p)} (${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} pts vs price)` : ""}{!r.gsis_id ? " · not matched to a player" : ""}</Typography>
             <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
               <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>{nameOf(r.uploaded_by)} · {r.source || "upload"} · {et(r.captured_at, { hour: "numeric", minute: "2-digit" })}{FB.priceFresh(r, Date.now(), 120) ? "" : " · older than 2 hours"}</Typography>
               {canDel && r.uploaded_by && S.lines[r.uploaded_by] && <Button size="small" onClick={() => deleteLines(r.uploaded_by, (x) => x.player === r.player && x.book === r.book && (x.market || "anytime_td") === market)}>Remove</Button>}
@@ -1062,14 +1065,43 @@ function WeekRecap({ all, parl }) {
   );
 }
 function LiveRecord() {
-  const S = useStore(); const gr = S.grades; if (!gr || !gr.model || !gr.model.n) return null; const m = gr.model; const k = gr.market;
+  const S = useStore(); const gr = S.grades; if (!gr) return null; const live = gr.model || {}; const bt = gr.backtest || {}; const k = gr.market;
+  const m = live.n ? live : bt; if (!m.n) return null;
   return <>
     <Typography variant="subtitle2">Live record</Typography>
-    <Typography variant="body2" color="text.secondary">Every pregame chance is saved and graded after the game ({m.n.toLocaleString()} player-games, weeks {m.weeks[0]}–{m.weeks[m.weeks.length - 1]}; weeks 1–9 are the backtest). Log loss {m.log_loss.toFixed(3)} vs {m.log_loss_constant.toFixed(3)} for a flat rate (lower is better).</Typography>
+    <Typography variant="body2" color="text.secondary">{live.n
+      ? `Chances published before kickoff, graded after each game: ${live.n.toLocaleString()} player-games, weeks ${live.weeks.join(", ")}. Log loss ${live.log_loss.toFixed(3)} vs ${live.log_loss_constant.toFixed(3)} for a flat rate (lower is better).`
+      : "No live week has been graded yet; the first one appears after this week's games."}
+      {bt.n ? ` Backtest (weeks ${bt.weeks[0]}–${bt.weeks[bt.weeks.length - 1]}, every player who took a snap, graded separately): log loss ${bt.log_loss.toFixed(3)} vs ${bt.log_loss_constant.toFixed(3)}.` : ""}</Typography>
+    <Typography variant="caption" color="text.secondary">Calibration below: {live.n ? "live" : "backtest"}.</Typography>
     <TableContainer><Table size="small">
       <TableHead><TableRow>{["Chance band", "Players", "Forecast", "Scored"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
       <TableBody>{m.calibration.map((b) => <TableRow key={b.bin}><TableCell>{b.bin}</TableCell><TableCell><Num>{b.n}</Num></TableCell><TableCell><Num>{pct(b.pred)}</Num></TableCell><TableCell><Num>{pct(b.actual)}</Num></TableCell></TableRow>)}</TableBody>
     </Table></TableContainer>
     <Typography variant="body2" color="text.secondary">{k && k.n ? `Against uploaded sportsbook prices (${k.n} player-games, weeks ${k.weeks.join(", ")}): model log loss ${k.log_loss_model} vs market ${k.log_loss_market}${k.log_loss_model < k.log_loss_market ? " — model ahead" : " — market ahead"}. Value Play needs 200+ priced player-games and the model ahead.` : "No uploaded prices have been graded yet. Upload lines before kickoff on the Uploads tab to build the model-vs-market record (200+ priced player-games needed before Value Play can switch on)."}</Typography>
   </>;
+}
+
+/* Review AI-read screenshot prices before they go live */
+function ShotReview() {
+  const S = useStore(); const rows = S.shotReview || [];
+  const upd = (id, patch) => setShotReview(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  return (
+    <Box sx={{ border: 2, borderColor: "warning.main", borderRadius: 2, p: 1.25, display: "grid", gap: 1 }} role="region" aria-label="Review screenshot prices">
+      <Typography sx={{ fontWeight: 700 }}>Check {rows.length} prices read from the screenshot</Typography>
+      <Typography variant="body2" color="text.secondary">Screenshot reading can misread numbers. Fix or remove anything wrong; nothing is shared until you confirm. Book: {rows[0] ? rows[0].book : ""}.</Typography>
+      {rows.map((r) => (
+        <Stack key={r.id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
+          <TextField size="small" label="Player" value={r.player} onChange={(e) => upd(r.id, { player: e.target.value })} sx={{ flex: 1, minWidth: 0 }} />
+          <TextField size="small" label={r.market === "2plus_td" ? "2+ TDs" : "Anytime"} value={r.raw ?? (isFinite(r.american) ? (r.american > 0 ? "+" + r.american : String(r.american)) : "")}
+            error={!isFinite(FB.parseAmerican(r.raw ?? r.american))} onChange={(e) => upd(r.id, { raw: e.target.value })} sx={{ width: 92 }} slotProps={{ htmlInput: { inputMode: "numeric" } }} />
+          <Button aria-label={`Remove ${r.player}`} onClick={() => { setShotReview(rows.filter((x) => x.id !== r.id)); setTimeout(() => { const el = document.getElementById("shot-confirm"); if (el) el.focus(); }, 0); }} sx={{ minWidth: 44, minHeight: 44 }}>✕</Button>
+        </Stack>
+      ))}
+      <Stack direction="row" sx={{ gap: 1 }}>
+        <Button id="shot-confirm" variant="contained" size="large" sx={{ flex: 1 }} disabled={!rows.length} onClick={confirmShot}>Confirm and share {rows.length}</Button>
+        <Button size="large" onClick={() => setShotReview(null)}>Discard</Button>
+      </Stack>
+    </Box>
+  );
 }
