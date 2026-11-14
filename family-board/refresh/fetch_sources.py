@@ -24,6 +24,12 @@ FILES = {
     f"injuries_{SEASON}.parquet": f"{BASE}/injuries/injuries_{SEASON}.parquet",
     f"snap_counts_{SEASON}.parquet": f"{BASE}/snap_counts/snap_counts_{SEASON}.parquet",
     f"roster_weekly_{SEASON}.parquet": f"{BASE}/weekly_rosters/roster_weekly_{SEASON}.parquet",
+    # model v0.3c inputs: pregame depth charts, FTN charting (QB sneaks), and 2025 as last-season history
+    f"depth_charts_{SEASON}.parquet": f"{BASE}/depth_charts/depth_charts_{SEASON}.parquet",
+    f"ftn_charting_{SEASON}.parquet": f"{BASE}/ftn_charting/ftn_charting_{SEASON}.parquet",
+    **{f"{k}_{SEASON - 1}.parquet": f"{BASE}/{d}/{k}_{SEASON - 1}.parquet" for k, d in [
+        ("play_by_play", "pbp"), ("snap_counts", "snap_counts"), ("injuries", "injuries"), ("roster_weekly", "weekly_rosters"),
+        ("depth_charts", "depth_charts"), ("ftn_charting", "ftn_charting")]},
 }
 CACHE = Path(os.environ.get("FB_CACHE", Path(__file__).resolve().parents[1] / ".data" / "cache"))
 

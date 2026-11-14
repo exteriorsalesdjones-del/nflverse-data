@@ -39,10 +39,11 @@ import numpy as np
 import pandas as pd
 
 import matchup as MU
+import model_v03 as V3
 import enhance as EN
 
 SEASON = 2026
-MODEL_VERSION = "usage-v0.2"
+MODEL_VERSION = "usage-v0.3c"
 CACHE = Path(os.environ.get("FB_CACHE", Path(__file__).resolve().parents[1] / ".data" / "cache"))
 OUT = Path(os.environ.get("FB_OUT", Path(__file__).resolve().parents[1] / "artifact" / "data"))
 
@@ -529,6 +530,20 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
     cf = MU.cov_factors(pfr)
     chosen = validation.get("chosen", "baseline")
     kx = EN.kalman_team(games[games.result.notna()], off_td_counts(pbp), ratio, implied_points)
+    # v0.3c headline model (adopted after the Weeks 1-9 backtest); falls back to v0.2 if it cannot run
+    try:
+        v3, v3_meta = V3.predict(week, players)
+        v3 = v3.set_index("pid")
+    except Exception as e:  # keep the board working on the old model
+        print("v0.3 model failed, using v0.2:", e, file=sys.stderr)
+        v3, v3_meta = None, {"error": str(e)}
+    # 2026 goal-line and end-zone counts with their denominators (shown on player details)
+    q = pbp[pbp.play_type.isin(["run", "pass"]) & (pbp.two_point_attempt != 1)]
+    r5 = q[q.rusher_player_id.notna() & (q.yardline_100 <= 5) & ((q.play_type == "run") | (q.qb_scramble == 1))]
+    i5_p = r5.groupby(["posteam", "rusher_player_id"]).size().to_dict(); i5_t = r5.groupby("posteam").size().to_dict()
+    ezq = q[q.receiver_player_id.notna() & (q.air_yards >= q.yardline_100)]
+    ez_p = ezq.groupby(["posteam", "receiver_player_id"]).size().to_dict(); ez_t = ezq.groupby("posteam").size().to_dict()
+    tgp = pbp[pbp.week < week].groupby("posteam").game_id.nunique().to_dict()
     wpath = CACHE / "weather_forecast.json"
     wx = json.loads(wpath.read_text()) if wpath.exists() else {}
     wx_games = wx.get("games", {}) if wx.get("week") == week else {}
@@ -590,6 +605,12 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                         notes.append("questionable on the injury report")
                     p = float(r.p)
                     mu = float(r.p_mu)
+                    x3 = v3.loc[r.pid] if v3 is not None and r.pid in v3.index else None
+                    if isinstance(x3, pd.DataFrame):
+                        x3 = x3.iloc[0]
+                    if x3 is not None:
+                        mu = float(np.clip(float(x3.p) * (mu / p if p > 0 else 1.0), 0.001, 0.95))
+                        p = float(x3.p)
                     grp = MU.GROUP.get(pos.get(r.pid), "OTHER")
                     parts = []
                     if r.lam_rush > 0.01 and abs(r.f_rush - 1) >= 0.03:
@@ -609,18 +630,67 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                         "games": int(r.games), "injury": status, "quality": quality, "notes": notes,
                         "reason": f"{r.share:.0%} of {team}'s expected TD opportunity this season ({r.i10} touches inside the 10).",
                         "risk": "; ".join(notes) or "Usage share can shift with game script and red-zone play calls.",
+                        **v3_fields(x3, r.pid, team, i5_p, i5_t, ez_p, ez_t, tgp.get(team, 0), status, pos.get(r.pid)),
                     })
+                cands.sort(key=lambda c: -c["p"])
                 entry["candidates"] = [c for c in cands if c["quality"] != "unavailable"][:8] + [c for c in cands if c["quality"] == "unavailable"]
                 entry["removed"] = dropped[:10]
             teams.append(entry)
         out_games.append({**g, "teams": teams, "weather": wx_games.get(g["game_id"])})
     return {"week": week, "model_version": MODEL_VERSION, "status": "research", "td_per_point": round(ratio, 4),
-            "headline_model": chosen, "roster_week": roster_week,
+            "headline_model": V3.MODEL_VERSION if v3 is not None else chosen, "roster_week": roster_week, "v3": v3_meta,
             "weather_fetched_at": wx.get("fetched_at") if wx_games else None, "windy_mph": wx.get("windy_mph", 15), "wind_study": wind_study,
             "games": out_games,
             "missing": ["sportsbook prices (PropLine key not configured; manual import available to admins)",
                         "confirmed inactives (published about 90 minutes before kickoff; not yet in nflverse injuries)",
                         "individual defender matchups (no public coverage-assignment data)"]}
+
+
+def v3_fields(x, pid, team, i5_p, i5_t, ez_p, ez_t, team_games, status, position):
+    """Board fields from the v0.3c feature row: shares with denominators, role change, main reason, biggest uncertainty."""
+    out = {"i5_carries": int(i5_p.get((team, pid), 0)), "team_i5_carries": int(i5_t.get(team, 0)),
+           "ez_targets": int(ez_p.get((team, pid), 0)), "team_ez_targets": int(ez_t.get(team, 0)), "team_games_2026": int(team_games)}
+    if x is None:
+        out.update(model="usage-v0.2", main_reason=None, uncertainty="Not in the v0.3 feature table; older model shown.", role_change=None)
+        return out
+    num = lambda v: None if v is None or (isinstance(v, float) and np.isnan(v)) else float(v)
+    cs, ts = num(x.carry_share) or 0.0, num(x.target_share) or 0.0
+    rcs, rts = num(x.rc_carry_share), num(x.rc_target_share)
+    season_opp = cs + ts; recent_opp = (rcs if rcs is not None else cs) + (rts if rts is not None else ts)
+    role = None
+    if num(x.hist_games) and x.hist_games >= 4 and abs(recent_opp - season_opp) >= 0.08:
+        role = {"dir": "up" if recent_opp > season_opp else "down", "recent": round(recent_opp, 3), "season": round(season_opp, 3)}
+    drv = x.main_driver
+    reasons = {
+        "team": f"{team} expected to score {x.exp_team_td:.1f} offensive TDs (betting line)",
+        "workload": (f"{cs:.0%} of {team}'s carries" if cs >= ts else f"{ts:.0%} of {team}'s targets") + " (2026, 2025 at half weight)",
+        "goal_line": f"{(num(x.i5_share) or 0):.0%} of {team}'s carries inside the 5" if position in ("RB", "QB") else "goal-line role",
+        "depth": f"#{int(x.depth_rank)} on {team}'s depth chart" if num(x.depth_rank) else "depth chart",
+        "history": f"{(num(x.td_rate) or 0):.2f} TDs per game so far",
+    }
+    if position == "QB" and drv == "goal_line":
+        reasons["goal_line"] = f"{x.designed_g:.1f} designed runs and {x.sneaks_g:.1f} sneaks per game"
+    unc = None
+    if x.no_history:
+        unc = "No usage history yet: estimate leans on position averages."
+    elif x.team_change:
+        unc = "New team: usage comes from his old team."
+    elif status in ("Questionable",):
+        unc = "Questionable on the injury report."
+    elif num(x.hist_games) is not None and x.hist_games < 3:
+        unc = f"Only {x.hist_games:.1f} weighted games of usage."
+    elif role is not None:
+        unc = f"Role changing: {role['recent']:.0%} of team carries+targets in the last 3 games vs {role['season']:.0%} overall."
+    elif x.qb_out:
+        unc = "Starting QB is out."
+    elif max(x.vac_carry, x.vac_target) >= 0.25:
+        unc = "Teammates out free up touches; how they are split is uncertain."
+    else:
+        unc = "Touchdowns are rare events: even a strong 40% chance misses most weeks."
+    out.update(model="usage-v0.3c", main_reason=reasons.get(drv), uncertainty=unc, role_change=role,
+               carry_share=round(cs, 3), target_share=round(ts, 3), i5_share=round(num(x.i5_share) or 0, 3),
+               ez_share=round(num(x.ez_share) or 0, 3), depth_rank=int(x.depth_rank) if num(x.depth_rank) else None)
+    return out
 
 
 def american(p: float):
@@ -637,6 +707,13 @@ def main() -> int:
     tds, recon = build_touchdowns(pbp, games, pfr, players)
     weekly = build_weekly(games_out, tds, recon)
     validation = validate(pbp, games, snaps, players, pfr)
+    bt = Path(__file__).with_name("v03_backtest.json")
+    if bt.exists():
+        b = json.loads(bt.read_text())
+        validation["v03"] = b
+        validation.update({"chosen": "usage_v03c", "n": b["n"], "brier": b["brier"], "brier_constant": b["brier_constant"],
+                           "log_loss": b["log_loss"], "log_loss_constant": b["log_loss_constant"], "calibration": b["calibration"],
+                           "weeks": [1, 9]})
     slate = build_slate(pbp, games, injuries, players, games_out, pfr, validation)
     finals = [g for g in games_out if g["status"] == "final"]
     meta = {

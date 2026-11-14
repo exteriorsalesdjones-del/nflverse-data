@@ -194,6 +194,7 @@ function PlayerRow({ c, g, locked, onOpen, team }) {
           {c.injury && <Chip size="small" color={c.quality === "unavailable" ? "error" : "warning"} variant="outlined" label={c.injury} sx={{ height: 20 }} />}
           {mu != null && <Typography variant="caption" sx={{ color: mu > 0 ? "success.main" : "error.main", fontWeight: 600 }}>matchup {mu > 0 ? "+" : ""}{Math.round(mu)}%</Typography>}
           {windHit(c, g) && <Chip size="small" color="warning" variant="outlined" label="Windy" sx={{ height: 20 }} />}
+          {c.role_change && <Chip size="small" color={c.role_change.dir === "up" ? "success" : "default"} variant="outlined" label={c.role_change.dir === "up" ? "Role ↑" : "Role ↓"} sx={{ height: 20 }} />}
         </Stack>
         <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
           <LinearProgress variant="determinate" value={Math.min(100, c.p * 100)} sx={{ flex: 1, maxWidth: 160, height: 6, borderRadius: 3 }} aria-hidden />
@@ -217,6 +218,12 @@ function PlayerSheet({ c, onClose }) {
     ["2+ TDs price", (() => { const p2 = priceFor(c, g.week, "2plus_td"); return p2 ? `${p2.book} ${am(p2.american)} · ${et(p2.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not uploaded"; })()],
     ["With matchup (untested)", c.p_matchup != null ? `${pct1(c.p_matchup)} (${c.matchup_pct > 0 ? "+" : ""}${c.matchup_pct}%)` : "—"],
     ["Usage", `${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10 · ${c.games} games`],
+    ...(c.team_games_2026 != null ? [
+      ...(["RB", "QB"].includes(c.pos) || c.i5_carries ? [["Carries inside the 5", c.team_i5_carries ? `${c.i5_carries} of ${c.team}'s ${c.team_i5_carries} (${Math.round(100 * c.i5_carries / c.team_i5_carries)}%) · ${c.team_games_2026} games` : `None yet (${c.team} has no carries inside the 5 in 2026)`]] : []),
+      ...(c.pos !== "QB" ? [["End-zone targets", c.team_ez_targets ? `${c.ez_targets} of ${c.team}'s ${c.team_ez_targets} (${Math.round(100 * c.ez_targets / c.team_ez_targets)}%)` : `None yet (${c.team} has no end-zone targets in 2026)`]] : []),
+      ...(c.depth_rank ? [["Depth chart", `#${c.depth_rank} at ${c.pos} (last update before kickoff)`]] : []),
+      ...(c.role_change ? [["Role change", `${c.role_change.dir === "up" ? "Up" : "Down"}: ${Math.round(c.role_change.recent * 100)}% of team carries+targets in the last 3 games vs ${Math.round(c.role_change.season * 100)}% overall`]] : []),
+    ] : []),
     ["Scores by", c.rec_share != null ? `${Math.round(c.rec_share * 100)}% catching, ${Math.round((1 - c.rec_share) * 100)}% running` : "—"],
     ["Weather", wxText(g.weather) || "No forecast"]];
   return (
@@ -229,8 +236,8 @@ function PlayerSheet({ c, onClose }) {
         {rows.map(([k, v]) => [<Typography key={k} component="dt" variant="body2" color="text.secondary">{k}</Typography>,
           <Typography key={k + "v"} component="dd" variant="body2" sx={{ m: 0 }}>{v}</Typography>])}
       </Box>
-      <Typography variant="body2"><b>Why:</b> {c.reason}</Typography>
-      <Typography variant="body2"><b>Risk:</b> {c.risk}</Typography>
+      <Typography variant="body2"><b>Main reason:</b> {c.main_reason || c.reason}</Typography>
+      <Typography variant="body2"><b>Biggest uncertainty:</b> {c.uncertainty || c.risk}</Typography>
       {c.matchup_why && <Typography variant="body2" color="text.secondary"><b>Matchup:</b> {c.matchup_why}</Typography>}
       {!S.uid && <Typography variant="body2" color="text.secondary">Sign in to Claude to pick.</Typography>}
     </Sheet>
@@ -293,7 +300,7 @@ function Matchups({ onOpen }) {
     </>
   );
 }
-const VARIANT_LABEL = { baseline: "Usage share + betting total", recency: "+ recency weighting", recency_skill: "+ player skill (Poisson-Gamma)", recency_skill_kalman: "+ Kalman team filter",
+const VARIANT_LABEL = { usage_v03c: "v0.3c: team TDs x workload + goal-line + depth chart + TD rate", baseline: "Usage share + betting total", recency: "+ recency weighting", recency_skill: "+ player skill (Poisson-Gamma)", recency_skill_kalman: "+ Kalman team filter",
   full: "All enhancements + calibration", baseline_calibrated: "Usage share + calibration", matchup_pos: "+ position matchups", matchup_pos_cov: "+ position matchups and coverage" };
 function HowItWorks({ open, onClose }) {
   const S = useStore(); const v = S.validation; const s = S.slate; const gate = FB.modelValidated(v);
@@ -302,7 +309,8 @@ function HowItWorks({ open, onClose }) {
     <Dialog open={open} onClose={onClose} fullScreen={full} fullWidth maxWidth="md" scroll="paper">
       <DialogTitle>How this works</DialogTitle>
       <DialogContent dividers sx={{ display: "grid", gap: 1.5 }}>
-        <Typography variant="body2">Each player's chance to score comes from his share of his team's scoring chances this season (carries and targets, weighted toward the goal line), times the touchdowns the betting line expects from his team, then calibrated against earlier weeks. Players must be on their team's active roster. "Fair odds" is that chance written as American odds.</Typography>
+        <Typography variant="body2">Each player's chance to score starts from the touchdowns the betting line expects from his team, then his share of the team's carries and targets (2026, with 2025 at half weight), his goal-line role (RBs and QBs: carries inside the 5, goal-to-go carries, QB designed runs and sneaks), his depth-chart spot before kickoff, and his own touchdown rate. The weights are refit every refresh on every game already played. Players must be on their team's active roster. "Fair odds" is that chance written as American odds.</Typography>
+        {v.v03 && <Alert severity="info" sx={{ borderRadius: 2 }}>Model {v.v03.model}, adopted after a week-by-week test on 2026 weeks 1–9 ({v.v03.n.toLocaleString()} player-games). Against the previous model on weeks {v.v03.vs_previous.weeks} it improved log loss by {(v.v03.vs_previous.ll_gain * 1000).toFixed(1)}×10⁻³ per player-game (90% range {(v.v03.vs_previous.ci90[0] * 1000).toFixed(1)}–{(v.v03.vs_previous.ci90[1] * 1000).toFixed(1)}), better for every position. Against {v.v03.market.book} prices on weeks {v.v03.market.weeks} ({v.v03.market.n} player-games) the market was still slightly more accurate (log loss {v.v03.market.log_loss_market_devig.toFixed(3)} vs {v.v03.market.log_loss_model.toFixed(3)}).</Alert>}
         <Alert severity="warning" sx={{ borderRadius: 2 }}>Research only. "Value Play" stays off until the model passes its checks{gate.ok ? "" : ` (${gate.reasons.length} still open)`} and real sportsbook prices are imported. A week with no value plays is normal.</Alert>
         {s.wind_study && <>
           <Typography variant="subtitle2">Wind</Typography>
@@ -315,7 +323,7 @@ function HowItWorks({ open, onClose }) {
         <Typography variant="subtitle2">Not connected yet</Typography>
         <Typography variant="body2" color="text.secondary">{s.missing.join("; ")}.</Typography>
         <Typography variant="subtitle2">How the model was tested</Typography>
-        <Typography variant="body2" color="text.secondary">Every method predicted each past week using only earlier weeks (weeks {v.weeks.join("–")}, {v.n} player-games). A method goes live only when it beats the plain model across 90% of resampled games. Live now: <b>{VARIANT_LABEL[v.chosen] || v.chosen}</b>.</Typography>
+        <Typography variant="body2" color="text.secondary">Every method predicts each past week using only earlier weeks. A method goes live only when it beats the current model across 90% of resampled games and is no worse for any position. The table below is the earlier round of add-ons (2026-only history, weeks 4 on); none of them beat the plain usage model. Live now: <b>{VARIANT_LABEL[v.chosen] || v.chosen}</b>.</Typography>
         {v.variants && (
           <TableContainer><Table size="small">
             <TableHead><TableRow>{["Method", "Gain ×1000 (90% range)", "Status"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
