@@ -362,6 +362,35 @@ export async function confirmShot() {
 }
 export const MAX_SHOTS = 10;
 const SHOT_PROMPT = "Read this sportsbook screenshot of NFL player touchdown odds. Return a JSON array of objects {player, team, market, american} for every price visible in these markets only: Anytime Touchdown Scorer (market \"anytime\") and 2+ Touchdowns / To Score 2 or More (market \"2+\"). team is the NFL abbreviation if shown, else empty. american is a number like 180 or -120. Skip First TD, Last TD and every other market. Return only the array.";
+/* The reader is asked for a JSON array, but accept an object that wraps one (e.g. {"prices": [...]}) instead of failing. */
+export function pricesFromJson(v) {
+  if (Array.isArray(v)) return v;
+  if (v && typeof v === "object") {
+    for (const k of ["prices", "rows", "odds", "players", "data", "results"]) if (Array.isArray(v[k])) return v[k];
+    const arr = Object.values(v).find(Array.isArray);
+    if (arr) return arr;
+    if (v.player) return [v];
+  }
+  return [];
+}
+/* Plain-language reason for each failure code from the screenshot reader (code shown for troubleshooting). */
+export function shotErrorMessage(e, name) {
+  const code = (e && e.code) || "error";
+  const m = {
+    image_rejected: `${name} wasn't accepted: use a PNG or JPEG screenshot under 20 MB (iPhone camera photos saved as HEIC aren't supported)`,
+    images_unavailable: "image reading isn't enabled for you on this page. Reload the app and allow it to send images to Claude when asked",
+    not_declared: "image reading isn't enabled for this page",
+    sampling_disabled: "Claude features are turned off for this account or organization",
+    capability_disabled: "screenshot reading is turned off for this page",
+    capability_removed: "screenshot reading was removed from this page; reload",
+    session_expired: "your session expired; reload the page and try again",
+    rate_limited: "too many requests right now; wait a minute and try again",
+    queue_overflow: "too many requests right now; wait a minute and try again",
+    not_granted: "screenshot reading was declined",
+  }[code];
+  return m || `couldn't read prices from ${name}`;
+}
+
 /* Read one or more screenshots (one at a time) and stage every price for review; nothing goes live until confirmed.
    Rows from additional screenshots are added to any review already open. */
 export async function readLinesShots(files, book) {
@@ -369,8 +398,15 @@ export async function readLinesShots(files, book) {
   if (!files.length) return;
   if (files.length > MAX_SHOTS) { toast(`Up to ${MAX_SHOTS} screenshots at a time; reading the first ${MAX_SHOTS}.`); files = files.slice(0, MAX_SHOTS); }
   const sample = S.sample || (window.claude && (await window.claude.use("sample")));
-  if (!sample) { toast("Screenshot reading isn't available here. Paste the prices instead."); return; }
+  if (!sample) { toast("Screenshot reading isn't available for your account on this page (people outside the owner's organization can't use it). Paste the prices instead."); return; }
   S.sample = sample;
+  const lim = sample.limits ? await sample.limits().catch(() => null) : null;
+  if (lim && !lim.images) { toast("Image reading isn't enabled for you on this page. Reload the app and allow it to send images to Claude when asked, or paste the prices."); return; }
+  const types = (lim && lim.images && lim.images.mediaTypes) || ["image/jpeg", "image/png", "image/webp", "image/gif"];
+  const maxBytes = (lim && lim.images && lim.images.maxInputBytes) || 20 * 1024 * 1024;
+  const bad = files.filter((f) => (f.type && !types.includes(f.type)) || f.size > maxBytes); // empty type: let the reader decide
+  files = files.filter((f) => !bad.includes(f));
+  if (!files.length) { toast(`${bad.map((f) => f.name || "That image").join(", ")} can't be read: use a PNG or JPEG screenshot under ${Math.round(maxBytes / 1048576)} MB (HEIC photos aren't supported).`); return; }
   const staged = [...(S.shotReview || [])]; let nextId = staged.reduce((m, r) => Math.max(m, r.id + 1), 0);
   const shotBase = staged.reduce((m, r) => Math.max(m, r.shot || 0), 0); // keep numbering across batches added to one review
   const failed = []; let read = 0;
@@ -379,16 +415,18 @@ export async function readLinesShots(files, book) {
     S.shotProgress = { done: i, total: files.length }; emit();
     toast(files.length > 1 ? `Reading screenshot ${i + 1} of ${files.length}…` : "Reading the screenshot…");
     try {
-      const rows = await sample.json(SHOT_PROMPT, { images: [file] });
-      (rows || []).forEach((r) => {
+      const rows = pricesFromJson(await sample.json(SHOT_PROMPT, { images: [file] }));
+      rows.filter((r) => r && typeof r === "object").forEach((r) => {
         staged.push({ id: nextId++, shot: shotBase + i + 1, shot_name: file.name || `Screenshot ${i + 1}`, player: String(r.player || ""), team: (r.team || "").toUpperCase(),
           market: normMarket(r.market) || "anytime_td", american: FB.parseAmerican(r.american), book: book || "Screenshot",
           captured_at: new Date(file.lastModified || Date.now()).toISOString(), time_source: file.lastModified ? "screenshot file time" : "upload time" });
         read++;
       });
     } catch (e) {
-      if (e && e.code === "not_granted") { S.shotProgress = null; S.shotReview = staged.length ? staged : null; emit(); toast("Screenshot reading was declined."); return; }
-      failed.push(file.name || `Screenshot ${i + 1}`);
+      const name = file.name || `Screenshot ${i + 1}`;
+      const stop = ["not_granted", "images_unavailable", "not_declared", "sampling_disabled", "capability_disabled", "capability_removed", "session_expired", "rate_limited", "queue_overflow"].includes(e && e.code);
+      if (stop) { S.shotProgress = null; S.shotReview = staged.length ? staged : null; emit(); toast(`Stopped: ${shotErrorMessage(e, name)}.${e && e.code ? ` (${e.code})` : ""}`); return; }
+      failed.push(`${name} (${shotErrorMessage(e, name)}${e && e.code ? `; ${e.code}` : ""})`);
     }
   }
   // overlapping screenshots show the same price twice: keep one copy (the later file time)
@@ -398,9 +436,11 @@ export async function readLinesShots(files, book) {
   S.shotReview = Object.values(byKey).sort((a, b) => a.id - b.id); S.shotProgress = null;
   if (!S.shotReview.length) S.shotReview = null;
   emit();
-  const msg = [`Read ${read} price${read === 1 ? "" : "s"} from ${files.length - failed.length} screenshot${files.length - failed.length === 1 ? "" : "s"}`];
+  const okShots = files.length - failed.length;
+  const msg = okShots ? [`Read ${read} price${read === 1 ? "" : "s"} from ${okShots} screenshot${okShots === 1 ? "" : "s"}`] : ["Nothing was read"];
   if (dupes) msg.push(`${dupes} duplicate${dupes === 1 ? "" : "s"} merged`);
-  if (failed.length) msg.push(`couldn't read ${failed.join(", ")}`);
+  if (failed.length) msg.push(`not read: ${failed.join("; ")}`);
+  if (bad.length) msg.push(`skipped ${bad.map((f) => f.name || "an image").join(", ")} (use PNG or JPEG under ${Math.round(maxBytes / 1048576)} MB)`);
   toast(msg.join("; ") + (S.shotReview ? ". Check them below, then confirm." : "."));
 }
 export const readLinesShot = (file, book) => readLinesShots([file], book);

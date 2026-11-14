@@ -899,7 +899,7 @@ export function LinesView() {
         {bookChoice === "Other" && <TextField label="Which sportsbook?" placeholder="e.g. BetMGM, Caesars" value={otherBook} onChange={(e) => setOtherBook(e.target.value)} />}
         <Stack direction="row" sx={{ gap: 1 }}>
           <Button component="label" variant="contained" size="large" disabled={!canWrite} startIcon={<Icon d={P.upload} />} sx={{ flex: 1 }}>
-            Screenshots<input hidden type="file" accept="image/*" multiple aria-label={`Choose up to ${MAX_SHOTS} screenshots`} onChange={(e) => { readLinesShots(e.target.files, book); e.target.value = ""; }} /></Button>
+            Screenshots<input hidden type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple aria-label={`Choose up to ${MAX_SHOTS} screenshots`} onChange={(e) => { readLinesShots(e.target.files, book); e.target.value = ""; }} /></Button>
           <Button component="label" variant="outlined" size="large" disabled={!canWrite} sx={{ flex: 1 }}>
             CSV file<input hidden type="file" accept=".csv,.txt,text/csv,text/plain" onChange={(e) => { fromFile(e.target.files[0]); e.target.value = ""; }} /></Button>
         </Stack>
