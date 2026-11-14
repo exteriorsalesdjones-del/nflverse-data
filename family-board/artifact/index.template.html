@@ -1,0 +1,566 @@
+<title>Anytime TD Family Board</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sticky scoreboard header + tab rail, single column of panels that widen to two columns on desktop */
+:root{
+  --bg:#f3f4ef; --surface:#ffffff; --ink:#18211b; --muted:#5d6a61; --line:#d9ddd3;
+  --turf:#1d6b43; --turf-ink:#ffffff; --gold:#b9790b; --chalk:#e8ebe2;
+  --win:#1d7a46; --loss:#b23b2e; --void:#6b6f78; --pend:#8a6d12; --review:#8d3fb0;
+  --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#101512; --surface:#171e1a; --ink:#e7ece6; --muted:#9aa79f; --line:#2b352f;
+  --turf:#3a9d68; --turf-ink:#06110b; --gold:#e3a83a; --chalk:#1c2420;
+  --win:#4cc07f; --loss:#ef7a6c; --void:#a2a7b0; --pend:#e0c25a; --review:#c88ee6; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#101512; --surface:#171e1a; --ink:#e7ece6; --muted:#9aa79f; --line:#2b352f;
+  --turf:#3a9d68; --turf-ink:#06110b; --gold:#e3a83a; --chalk:#1c2420;
+  --win:#4cc07f; --loss:#ef7a6c; --void:#a2a7b0; --pend:#e0c25a; --review:#c88ee6; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.45}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--turf)}
+.wrap{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));max-width:1180px;margin:0 auto}
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--turf);color:var(--turf-ink)}
+header.top .wrap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;padding-block:10px 0}
+h1{font-family:var(--f-display);font-weight:700;font-size:26px;letter-spacing:.02em;margin:0;text-transform:uppercase}
+.fresh{font-size:12px;opacity:.9}
+nav.tabs{display:flex;gap:2px;overflow-x:auto;width:100%;margin-top:8px}
+nav.tabs a{font-family:var(--f-display);font-weight:600;font-size:16px;letter-spacing:.04em;text-transform:uppercase;color:var(--turf-ink);opacity:.75;text-decoration:none;padding:8px 12px;border-bottom:3px solid transparent;white-space:nowrap}
+nav.tabs a[aria-current="page"]{opacity:1;border-color:var(--gold)}
+nav.tabs a:focus-visible{outline:2px solid var(--gold);outline-offset:-2px}
+main{padding-block:16px 48px;display:grid;gap:16px}
+h2{font-family:var(--f-display);font-weight:700;font-size:22px;text-transform:uppercase;letter-spacing:.03em;margin:0;text-wrap:balance}
+h3{font-family:var(--f-display);font-weight:600;font-size:17px;text-transform:uppercase;letter-spacing:.04em;margin:0}
+p{margin:0;max-width:70ch}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px;display:grid;gap:10px;min-width:0}
+.grid2{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr))}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.banner{border-left:4px solid var(--gold);background:var(--chalk);padding:10px 12px;border-radius:4px;display:grid;gap:4px}
+.banner.bad{border-color:var(--loss)}
+.pill{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
+.s-verified_individual{color:var(--win)} .s-probable_individual{color:var(--turf)} .s-shared{color:var(--gold)} .s-team_unit{color:var(--pend)} .s-unknown{color:var(--void)}
+.r-win{color:var(--win)} .r-loss{color:var(--loss)} .r-void{color:var(--void)} .r-pending{color:var(--pend)} .r-needs_review{color:var(--review)} .r-draft{color:var(--muted)}
+.q-ok{color:var(--turf)} .q-limited{color:var(--gold)} .q-unavailable{color:var(--loss)}
+.scroll{overflow-x:auto;min-width:0}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font-family:var(--f-display);font-weight:600;font-size:13px;letter-spacing:.05em;text-transform:uppercase;text-align:left;color:var(--muted);border-bottom:1px solid var(--line);padding:6px 8px;white-space:nowrap}
+td{border-bottom:1px solid var(--line);padding:7px 8px;vertical-align:top}
+td.n,th.n{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--chalk)}
+button,select,input,textarea{font:inherit;color:inherit}
+button{background:var(--turf);color:var(--turf-ink);border:0;border-radius:4px;padding:7px 12px;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--turf);border:1px solid var(--turf)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+select,input,textarea{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:6px 8px;min-width:0}
+textarea{width:100%;min-height:90px;font-family:var(--f-mono);font-size:12px}
+label{display:grid;gap:3px;font-size:12px;color:var(--muted)}
+.filters{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.tiles{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+.tile{border:1px solid var(--line);border-radius:4px;padding:8px 10px;display:grid;gap:2px}
+.tile b{font-family:var(--f-display);font-size:26px;font-weight:700;line-height:1}
+.game{border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px}
+.game:first-of-type{border-top:0;padding-top:0}
+.gh{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline}
+.gh .teams{font-family:var(--f-display);font-weight:700;font-size:20px;letter-spacing:.03em}
+.cand{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;padding:8px 0;border-top:1px dashed var(--line)}
+.cand .name{font-weight:600}
+.bar{height:6px;background:var(--chalk);border-radius:3px;overflow:hidden;width:100%;max-width:160px}
+.bar i{display:block;height:100%;background:var(--turf)}
+.yard{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+dialog{border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);padding:0;width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 48px)}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+.dlg{padding:16px;display:grid;gap:12px;overflow:auto;max-height:calc(100vh - 50px)}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 12px;font-size:13px}
+.kv dt{color:var(--muted)} .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.ev{border:1px solid var(--line);border-radius:4px;padding:8px 10px;display:grid;gap:4px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:4px;z-index:20;max-width:calc(100vw - 32px)}
+.empty{padding:16px;border:1px dashed var(--line);border-radius:4px;color:var(--muted)}
+@media (prefers-reduced-motion:no-preference){.toast{transition:opacity .2s}}
+</style>
+
+<header class="top"><div class="wrap">
+  <h1>Anytime TD Family Board</h1>
+  <span class="fresh" id="fresh">Loading data…</span>
+  <span class="fresh" id="who"></span>
+  <nav class="tabs" aria-label="Sections">
+    <a href="#week" data-tab="week">This Week</a>
+    <a href="#touchdowns" data-tab="touchdowns">Touchdowns</a>
+    <a href="#picks" data-tab="picks">My Picks</a>
+    <a href="#board" data-tab="board">Family Board</a>
+    <a href="#admin" data-tab="admin" id="adminTab" hidden>Admin</a>
+  </nav>
+</div></header>
+<main class="wrap" id="main"><div class="empty">Loading the 2026 season…</div></main>
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/*LIB*/
+</script>
+<script>
+"use strict";
+const S = { meta:null, games:[], gameById:{}, tds:[], weekly:[], slate:null, validation:null, played:{}, recon:{},
+  db:null, user:null, uid:null, canWrite:false, isAdmin:false, names:{},
+  allPicks:{}, odds:{}, locks:{}, reviews:{}, dbState:"connecting", downloads:null, sample:null,
+  f:{week:"all",off:"",def:"",scorer:"",defender:"",type:"",status:""} };
+
+/* ---------- tiny DOM helper: text is always set as text ---------- */
+function h(tag, attrs, ...kids){
+  const el = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs||{})){
+    if (v==null || v===false) continue;
+    if (k==="class") el.className=v; else if (k.startsWith("on")) el.addEventListener(k.slice(2),v);
+    else if (k==="html") el.innerHTML=v; else el.setAttribute(k, v===true?"":v);
+  }
+  for (const k of kids.flat()) if (k!=null && k!==false) el.append(k.nodeType?k:document.createTextNode(String(k)));
+  return el;
+}
+const pct = p => p==null||isNaN(p) ? "—" : (p*100).toFixed(1)+"%";
+const am = a => a==null||isNaN(a) ? "—" : (a>0?"+":"")+a;
+const STATUS_LABEL = {verified_individual:"Verified individual", probable_individual:"Probable individual", shared:"Shared", team_unit:"Team or unit", unknown:"Unknown"};
+const TYPE_LABEL = {passing:"Passing", rushing:"Rushing", interception_return:"Interception return", fumble_return:"Fumble return", fumble_recovery:"Fumble recovery", kickoff_return:"Kickoff return", punt_return:"Punt return", blocked_punt_return:"Blocked punt return", blocked_kick_return:"Blocked kick return", other_return:"Other return", other:"Other"};
+const RESULT_LABEL = {win:"Win", loss:"Loss", void:"Void", pending:"Pending", needs_review:"Needs review", draft:"Draft"};
+function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(()=>t.hidden=true,3200); }
+function nameOf(uid){ return (S.names[uid] && S.names[uid].name) || (uid===S.uid?"You":"Member"); }
+function effAttr(t){ const r=S.reviews[t.key]; return r ? Object.assign({}, t.attribution, {status:r.status, defenders:r.defenders||[], missing:r.missing||t.attribution.missing, reviewed:r}) : t.attribution; }
+
+/* ---------- data load ---------- */
+async function loadJson(n){ const r = await fetch("data/"+n, {cache:"no-cache"}); if(!r.ok) throw new Error(n+" "+r.status); return r.json(); }
+async function loadData(){
+  const [meta,games,tds,weekly,slate,validation,played,recon] = await Promise.all(
+    ["meta.json","games.json","touchdowns.json","weekly.json","slate.json","validation.json","played.json","reconciliation.json"].map(loadJson));
+  Object.assign(S,{meta,games,tds,weekly,slate,validation,played,recon});
+  S.gameById = Object.fromEntries(games.map(g=>[g.game_id,g]));
+  const age = (Date.now()-Date.parse(meta.refreshed_at))/3600e3;
+  document.getElementById("fresh").textContent = `2026 season · final games through Week ${meta.latest_final_week} · refreshed ${FB.fmtEt(Date.parse(meta.refreshed_at),{month:"short",day:"numeric"})} ET${age>36?" · stale":""}`;
+}
+
+/* ---------- shared state (db) ---------- */
+async function connect(){
+  if (!window.claude || !window.claude.use) { S.dbState="off"; render(); return; }
+  const timer = setTimeout(()=>{ if(S.dbState==="connecting"){ S.dbState="slow"; render(); } }, 10000);
+  const [db, user] = await Promise.all([claude.use("db"), claude.use("user")]);
+  S.user = user; S.db = db;
+  if (user){
+    S.uid = await user.id();
+    S.isAdmin = (await user.canEdit()) === true;
+    const w = await user.can("data.write"); S.canWrite = w!==false;
+    document.getElementById("adminTab").hidden = !S.isAdmin;
+  }
+  if (!db){ S.dbState="off"; clearTimeout(timer); render(); return; }
+  const done = ()=>{ clearTimeout(timer); if(S.dbState!=="ok"){ S.dbState="ok"; } };
+  const onErr = e => { clearTimeout(timer); S.dbState="error"; console.warn(e); render(); };
+  db.collection("picks").onSnapshot(s=>{ S.allPicks = Object.fromEntries(s.docs.map(d=>[d.id,d.data()])); if(!s.metadata.fromCache) done(); resolveNames(); render(); }, onErr);
+  db.collection("odds").onSnapshot(s=>{ S.odds = Object.fromEntries(s.docs.map(d=>[d.id,d.data()])); render(); }, onErr);
+  db.collection("locks").onSnapshot(s=>{ S.locks = Object.fromEntries(s.docs.map(d=>[d.id,d.data()])); render(); }, onErr);
+  db.collection("reviews").onSnapshot(s=>{ S.reviews = Object.fromEntries(s.docs.map(d=>[d.id.replace("~",":"),d.data()])); render(); }, onErr);
+  claude.use("downloads").then(d=>S.downloads=d);
+  if (S.isAdmin) claude.use("sample").then(s=>{S.sample=s; render();});
+}
+async function resolveNames(){
+  if (!S.user) return;
+  const ids = Object.keys(S.allPicks); if (S.uid) ids.push(S.uid);
+  try { S.names = await S.user.profiles(ids); } catch(e){}
+  const me = S.names[S.uid]; document.getElementById("who").textContent = me && me.name ? "· signed in as "+me.name : "";
+}
+
+/* ---------- picks ---------- */
+function myItems(){ return (S.allPicks[S.uid] && S.allPicks[S.uid].items) || {}; }
+function liveOddsRows(week){ const d=S.odds["w"+week]; return d && d.status==="live" ? d.rows||[] : []; }
+function priceFor(c, week){
+  const rows = liveOddsRows(week).filter(r=>r.gsis_id===c.gsis_id && (r.market||"anytime_td")==="anytime_td");
+  rows.sort((a,b)=>Date.parse(b.captured_at)-Date.parse(a.captured_at));
+  return rows[0]||null;
+}
+let writing = false;
+async function savePicks(items){
+  if (writing) { toast("Still saving the last change. Try again in a moment."); return false; }
+  writing = true;
+  try { await S.db.doc("picks/"+S.uid).set({items, updated_at:new Date().toISOString()}); return true; }
+  catch(e){ toast(e && e.code==="invalid_argument" ? "You can view the board but not save picks. Ask the owner for Contributor access." : "Couldn't save. Check your connection and try again."); return false; }
+  finally { writing=false; }
+}
+async function addPick(c){
+  const g = S.gameById[c.game_id], week = g.week;
+  const items = structuredClone(myItems());
+  const pick = {week, game_id:c.game_id, gsis_id:c.gsis_id, player:c.full_name||c.player, team:c.team, pos:c.pos, market:"anytime_td"};
+  const errs = FB.validatePick(items, pick, g, Date.now());
+  if (errs.length){ toast(errs[0]); return; }
+  const price = priceFor(c, week);
+  pick.key = FB.pickKey(week, c.gsis_id); pick.status="draft"; pick.model_p=c.p; pick.model_version=S.slate.model_version;
+  pick.price = price ? {american:price.american, book:price.book, market:"anytime_td", captured_at:price.captured_at} : null;
+  pick.price_warning = !price ? "No live price when saved." : (FB.priceFresh(price, Date.now(), 120) ? null : "Price older than 2 hours when saved.");
+  pick.saved_at = new Date().toISOString();
+  items[pick.key] = pick;
+  if (await savePicks(items)) toast("Saved "+pick.player+" to your picks. Submit it from My Picks.");
+}
+async function setPickStatus(key, status){
+  const items = structuredClone(myItems()); const p = items[key]; if(!p) return;
+  if (FB.isLocked(S.gameById[p.game_id], Date.now())) { toast("This game has kicked off. The pick is locked."); return; }
+  if (status==="remove") delete items[key];
+  else { p.status = status; if (status==="submitted"){ p.submitted_at=new Date().toISOString();
+    const c = slateCands().find(x=>x.gsis_id===p.gsis_id); const pr = c && priceFor(c, p.week);
+    if (pr){ p.price={american:pr.american, book:pr.book, market:"anytime_td", captured_at:pr.captured_at}; p.price_warning = FB.priceFresh(pr,Date.now(),120)?null:"Price older than 2 hours at submission."; }
+    else { p.price=null; p.price_warning="No live price at submission."; } } }
+  if (await savePicks(items)) toast(status==="remove"?"Removed.":status==="submitted"?"Submitted. It locks at kickoff.":"Moved back to draft.");
+}
+function settlePick(uid, p){
+  const g = S.gameById[p.game_id];
+  const lock = S.locks[p.game_id] && S.locks[p.game_id].picks ? (S.locks[p.game_id].picks[uid]||{}) : undefined;
+  const tds = S.tds.filter(t=>t.game_id===p.game_id);
+  return FB.settle(p, g, tds, S.played[p.game_id], lock, Date.now());
+}
+
+/* ---------- views ---------- */
+function slateCands(){ return S.slate ? S.slate.games.flatMap(g=>g.teams.flatMap(t=>t.candidates)) : []; }
+function tab(){ const t=(location.hash||"#week").slice(1); return ["week","touchdowns","picks","board","admin"].includes(t)?t:"week"; }
+function render(){
+  const t = tab();
+  document.querySelectorAll("nav.tabs a").forEach(a=>a.toggleAttribute("aria-current", a.dataset.tab===t) || a.removeAttribute("aria-current"));
+  document.querySelectorAll("nav.tabs a").forEach(a=>{ if(a.dataset.tab===t) a.setAttribute("aria-current","page"); });
+  const main = document.getElementById("main");
+  if (!S.meta) return;
+  const view = {week:viewWeek, touchdowns:viewTouchdowns, picks:viewPicks, board:viewBoard, admin:viewAdmin}[t]();
+  const y = window.scrollY; main.replaceChildren(...[].concat(view)); window.scrollTo(0,y);
+}
+function dbNote(){
+  if (S.dbState==="ok") return null;
+  const msg = {connecting:"Connecting to the shared picks…", slow:"Shared picks can't be reached yet. Research views still work.", off:"Sign in to Claude to save and see family picks. Research views work without it.", error:"Lost the connection to shared picks. Reload the page to reconnect."}[S.dbState];
+  return h("div",{class:"banner"+(S.dbState==="error"?" bad":"")}, msg);
+}
+
+function viewWeek(){
+  const s = S.slate, gate = FB.modelValidated(S.validation), now = Date.now();
+  const out = [dbNote()];
+  out.push(h("div",{class:"banner"},
+    h("b",{},`Week ${s.week} research slate · model ${s.model_version} · research only`),
+    h("span",{class:"small"}, gate.ok ? "Model meets the validation bar." : "No Value Plays: "+gate.reasons.join(" ")),
+    h("span",{class:"small muted"}, "Missing: "+s.missing.join("; ")+".")));
+  const games = h("section",{class:"panel"}, h("h2",{},`Week ${s.week} games`));
+  for (const g of s.games){
+    const locked = FB.isLocked(g, now);
+    const ko = FB.etToUtcMs(g.kickoff_et);
+    const gEl = h("div",{class:"game"},
+      h("div",{class:"gh"}, h("span",{class:"teams"}, `${g.away} at ${g.home}`),
+        h("span",{class:"num small"}, isNaN(ko)?g.kickoff_et:FB.fmtEt(ko,{month:"short",day:"numeric"})+" ET"),
+        h("span",{class:"pill "+(g.status==="final"?"r-void":locked?"r-pending":"q-ok")}, g.status==="final"?`Final ${g.away_score}-${g.home_score}`:locked?"Locked":g.status==="upcoming"?"Open":g.status.replace(/_/g," ")),
+        g.roof?h("span",{class:"small muted"}, g.roof):null));
+    const twoCol = h("div",{class:"grid2"});
+    for (const t of g.teams){
+      const col = h("div",{}, h("h3",{}, t.team+" offense"),
+        h("p",{class:"small muted"}, t.implied_points!=null ? `Implied ${t.implied_points} pts · ${t.expected_off_tds} expected offensive TDs · ${t.opp} has allowed ${Object.entries(t.opp_td_allowed_by_pos).map(([k,v])=>v+" "+k).join(", ")||"no"} TDs in ${t.opp_games} games` : "No spread/total yet, so no projection."));
+      if (!t.candidates.length) col.append(h("div",{class:"empty small"},"No candidates with enough usage data."));
+      for (const c of t.candidates){
+        const pr = priceFor(c, g.week), e = pr ? FB.edge(c.p, pr.american) : null, fresh = pr && FB.priceFresh(pr, now, 120);
+        const picked = !!myItems()[FB.pickKey(g.week, c.gsis_id)];
+        col.append(h("div",{class:"cand"},
+          h("div",{style:"min-width:0;display:grid;gap:3px"},
+            h("div",{class:"row"}, h("span",{class:"name"}, c.full_name||c.player), h("span",{class:"small muted"}, c.pos||""),
+              h("span",{class:"pill q-"+c.quality}, c.quality==="ok"?"data ok":c.quality), c.injury?h("span",{class:"pill r-pending"}, c.injury):null),
+            h("div",{class:"row small"}, h("span",{class:"bar",title:"Model probability"}, h("i",{style:`width:${Math.min(100,c.p*100)}%`})),
+              h("span",{class:"num"}, "Model "+pct(c.p)), h("span",{class:"num muted"}, "fair "+am(c.fair_american)),
+              pr ? h("span",{class:"num"}, `${pr.book} anytime TD ${am(pr.american)} (${pct(e.implied)}) · edge ${e.edgePts.toFixed(1)} pts · EV ${e.evPerDollar>=0?"+":""}${e.evPerDollar.toFixed(2)}/$1${fresh?"":" · stale"}`) : h("span",{class:"muted"},"no live price")),
+            h("div",{class:"small"}, h("b",{},"Why: "), c.reason, " ", h("b",{},"Risk: "), c.risk)),
+          h("div",{}, h("button",{class:picked?"ghost":"", disabled: locked || picked || !S.uid || S.dbState==="off" || c.quality==="unavailable" || null, onclick:()=>addPick(c)}, picked?"Saved":"Pick"))));
+      }
+      twoCol.append(col);
+    }
+    gEl.append(twoCol); games.append(gEl);
+  }
+  out.push(viewSlates(), games);
+  return out;
+}
+function viewSlates(){
+  const open = S.slate.games.filter(g=>!FB.isLocked(g, Date.now()));
+  const cands = open.flatMap(g=>g.teams.flatMap(t=>t.candidates));
+  const defs = [[3,"game","3-leg"],[5,"game","5-leg"],[7,"game","7-leg"],[10,"team","10-leg (one per team)"],[open.length,"game","Full week (one per open game)"]];
+  const sec = h("section",{class:"panel"}, h("h2",{},"Suggested research slates"),
+    h("p",{class:"small muted"},"Built from open games only, highest model probability first. Combined odds are never quoted; the joint figure is a model estimate."));
+  const wrap = h("div",{class:"grid2"});
+  for (const [n,rule,label] of defs){
+    if (!n) continue;
+    const s = FB.suggestSlate(cands, n, rule);
+    wrap.append(h("div",{class:"ev"}, h("h3",{},label),
+      s.short ? h("p",{class:"small",style:"color:var(--loss)"}, `Only ${s.legs.length} of ${n} legs available: ${s.short} short.`) : null,
+      h("p",{class:"small num"}, `Joint ${pct(s.jointP)} · covers ${new Set(s.legs.map(l=>l.game_id)).size} of ${open.length} open games`),
+      h("p",{class:"small muted"}, s.jointNote),
+      h("p",{class:"small"}, s.legs.map(l=>`${l.full_name||l.player} (${l.team}, ${pct(l.p)})`).join(" · ")||"—")));
+  }
+  sec.append(wrap); return sec;
+}
+
+/* ---------- touchdowns ---------- */
+function filtered(){
+  const f = S.f, q = s => String(s||"").toLowerCase();
+  return S.tds.filter(t=>{
+    const a = effAttr(t);
+    if (f.week!=="all" && t.week!=+f.week) return false;
+    if (f.off && t.team!==f.off) return false;
+    if (f.def && t.opp!==f.def) return false;
+    if (f.type && t.type!==f.type) return false;
+    if (f.status && a.status!==f.status) return false;
+    if (f.scorer && !q(t.scorer).includes(q(f.scorer))) return false;
+    if (f.defender && !(a.defenders||[]).concat(a.candidates||[]).some(d=>q(d.name).includes(q(f.defender)))) return false;
+    return true;
+  });
+}
+function viewTouchdowns(){
+  const teams = [...new Set(S.tds.map(t=>t.team))].sort();
+  const weeks = [...new Set(S.tds.map(t=>t.week))].sort((a,b)=>a-b);
+  const sel = (id,label,val,opts,onch)=> h("label",{for:id}, label, h("select",{id, onchange:e=>{onch(e.target.value); render();}},
+    opts.map(([v,l])=>h("option",{value:v, selected:String(v)===String(val)||null}, l))));
+  const inp = (id,label,val,onch)=> h("label",{for:id}, label, h("input",{id, value:val, placeholder:"Name", onchange:e=>{onch(e.target.value); render();}}));
+  const f = S.f;
+  const filters = h("div",{class:"filters"},
+    sel("fWeek","Week",f.week,[["all","All weeks"],...weeks.map(w=>[w,"Week "+w])],v=>f.week=v),
+    sel("fOff","Offense",f.off,[["","All"],...teams.map(t=>[t,t])],v=>f.off=v),
+    sel("fDef","Defense",f.def,[["","All"],...teams.map(t=>[t,t])],v=>f.def=v),
+    sel("fType","Type",f.type,[["",'All'],...Object.entries(TYPE_LABEL)],v=>f.type=v),
+    sel("fStatus","Review status",f.status,[["","All"],...Object.entries(STATUS_LABEL)],v=>f.status=v),
+    inp("fScorer","Scorer",f.scorer,v=>f.scorer=v), inp("fDefender","Defender",f.defender,v=>f.defender=v));
+  const rows = filtered();
+  const out = [viewCoverage(), weekSummary(), viewDefenders(rows)];
+  const log = h("section",{class:"panel"}, h("div",{class:"row",style:"justify-content:space-between"}, h("h2",{},`Play log · ${rows.length} touchdowns`),
+      h("button",{class:"ghost", onclick:()=>exportCsv(rows)},"Export CSV")), filters);
+  const tb = h("tbody");
+  for (const t of rows.slice(0,400)){
+    const a = effAttr(t);
+    tb.append(h("tr",{class:"click", tabindex:"0", onclick:()=>openPlay(t), onkeydown:e=>{if(e.key==="Enter")openPlay(t);}},
+      h("td",{class:"n"}, t.week), h("td",{}, `${t.team} vs ${t.opp}`), h("td",{class:"n"}, `Q${t.qtr} ${t.clock||""}`),
+      h("td",{}, t.scorer||"—"), h("td",{}, TYPE_LABEL[t.type]), h("td",{class:"n"}, t.yards!=null?t.yards:"—"),
+      h("td",{}, (a.defenders||[]).map(d=>d.name).join(", ")||"—"), h("td",{}, h("span",{class:"pill s-"+a.status}, STATUS_LABEL[a.status]))));
+  }
+  log.append(h("div",{class:"scroll"}, h("table",{}, h("thead",{}, h("tr",{}, ["Wk","Game","Time","Scorer","Type","Yds","Defender","Status"].map((x,i)=>h("th",{class:[0,2,5].includes(i)?"n":null},x)))), tb)));
+  if (rows.length>400) log.append(h("p",{class:"small muted"}, `Showing the first 400 of ${rows.length}. Narrow the filters or export the CSV for all rows.`));
+  out.push(log); return out;
+}
+function viewCoverage(){
+  const tb = h("tbody");
+  for (const w of S.weekly.filter(w=>w.final>0)){
+    const t = S.tds.filter(x=>x.week===w.week).map(effAttr);
+    const c = s => t.filter(a=>a.status===s).length;
+    const share = s => w.td_plays ? Math.round(c(s)/w.td_plays*100)+"%" : "—";
+    tb.append(h("tr",{}, h("td",{class:"n"}, w.week), h("td",{class:"n"}, `${w.final}/${w.games}`), h("td",{class:"n"}, `${w.reconciled}/${w.final}`), h("td",{class:"n"}, w.td_plays),
+      ...["verified_individual","probable_individual","shared","team_unit","unknown"].map(s=>h("td",{class:"n"}, `${c(s)} (${share(s)})`))));
+  }
+  return h("section",{class:"panel"}, h("h2",{},"Season coverage"),
+    h("p",{class:"small muted"},`Reconciled = each team's touchdowns, kicks, conversions and safeties add up to the official final score. Attribution uses only charting sources; ${S.meta.not_connected.join("; ")} are not connected.`),
+    h("div",{class:"scroll"}, h("table",{}, h("thead",{}, h("tr",{}, ["Wk","Final","Reconciled","TDs","Verified","Probable","Shared","Team/unit","Unknown"].map((x)=>h("th",{class:"n"},x)))), tb)));
+}
+function weekSummary(){
+  const w = S.f.week==="all" ? S.meta.latest_final_week : +S.f.week;
+  const tds = S.tds.filter(t=>t.week===w);
+  const games = S.games.filter(g=>g.week===w);
+  const byScorer = {}; tds.forEach(t=>{ if(t.scorer_id){ (byScorer[t.scorer_id] ||= {n:0,name:t.scorer,team:t.team}).n++; } });
+  const repeat = Object.values(byScorer).filter(x=>x.n>1).sort((a,b)=>b.n-a.n);
+  const sec = h("section",{class:"panel"}, h("h2",{},`Week ${w} at a glance`),
+    h("div",{class:"tiles"}, ...[["Games final", `${games.filter(g=>g.status==="final").length}/${games.length}`],["Touchdowns", tds.length],["Repeat scorers", repeat.length],
+      ...["probable_individual","unknown"].map(s=>[STATUS_LABEL[s], tds.filter(t=>effAttr(t).status===s).length])].map(([k,v])=>h("div",{class:"tile"}, h("b",{class:"num"},v), h("span",{class:"small muted"},k)))),
+    repeat.length ? h("p",{class:"small"}, h("b",{},"Multiple TDs: "), repeat.map(r=>`${r.name} (${r.team}) ${r.n}`).join(" · ")) : null);
+  const tb = h("tbody");
+  for (const g of games){
+    const gt = tds.filter(t=>t.game_id===g.game_id), rc = S.recon[g.game_id];
+    tb.append(h("tr",{class:gt.length?"click":null, onclick:()=>{ S.f.week=String(w); S.f.off=""; S.f.def=""; S.f.scorer=""; S.f.defender=""; S.f.type=""; S.f.status=""; render(); }},
+      h("td",{}, `${g.away} at ${g.home}`),
+      h("td",{class:"n"}, g.status==="final"?`${g.away_score}-${g.home_score}`: g.status.replace(/_/g," ")),
+      h("td",{}, rc ? h("span",{class:"pill "+(rc.reconciled?"r-win":"r-loss")}, rc.reconciled?"Matches official":"Mismatch") : "—"),
+      h("td",{}, gt.map(t=>`${t.scorer} (${t.team})`).join(", ")||"—")));
+  }
+  sec.append(h("div",{class:"scroll"}, h("table",{}, h("thead",{}, h("tr",{}, ["Game","Score","Official check","Scorers"].map((x,i)=>h("th",{class:i===1?"n":null},x)))), tb)));
+  return sec;
+}
+function viewDefenders(rows){
+  const agg = {};
+  for (const t of rows){ const a = effAttr(t);
+    for (const d of a.defenders||[]){ const k=d.gsis_id||d.pfr_id||d.name; const x = agg[k] ||= {name:d.name, team:d.team, pos:d.position, verified:[], probable:[], shared:[], charted:new Set()};
+      (a.status==="verified_individual"?x.verified:a.status==="shared"?x.shared:x.probable).push(t); }
+    for (const c of a.candidates||[]){ const k=c.gsis_id||c.pfr_id||c.name; const x = agg[k] ||= {name:c.name, team:c.team, pos:c.position, verified:[], probable:[], shared:[], charted:new Set()}; x.charted.add(t.game_id); }
+  }
+  const list = Object.values(agg).filter(x=>x.verified.length+x.probable.length+x.shared.length>0).sort((a,b)=>(b.verified.length+b.probable.length)-(a.verified.length+a.probable.length)).slice(0,25);
+  const tb = h("tbody");
+  list.forEach(x=>tb.append(h("tr",{}, h("td",{}, x.name), h("td",{}, `${x.team} ${x.pos||""}`), h("td",{class:"n"}, x.verified.length), h("td",{class:"n"}, x.probable.length), h("td",{class:"n"}, x.shared.length),
+    h("td",{class:"small"}, ...[...x.verified,...x.probable,...x.shared].slice(0,6).map(t=>h("a",{href:"#touchdowns", onclick:e=>{e.preventDefault(); openPlay(t);}}, `W${t.week} ${t.scorer}`)).flatMap((a,i)=>i?[" · ",a]:[a])))));
+  return h("section",{class:"panel"}, h("h2",{},"Defender involvement"),
+    h("p",{class:"small muted"},"Counts only touchdowns where a charting source points to an individual. Totals depend on how many of a defender's games PFR has charted, so a high count can reflect coverage of the data as well as play. No target or snap rates are shown because play-level coverage snaps are not available from a permitted source."),
+    list.length ? h("div",{class:"scroll"}, h("table",{}, h("thead",{}, h("tr",{}, ["Defender","Team","Verified","Probable","Shared","Plays"].map((x,i)=>h("th",{class:[2,3,4].includes(i)?"n":null},x)))), tb)) : h("div",{class:"empty"},"No attributed defenders in the current filter."));
+}
+async function exportCsv(rows){
+  const text = FB.csv(rows, [
+    {label:"week",get:t=>t.week},{label:"game_id",get:t=>t.game_id},{label:"play_id",get:t=>t.play_id},{label:"quarter",get:t=>t.qtr},{label:"clock",get:t=>t.clock},
+    {label:"scoring_team",get:t=>t.team},{label:"opponent",get:t=>t.opp},{label:"scorer",get:t=>t.scorer},{label:"scorer_id",get:t=>t.scorer_id},{label:"passer",get:t=>t.passer},
+    {label:"type",get:t=>t.type},{label:"unit",get:t=>t.unit},{label:"yards",get:t=>t.yards},{label:"review_status",get:t=>effAttr(t).status},
+    {label:"defenders",get:t=>(effAttr(t).defenders||[]).map(d=>`${d.name} (${d.role})`).join("; ")},{label:"missing_evidence",get:t=>effAttr(t).missing},
+    {label:"source",get:t=>t.source},{label:"reconciled",get:t=>t.reconciled},{label:"last_verified",get:t=>t.verified_at},{label:"description",get:t=>t.desc}]);
+  if (S.downloads){ try { await S.downloads.save({filename:"touchdowns-2026.csv", data:new Blob([text],{type:"text/csv"})}); return; } catch(e){ if(e&&e.code==="declined") return; } }
+  openDialog(h("h2",{},"Export CSV"), h("p",{class:"small"},"Downloads aren't available here. Copy the rows below."), h("textarea",{readonly:true}, text),
+    h("button",{onclick:e=>{ const ta=e.target.previousSibling; navigator.clipboard.writeText(ta.value).then(()=>toast("Copied.")).catch(()=>{ta.select();}); }},"Copy"));
+}
+function openDialog(...kids){ const d=document.getElementById("dlg"); document.getElementById("dlgBody").replaceChildren(...kids, h("button",{class:"ghost",onclick:()=>d.close()},"Close")); d.showModal(); }
+function openPlay(t){
+  const a = effAttr(t), g = S.gameById[t.game_id];
+  const kids = [h("h2",{}, `${t.scorer||"Team"} · ${TYPE_LABEL[t.type]} TD`),
+    h("dl",{class:"kv"}, ...[["Game",`${g.away} at ${g.home}, Week ${t.week}`],["Time",`Q${t.qtr} ${t.clock||""}`],["Scoring team",`${t.team} (${t.unit.replace("_"," ")})`],["Opponent",t.opp],
+      ["Scorer",`${t.scorer||"—"} ${t.scorer_pos?"("+t.scorer_pos+")":""}`],["Passer",t.passer||"—"],["Yards",t.yards??"—"],["Play ID",`${t.game_id} / ${t.play_id}`],
+      ["Official check", t.reconciled?"Game's touchdowns match the official final score":"Not reconciled"],["Source",t.source],["Film or charting",t.film_ref||"None reviewed"],["Last verified",t.verified_at]].flatMap(([k,v])=>[h("dt",{},k),h("dd",{},String(v))])),
+    h("p",{class:"yard"}, t.desc||""),
+    h("h3",{}, "Defensive responsibility ", h("span",{class:"pill s-"+a.status}, STATUS_LABEL[a.status]))];
+  if (a.reviewed) kids.push(h("p",{class:"small muted"}, `Reviewed by an admin on ${new Date(a.reviewed.updated_at).toLocaleDateString()}. ${a.reviewed.note||""}`));
+  for (const d of a.defenders||[]) kids.push(h("div",{class:"ev"}, h("b",{}, `${d.name} · ${d.team} ${d.position||""} · ${String(d.role||"").replace(/_/g," ")}`),
+    h("div",{class:"small"}, h("b",{},"Observed: "), d.observed||"—"), h("div",{class:"small"}, h("b",{},"Inferred: "), d.inferred||"—"),
+    ...(d.evidence||[]).map(e=>h("div",{class:"small muted"}, `Evidence: ${e.source}${e.detail?" · "+e.detail:""}${e.timestamp?" · film "+e.timestamp:""}`))));
+  if ((a.candidates||[]).length) kids.push(h("div",{class:"ev"}, h("b",{},"Charted candidates (not attributed)"),
+    ...a.candidates.map(c=>h("div",{class:"small"}, `${c.name} (${c.position||"?"}) — ${c.td_allowed_in_game} receiving TD allowed in this game, ${c.targets_in_game??"?"} targets`))));
+  kids.push(h("p",{class:"small"}, h("b",{},"What's missing: "), a.missing||"—"));
+  if (S.isAdmin) kids.push(reviewForm(t, a));
+  if (a.reviewed && (a.reviewed.history||[]).length) kids.push(h("details",{}, h("summary",{class:"small"},"Change history"),
+    ...a.reviewed.history.map(x=>h("div",{class:"small muted"}, `${x.at}: ${STATUS_LABEL[x.status]||x.status} · ${x.note||""}`))));
+  openDialog(...kids);
+}
+function reviewForm(t, a){
+  const st = h("select",{id:"rvStatus"}, Object.entries(STATUS_LABEL).map(([v,l])=>h("option",{value:v, selected:v===a.status||null},l)));
+  const def = h("input",{id:"rvDef", placeholder:"Defender name, team, position, role (one per line in notes)", value:(a.defenders||[]).map(d=>d.name).join(", ")});
+  const role = h("select",{id:"rvRole"}, ["primary_coverage","zone_responsibility","safety_help","missed_tackle_after_catch","missed_tackle","lost_edge","run_fit","return_coverage","other"].map(r=>h("option",{value:r, selected:(a.defenders&&a.defenders[0]&&a.defenders[0].role===r)||null}, r.replace(/_/g," "))));
+  const obs = h("textarea",{id:"rvObs", placeholder:"Observed: what the film or chart shows"});
+  const inf = h("textarea",{id:"rvInf", placeholder:"Inferred: the assignment you conclude, and why"});
+  const ev = h("input",{id:"rvEv", placeholder:"Evidence: source, play, film timestamp (e.g. All-22 Q2 08:41, 0:12)"});
+  const miss = h("input",{id:"rvMiss", placeholder:"What is still missing or disputed", value:a.missing||""});
+  return h("div",{class:"ev"}, h("h3",{},"Admin review"), h("div",{class:"filters"}, h("label",{for:"rvStatus"},"Status",st), h("label",{for:"rvRole"},"Role",role), h("label",{for:"rvDef"},"Defender(s)",def)),
+    obs, inf, ev, miss,
+    h("button",{onclick:async()=>{
+      const names = def.value.split(",").map(s=>s.trim()).filter(Boolean);
+      if (["verified_individual","probable_individual","shared"].includes(st.value) && !names.length) { toast("Name at least one defender for that status."); return; }
+      if (st.value==="verified_individual" && !ev.value.trim()) { toast("Verified needs a cited chart or film timestamp."); return; }
+      const prev = S.reviews[t.key];
+      const history = (prev && prev.history ? prev.history.slice() : []);
+      history.push({at:new Date().toISOString(), by:S.uid, status: prev?prev.status:t.attribution.status, note: prev?prev.note:"original automated attribution"});
+      const body = {status:st.value, defenders:names.map(n=>({name:n, team:t.opp, role:role.value, observed:obs.value, inferred:inf.value, evidence:ev.value?[{source:"admin review", detail:ev.value}]:[]})),
+        missing:miss.value, note:obs.value.slice(0,140), updated_at:new Date().toISOString(), by:S.uid, history:history.slice(-50)};
+      try { await S.db.doc("reviews/"+t.key.replace(":","~")).set(body); toast("Saved the review."); document.getElementById("dlg").close(); }
+      catch(e){ toast("Couldn't save the review."); }
+    }},"Save review"));
+}
+
+/* ---------- my picks & board ---------- */
+function viewPicks(){
+  const out = [dbNote()];
+  if (!S.uid) { out.push(h("div",{class:"empty"},"Sign in to Claude to make picks.")); return out; }
+  const items = Object.values(myItems()).sort((a,b)=>b.week-a.week || a.game_id.localeCompare(b.game_id));
+  const sec = h("section",{class:"panel"}, h("h2",{},"My picks"),
+    h("p",{class:"small muted"},"Save players from This Week, then submit. Each game locks at kickoff (Eastern Time). Picks are research picks; nothing here places a bet."));
+  if (!items.length) sec.append(h("div",{class:"empty"},"No picks yet. Open This Week and tap Pick on a player."));
+  const tb = h("tbody");
+  for (const p of items){
+    const g = S.gameById[p.game_id], r = settlePick(S.uid, p), locked = FB.isLocked(g, Date.now());
+    tb.append(h("tr",{}, h("td",{class:"n"}, p.week), h("td",{}, `${p.player} (${p.team})`), h("td",{class:"num"}, p.price?`${p.price.book} ${am(p.price.american)}`:"—"),
+      h("td",{class:"small"}, p.price_warning||""), h("td",{}, h("span",{class:"pill r-"+r.state, title:r.why}, RESULT_LABEL[r.state])),
+      h("td",{}, locked ? h("span",{class:"small muted"},"Locked") : h("div",{class:"row"},
+        p.status==="draft" ? h("button",{onclick:()=>setPickStatus(p.key,"submitted")},"Submit") : h("button",{class:"ghost",onclick:()=>setPickStatus(p.key,"draft")},"Unsubmit"),
+        h("button",{class:"ghost",onclick:()=>setPickStatus(p.key,"remove")},"Remove")))));
+  }
+  if (items.length) sec.append(h("div",{class:"scroll"}, h("table",{}, h("thead",{}, h("tr",{}, ["Wk","Player","Price saved","Warning","Result",""].map((x,i)=>h("th",{class:i===0?"n":null},x)))), tb)));
+  out.push(sec); return out;
+}
+function viewBoard(){
+  const out = [dbNote()];
+  const weeks = [...new Set(Object.values(S.allPicks).flatMap(d=>Object.values(d.items||{}).map(p=>p.week)))].sort((a,b)=>b-a);
+  const totals = {};
+  const sec = h("section",{class:"panel"}, h("h2",{},"Family Board"));
+  if (!weeks.length) sec.append(h("div",{class:"empty"},"No submitted picks yet. Picks appear here once members submit them."));
+  for (const w of weeks){
+    const tb = h("tbody");
+    for (const [uid, d] of Object.entries(S.allPicks)){
+      for (const p of Object.values(d.items||{}).filter(p=>p.week===w && p.status==="submitted")){
+        const r = settlePick(uid, p); (totals[uid] ||= {win:0,loss:0,void:0,pending:0,needs_review:0,draft:0})[r.state]++;
+        const g = S.gameById[p.game_id];
+        tb.append(h("tr",{}, h("td",{}, nameOf(uid)), h("td",{}, `${p.player} (${p.team})`), h("td",{}, g?`${g.away} at ${g.home}`:p.game_id),
+          h("td",{class:"num"}, p.price?`${p.price.book} ${am(p.price.american)}`:"research"), h("td",{}, h("span",{class:"pill r-"+r.state, title:r.why}, RESULT_LABEL[r.state]))));
+      }
+    }
+    sec.append(h("h3",{},"Week "+w), h("div",{class:"scroll"}, h("table",{}, h("thead",{}, h("tr",{}, ["Member","Player","Game","Price","Result"].map(x=>h("th",{},x)))), tb)));
+  }
+  const st = h("tbody"); Object.entries(totals).forEach(([uid,t])=>st.append(h("tr",{}, h("td",{}, nameOf(uid)), ...["win","loss","void","pending","needs_review"].map(k=>h("td",{class:"n"}, t[k])))));
+  out.push(h("section",{class:"panel"}, h("h2",{},"Season standings"), Object.keys(totals).length ? h("div",{class:"scroll"}, h("table",{}, h("thead",{}, h("tr",{}, ["Member","Wins","Losses","Void","Pending","Review"].map((x,i)=>h("th",{class:i?"n":null},x)))), st)) : h("div",{class:"empty"},"Standings start with the first submitted pick.")), sec);
+  return out;
+}
+
+/* ---------- admin ---------- */
+function viewAdmin(){
+  if (!S.isAdmin) return h("div",{class:"empty"},"Admins only.");
+  const week = S.slate.week, d = S.odds["w"+week];
+  const ta = h("textarea",{id:"oddsCsv", placeholder:"player,team,book,american,captured_at\nTrey McBride,ARI,FanDuel,+180,2026-11-15T10:05:00-05:00"});
+  const imp = h("section",{class:"panel"}, h("h2",{},`Odds import · Week ${week}`),
+    h("p",{class:"small muted"},"Anytime TD prices only. Paste CSV, or read a sportsbook screenshot. Imported rows stay pending until you approve them. Times are Eastern unless the row says otherwise."),
+    ta, h("div",{class:"row"},
+      h("button",{onclick:()=>stageOdds(parseOddsCsv(ta.value),"csv")},"Stage CSV rows"),
+      S.sample ? h("label",{for:"shot"},"Screenshot", h("input",{id:"shot", type:"file", accept:"image/*", onchange:e=>readShot(e.target.files[0])})) : h("span",{class:"small muted"},"Screenshot reading isn't available in this view.")));
+  if (d){
+    const tb = h("tbody"); (d.rows||[]).forEach(r=>tb.append(h("tr",{}, h("td",{}, r.player), h("td",{}, r.team||""), h("td",{}, r.book), h("td",{class:"n"}, am(r.american)), h("td",{class:"small"}, r.captured_at), h("td",{}, r.gsis_id?"matched":h("span",{style:"color:var(--loss)"},"unmatched")))));
+    imp.append(h("div",{class:"row"}, h("span",{class:"pill "+(d.status==="live"?"r-win":"r-pending")}, d.status), h("span",{class:"small muted"}, `${(d.rows||[]).length} rows · ${d.source||""} · imported ${d.imported_at||""}`),
+      d.status!=="live" ? h("button",{onclick:()=>setOddsStatus("live")},"Approve and publish") : h("button",{class:"ghost",onclick:()=>setOddsStatus("pending")},"Withdraw")),
+      h("div",{class:"scroll"}, h("table",{}, h("thead",{}, h("tr",{}, ["Player","Team","Book","Price","Captured","Match"].map(x=>h("th",{},x)))), tb)));
+  }
+  const started = S.slate.games.filter(g=>FB.isLocked(g, Date.now()));
+  const locks = h("section",{class:"panel"}, h("h2",{},"Kickoff snapshots"),
+    h("p",{class:"small muted"},"Settlement only counts submitted picks that appear in a game's kickoff snapshot. The scheduled refresh takes snapshots; you can take one here after kickoff."),
+    ...S.slate.games.map(g=>h("div",{class:"row small"}, h("span",{class:"num"}, `${g.away} at ${g.home}`), S.locks[g.game_id] ? h("span",{class:"pill r-win"}, "frozen "+S.locks[g.game_id].frozen_at) : FB.isLocked(g,Date.now()) ? h("span",{class:"pill r-needs_review"},"needs snapshot") : h("span",{class:"pill r-draft"},"open"))),
+    h("button",{disabled:!started.length||null, onclick:()=>freeze(started)}, "Snapshot started games now"));
+  const queue = S.tds.filter(t=>t.unit==="offense" && effAttr(t).status!=="verified_individual").slice(-30).reverse();
+  const q = h("section",{class:"panel"}, h("h2",{},"Attribution review queue"),
+    h("p",{class:"small muted"},"Most recent offensive touchdowns without a verified individual. Open one to record film evidence, roles and status. Every edit keeps the prior version in its history."),
+    ...queue.map(t=>h("div",{class:"row small"}, h("button",{class:"ghost",onclick:()=>openPlay(t)},"Review"), `W${t.week} ${t.scorer} (${t.team} vs ${t.opp}) · ${TYPE_LABEL[t.type]}`, h("span",{class:"pill s-"+effAttr(t).status}, STATUS_LABEL[effAttr(t).status]))));
+  const src = h("section",{class:"panel"}, h("h2",{},"Data sources"),
+    ...S.meta.sources.map(s=>h("p",{class:"small"}, h("b",{}, s.name), ` — ${s.fields}${s.through_week?` (through week ${s.through_week})`:""}`)),
+    h("p",{class:"small muted"}, "Not connected: "+S.meta.not_connected.join("; ")+"."),
+    h("p",{class:"small muted"}, `Model check (walk-forward weeks ${S.validation.weeks.join("–")}, ${S.validation.n} player-games): Brier ${S.validation.brier.toFixed(3)} vs ${S.validation.brier_constant.toFixed(3)} constant; log loss ${S.validation.log_loss.toFixed(3)} vs ${S.validation.log_loss_constant.toFixed(3)}.`));
+  return [h("div",{class:"grid2"}, imp, locks), q, src];
+}
+function parseOddsCsv(text){
+  return text.split(/\n/).map(l=>l.trim()).filter(l=>l && !/^player\s*,/i.test(l)).map(l=>{
+    const [player,team,book,american,captured_at] = l.split(",").map(s=>s.trim());
+    return {player, team:(team||"").toUpperCase(), book, american:Number(String(american).replace("+","")), captured_at: captured_at || new Date().toISOString(), market:"anytime_td"};
+  }).filter(r=>r.player && isFinite(r.american) && Math.abs(r.american)>=100);
+}
+async function stageOdds(rows, source){
+  if (!rows.length){ toast("No valid rows. Each needs a player and an American price like +180."); return; }
+  const cands = slateCands();
+  rows.forEach(r=>{ const m = FB.matchOdds(r, cands); r.gsis_id = m ? m.gsis_id : null; if(m && !r.team) r.team=m.team; });
+  try { await S.db.doc("odds/w"+S.slate.week).set({rows, status:"pending", source, imported_at:new Date().toISOString(), imported_by:S.uid}); toast(`Staged ${rows.length} rows for review.`); }
+  catch(e){ toast("Couldn't stage the rows."); }
+}
+async function setOddsStatus(status){
+  const d = structuredClone(S.odds["w"+S.slate.week]); d.status=status; d.reviewed_at=new Date().toISOString(); d.reviewed_by=S.uid;
+  try { await S.db.doc("odds/w"+S.slate.week).set(d); toast(status==="live"?"Prices are live.":"Prices withdrawn."); } catch(e){ toast("Couldn't update."); }
+}
+async function readShot(file){
+  if (!file || !S.sample) return;
+  toast("Reading the screenshot…");
+  try {
+    const rows = await S.sample.json("Read this sportsbook screenshot of NFL Anytime Touchdown Scorer odds. Return a JSON array of objects {player, team, american} for every Anytime TD price visible. team is the NFL abbreviation if shown, else empty. american is a number like 180 or -120. Skip First TD, 2+ TD and any other market. Return only the array.", {images:[file]});
+    const book = (document.getElementById("oddsCsv").value.match(/book:(\w+)/)||[])[1] || "Screenshot";
+    stageOdds((rows||[]).map(r=>({player:r.player, team:(r.team||"").toUpperCase(), american:Number(r.american), book, captured_at:new Date(file.lastModified||Date.now()).toISOString(), market:"anytime_td"})).filter(r=>r.player&&isFinite(r.american)), "screenshot");
+  } catch(e){ toast(e && e.code==="not_granted" ? "Screenshot reading was declined." : "Couldn't read that screenshot. Paste CSV instead."); }
+}
+async function freeze(games){
+  for (const g of games){
+    if (S.locks[g.game_id]) continue;
+    const picks = {};
+    for (const [uid,d] of Object.entries(S.allPicks)){
+      const mine = Object.values(d.items||{}).filter(p=>p.game_id===g.game_id && p.status==="submitted");
+      if (mine.length) picks[uid] = Object.fromEntries(mine.map(p=>[p.key,{gsis_id:p.gsis_id,status:p.status,price:p.price||null}]));
+    }
+    try { await S.db.doc("locks/"+g.game_id).set({frozen_at:new Date().toISOString(), by:"admin page", picks}); } catch(e){ toast("Couldn't snapshot "+g.game_id); return; }
+  }
+  toast("Snapshots saved.");
+}
+
+window.addEventListener("hashchange", render);
+loadData().then(()=>{ render(); connect(); }).catch(e=>{ document.getElementById("main").replaceChildren(h("div",{class:"banner bad"},"The season data didn't load. Reload the page; if it keeps failing, the last refresh may be incomplete.")); console.error(e); });
+</script>

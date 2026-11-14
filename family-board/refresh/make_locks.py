@@ -1,0 +1,59 @@
+"""Build kickoff snapshots ("locks") for games that have started.
+
+Input: a directory of picks documents exported with
+  ArtifactData list collection=picks out_dir=<dir>   -> <dir>/picks/<uid>.json
+plus artifact/data/games.json and the ids of games that already have a lock.
+
+Output: one JSON file per newly started game in <out>/locks/<game_id>.json, ready
+for ArtifactData set collection=locks doc_id=<game_id> file_path=<file>.
+Only submitted picks are frozen. Existing locks are never rewritten, so a rerun
+cannot move a snapshot after the fact.
+
+Usage: python make_locks.py <picks_dir> <out_dir> [existing_lock_id ...]
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
+GAMES = Path(__file__).resolve().parents[1] / "artifact" / "data" / "games.json"
+
+
+def kickoff_utc(et: str) -> datetime:
+    return datetime.fromisoformat(et).replace(tzinfo=ET).astimezone(timezone.utc)
+
+
+def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
+    now = datetime.now(timezone.utc)
+    games = json.loads(GAMES.read_text())
+    started = [g for g in games if g["status"] != "upcoming" or kickoff_utc(g["kickoff_et"]) <= now]
+    picks = {}
+    for f in Path(picks_dir, "picks").glob("*.json"):
+        doc = json.loads(f.read_text())
+        picks[f.stem] = (doc.get("data") or doc).get("items", {})
+    wanted = {p["game_id"] for items in picks.values() for p in items.values() if p.get("status") == "submitted"}
+    made = []
+    out = Path(out_dir, "locks")
+    out.mkdir(parents=True, exist_ok=True)
+    for g in started:
+        gid = g["game_id"]
+        if gid in existing or gid not in wanted:
+            continue
+        frozen = {}
+        for uid, items in picks.items():
+            mine = {k: {"gsis_id": p["gsis_id"], "status": p["status"], "price": p.get("price")}
+                    for k, p in items.items() if p.get("game_id") == gid and p.get("status") == "submitted"}
+            if mine:
+                frozen[uid] = mine
+        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen}))
+        made.append(gid)
+    return made
+
+
+if __name__ == "__main__":
+    print(json.dumps(main(sys.argv[1], sys.argv[2], sys.argv[3:])))
