@@ -842,7 +842,8 @@ export function ParlaysView() {
 /* =========================== LINES =========================== */
 export function LinesView() {
   const S = useStore(); const week = S.slate.week;
-  const [book, setBook] = useState(""); const [text, setText] = useState(""); const [market, setMarket] = useState("anytime_td");
+  const [bookChoice, setBookChoice] = useState("FanDuel"); const [otherBook, setOtherBook] = useState("");
+  const book = bookChoice === "Other" ? (otherBook.trim() || "Other") : bookChoice; const [text, setText] = useState(""); const [market, setMarket] = useState("anytime_td");
   const [who, setWho] = useState(null); const [mPrice, setMPrice] = useState(""); const [mMarket, setMMarket] = useState("anytime_td");
   const cands = useMemo(() => slateCands().map(effCand).map((c) => ({ ...c, label: `${c.full_name || c.player} · ${c.pos || ""} ${c.team}` })), [S.slate, S.overrides]);
   const byId = Object.fromEntries(cands.map((c) => [c.gsis_id, c]));
@@ -865,7 +866,14 @@ export function LinesView() {
       <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 1.25, p: 1.5, "&:last-child": { pb: 1.5 } }}>
         <Typography variant="h6" component="h3">Current lines</Typography>
         <Typography variant="body2" color="text.secondary">Anytime TD and 2+ TDs only. Prices go live for everyone right away, labeled with your name and the time.</Typography>
-        <TextField label="Sportsbook (e.g. DraftKings, FanDuel)" value={book} onChange={(e) => setBook(e.target.value)} />
+        <Box>
+          <Typography variant="caption" color="text.secondary">Sportsbook</Typography>
+          <ToggleButtonGroup exclusive fullWidth color="primary" value={bookChoice} onChange={(e, v) => v && setBookChoice(v)} aria-label="Sportsbook"
+            sx={{ mt: 0.5, "& .MuiToggleButton-root": { minHeight: 48, textTransform: "none", fontSize: 15, fontWeight: 600 } }}>
+            <ToggleButton value="FanDuel">FanDuel</ToggleButton><ToggleButton value="DraftKings">DraftKings</ToggleButton><ToggleButton value="Other">Other</ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+        {bookChoice === "Other" && <TextField label="Which sportsbook?" placeholder="e.g. BetMGM, Caesars" value={otherBook} onChange={(e) => setOtherBook(e.target.value)} />}
         <Stack direction="row" sx={{ gap: 1 }}>
           <Button component="label" variant="contained" size="large" disabled={!canWrite} startIcon={<Icon d={P.upload} />} sx={{ flex: 1 }}>
             Screenshot<input hidden type="file" accept="image/*" onChange={(e) => { fromFile(e.target.files[0]); e.target.value = ""; }} /></Button>
