@@ -636,9 +636,10 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                 entry["candidates"] = [c for c in cands if c["quality"] != "unavailable"][:8] + [c for c in cands if c["quality"] == "unavailable"]
                 entry["removed"] = dropped[:10]
             teams.append(entry)
-        out_games.append({**g, "teams": teams, "weather": wx_games.get(g["game_id"])})
+        out_games.append({**g, "teams": teams, "weather": wx_games.get(g["game_id"]), "referee": nz(row.get("referee"))})
     return {"week": week, "model_version": MODEL_VERSION, "status": "research", "td_per_point": round(ratio, 4),
             "headline_model": V3.MODEL_VERSION if v3 is not None else chosen, "roster_week": roster_week, "v3": v3_meta,
+            "referees": json.loads(Path(__file__).with_name("referee_index.json").read_text()) if Path(__file__).with_name("referee_index.json").exists() else None,
             "weather_fetched_at": wx.get("fetched_at") if wx_games else None, "windy_mph": wx.get("windy_mph", 15), "wind_study": wind_study,
             "games": out_games,
             "missing": ["sportsbook prices (PropLine key not configured; manual import available to admins)",

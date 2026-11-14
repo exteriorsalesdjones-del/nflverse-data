@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 
@@ -103,6 +103,21 @@ function wxText(w) {
   const bits = [`Wind ${Math.round(w.wind_mph)} mph`, `${w.temp_f}°F`]; if (w.precip_pct >= 30) bits.push(`rain ${w.precip_pct}%`);
   return (w.roof === "retractable" ? "Retractable roof · " : "") + bits.join(" · ");
 }
+function CrewInfo({ g }) {
+  const S = useStore(); const r = refFor(g); if (!r) return <Typography variant="caption" color="text.secondary" sx={{ display: "block", pb: 0.5 }}>Referee not assigned yet (admins can add it on the Uploads tab).</Typography>;
+  const c = crewIndex(r.name); const L = S.slate.referees && S.slate.referees.league;
+  const cmp = (v, l) => (v > l * 1.08 ? "above avg" : v < l * 0.92 ? "below avg" : "avg");
+  return (
+    <Box sx={{ pb: 0.75 }}>
+      <Typography variant="caption" color="text.secondary">Referee <b>{r.name}</b>{r.source === "upload" ? ` · uploaded by ${nameOf(r.by)}` : " · NFL data"}{c ? ` · ${c.games} games since 2024` : " · no history"}</Typography>
+      {c && L && <Stack direction="row" sx={{ gap: 0.5, flexWrap: "wrap", mt: 0.25 }}>
+        <Chip size="small" variant="outlined" label={`Flags ${c.flags.toFixed(1)}/game (${cmp(c.flags, L.flags)})`} sx={{ height: 22 }} />
+        <Chip size="small" variant="outlined" label={`Holding ${c.off_holding} (${cmp(c.off_holding, L.off_holding)})`} sx={{ height: 22 }} />
+        <Chip size="small" variant="outlined" label={`Coverage flags ${c.pass_coverage} (${cmp(c.pass_coverage, L.pass_coverage)})`} sx={{ height: 22 }} />
+      </Stack>}
+    </Box>
+  );
+}
 function WindChip({ g }) {
   if (!isWindy(g)) return null;
   return <Chip size="small" color="warning" label={`Wind ${Math.round(g.weather.wind_mph)} mph`} sx={{ fontWeight: 700 }} />;
@@ -128,6 +143,7 @@ function GameCard({ g, onOpen }) {
         <Icon d={P.expand} sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s", color: "text.secondary" }} />
       </ButtonBase>
       <Box sx={{ px: 1.5, pb: 1.25 }}>
+        {open && <CrewInfo g={g} />}
         {g.teams.map((t) => {
           const cands = t.candidates.map(effCand);
           const avail = cands.filter((c) => c.quality !== "unavailable"); const out = cands.filter((c) => c.quality === "unavailable");
@@ -843,10 +859,11 @@ export function LinesView() {
   const mine = (S.lines[S.uid] || []).length;
   return (
     <Stack spacing={1.5}>
-      <H2>Lines · week {week}</H2>
+      <H2>Uploads · week {week}</H2>
+      <RefereeUploads />
       <DbNote />
       <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 1.25, p: 1.5, "&:last-child": { pb: 1.5 } }}>
-        <Typography variant="h6" component="h3">Upload current lines</Typography>
+        <Typography variant="h6" component="h3">Current lines</Typography>
         <Typography variant="body2" color="text.secondary">Anytime TD and 2+ TDs only. Prices go live for everyone right away, labeled with your name and the time.</Typography>
         <TextField label="Sportsbook (e.g. DraftKings, FanDuel)" value={book} onChange={(e) => setBook(e.target.value)} />
         <Stack direction="row" sx={{ gap: 1 }}>
@@ -967,5 +984,33 @@ export function DefenseView() {
         </CardContent></Card>
       ))}
     </Stack>
+  );
+}
+
+/* =========================== REFEREE UPLOADS =========================== */
+function RefereeUploads() {
+  const S = useStore(); const [edit, setEdit] = useState({}); const [text, setText] = useState(""); const [miss, setMiss] = useState([]);
+  const games = S.slate.games.filter((g) => !FB.isLocked(g, Date.now()));
+  const names = Object.entries((S.slate.referees && S.slate.referees.crews) || {}).filter(([, c]) => c.last_season >= 2025).map(([n]) => n).sort();
+  const known = games.filter((g) => refFor(g)).length;
+  return (
+    <Fold title="Referee assignments" summary={`${known} of ${games.length} open games assigned`}>
+      <Typography variant="body2" color="text.secondary">The NFL announces crews midweek; nflverse often fills them in only after the game. Crews differ in how many flags they throw (holding especially), but in testing on 2024–2026 they did not change player touchdown chances, so they are shown as information.</Typography>
+      {!S.isAdmin && <Alert severity="info" sx={{ borderRadius: 2 }}>Only admins can set referees. Assignments appear on each game card.</Alert>}
+      {games.map((g) => { const r = refFor(g); return (
+        <Stack key={g.game_id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
+          <Typography sx={{ width: 96, flexShrink: 0, fontWeight: 600 }}>{g.away} at {g.home}</Typography>
+          {S.isAdmin ? <Autocomplete freeSolo size="small" sx={{ flex: 1 }} options={names} value={edit[g.game_id] ?? (r ? r.name : "")}
+              onInputChange={(e, v, why) => { if (why === "input" || why === "clear") setEdit((x) => ({ ...x, [g.game_id]: v })); }}
+              onChange={(e, v) => setEdit((x) => ({ ...x, [g.game_id]: v || "" }))} renderInput={(p) => <TextField {...p} label="Referee" />} />
+            : <Typography variant="body2" sx={{ flex: 1 }}>{r ? r.name : "Not assigned"}</Typography>}
+        </Stack>); })}
+      {S.isAdmin && <>
+        <Button variant="contained" size="large" disabled={!Object.keys(edit).length} onClick={async () => { if (await setReferees(edit)) setEdit({}); }}>Save referees</Button>
+        <TextField multiline minRows={3} label="Or paste the week's assignments" placeholder={"BUF at NYJ: Shawn Hochuli\nSF@DAL Clete Blakeman"} value={text} onChange={(e) => setText(e.target.value)} />
+        <Button variant="outlined" size="large" disabled={!text.trim()} onClick={async () => { const r = parseRefText(text, games); setMiss(r.miss); if (Object.keys(r.map).length && await setReferees(r.map)) setText(""); }}>Add pasted assignments</Button>
+        {miss.length > 0 && <Alert severity="warning" sx={{ borderRadius: 2 }}>Couldn't match: {miss.join(" · ")}</Alert>}
+      </>}
+    </Fold>
   );
 }

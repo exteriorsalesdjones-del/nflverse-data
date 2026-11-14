@@ -9,7 +9,7 @@ const S = {
   meta: null, games: [], gameById: {}, tds: [], weekly: [], slate: null, validation: null, played: {}, recon: {},
   loadError: null,
   db: null, user: null, uid: null, canWrite: false, isAdmin: false, names: {},
-  allPicks: {}, odds: {}, locks: {}, reviews: {}, overrides: {}, extrasLoaded: false, lines: {}, parlaysAll: {}, draft: [], dbState: "connecting", downloads: null, sample: null,
+  allPicks: {}, odds: {}, locks: {}, reviews: {}, overrides: {}, refs: {}, extrasLoaded: false, lines: {}, parlaysAll: {}, draft: [], dbState: "connecting", downloads: null, sample: null,
   version: 0,
 };
 const subs = new Set();
@@ -73,6 +73,7 @@ export async function connect() {
     });
   }, fail);
   db.collection("parlays").onSnapshot((s) => { S.parlaysAll = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
+  db.collection("refs").onSnapshot((s) => { S.refs = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
   db.collection("overrides").onSnapshot((s) => { S.overrides = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
   db.collection("reviews").onSnapshot((s) => { S.reviews = Object.fromEntries(s.docs.map((d) => [d.id.replace("~", ":"), d.data()])); emit(); }, fail);
   window.claude.use("downloads").then((d) => { S.downloads = d; });
@@ -92,6 +93,32 @@ export const effAttr = (t) => {
   const r = S.reviews[t.key];
   return r ? { ...t.attribution, status: r.status, defenders: r.defenders || [], missing: r.missing || t.attribution.missing, reviewed: r } : t.attribution;
 };
+/* Referee assignments: admin uploads per week {games: {game_id: {referee, by, at}}}; falls back to the NFL data. */
+export function refFor(g) {
+  const w = S.slate && S.refs["w" + S.slate.week]; const up = w && w.games && w.games[g.game_id];
+  if (up && up.referee) return { name: up.referee, source: "upload", by: up.by, at: up.at };
+  return g.referee ? { name: g.referee, source: "nflverse" } : null;
+}
+export function crewIndex(name) { const R = S.slate && S.slate.referees; return (R && name && R.crews[name]) || null; }
+export async function setReferees(map) {
+  if (!S.isAdmin) { toast("Only admins can set referee assignments."); return false; }
+  const id = "w" + S.slate.week; const cur = structuredClone(S.refs[id] || { games: {} }); const at = new Date().toISOString();
+  Object.entries(map).forEach(([gid, name]) => { if (name) cur.games[gid] = { referee: name.trim(), by: S.uid, at }; else delete cur.games[gid]; });
+  try { await S.db.doc("refs/" + id).set(cur); toast(`Saved ${Object.keys(map).length} referee assignment${Object.keys(map).length > 1 ? "s" : ""}.`); return true; }
+  catch (e) { toast("Couldn't save the referee assignments."); return false; }
+}
+/* "BUF at NYJ: Shawn Hochuli", "BUF@NYJ Shawn Hochuli", or "NYJ - Shawn Hochuli" (either team) */
+export function parseRefText(text, games) {
+  const out = {}; const miss = [];
+  text.split(/\n/).map((l) => l.trim()).filter(Boolean).forEach((l) => {
+    const teams = (l.toUpperCase().match(/\b[A-Z]{2,3}\b/g) || []);
+    const g = games.find((x) => teams.includes(x.away) || teams.includes(x.home));
+    const name = l.replace(/\b[A-Z]{2,3}\b/g, " ").replace(/\b(at|vs\.?)\b/gi, " ").replace(/[@:\-–|,]/g, " ").replace(/\s+/g, " ").trim();
+    if (g && name.length > 3) out[g.game_id] = name; else miss.push(l);
+  });
+  return { map: out, miss };
+}
+
 /* Admin player-status overrides for the slate week: {gsis_id: {status, note, at}} */
 export const overrideFor = (gsis) => { const w = S.slate && S.overrides["w" + S.slate.week]; return (w && w.players && w.players[gsis]) || null; };
 export function effCand(c) {

@@ -1,0 +1,532 @@
+{
+ "games": {
+  "2024": 272,
+  "2025": 272,
+  "2026": 65
+ },
+ "crews": 18,
+ "league_per_game": {
+  "flags": 12.79,
+  "flag_yds": 103.14,
+  "off_holding": 2.49,
+  "pass_coverage": 2.35,
+  "presnap": 4.78,
+  "personal": 1.2,
+  "run_play_flags": 2.1,
+  "pass_play_flags": 5.12,
+  "dpi_yds": 16.29
+ },
+ "penalty_crew_effect": {
+  "flags": {
+   "p_value": 0.0,
+   "crew_share_of_variance": 0.0652
+  },
+  "flag_yds": {
+   "p_value": 0.0,
+   "crew_share_of_variance": 0.0651
+  },
+  "off_holding": {
+   "p_value": 0.0025,
+   "crew_share_of_variance": 0.0482
+  },
+  "pass_coverage": {
+   "p_value": 0.109,
+   "crew_share_of_variance": 0.0184
+  },
+  "presnap": {
+   "p_value": 0.046,
+   "crew_share_of_variance": 0.0256
+  },
+  "personal": {
+   "p_value": 0.0025,
+   "crew_share_of_variance": 0.0498
+  },
+  "run_play_flags": {
+   "p_value": 0.009,
+   "crew_share_of_variance": 0.0393
+  },
+  "pass_play_flags": {
+   "p_value": 0.024,
+   "crew_share_of_variance": 0.0317
+  },
+  "dpi_yds": {
+   "p_value": 0.2235,
+   "crew_share_of_variance": 0.0104
+  }
+ },
+ "persistence_2024_to_2025": {
+  "crews_in_both": 16,
+  "flags": 0.203,
+  "flag_yds": 0.231,
+  "off_holding": 0.599,
+  "pass_coverage": 0.195,
+  "presnap": -0.302,
+  "personal": 0.336,
+  "run_play_flags": 0.584,
+  "pass_play_flags": 0.195,
+  "dpi_yds": 0.138
+ },
+ "outcome_crew_effect": {
+  "rush_yds": {
+   "p_value": 0.712,
+   "crew_share_of_variance": 0.0
+  },
+  "rush_att": {
+   "p_value": 0.4745,
+   "crew_share_of_variance": 0.0002
+  },
+  "epa_rush": {
+   "p_value": 0.873,
+   "crew_share_of_variance": 0.0
+  },
+  "rush_td": {
+   "p_value": 0.0535,
+   "crew_share_of_variance": 0.0249
+  },
+  "pass_yds_incl_dpi": {
+   "p_value": 0.6025,
+   "crew_share_of_variance": 0.0
+  },
+  "dropbacks": {
+   "p_value": 0.851,
+   "crew_share_of_variance": 0.0
+  },
+  "epa_db": {
+   "p_value": 0.631,
+   "crew_share_of_variance": 0.0
+  },
+  "pass_td": {
+   "p_value": 0.3705,
+   "crew_share_of_variance": 0.0033
+  },
+  "pass_rate": {
+   "p_value": 0.5655,
+   "crew_share_of_variance": 0.0
+  },
+  "points_vs_total": {
+   "p_value": 0.506,
+   "crew_share_of_variance": 0.0
+  }
+ },
+ "prior_season_index_predicts_2025": {
+  "crew24_flags": {
+   "rush_yds": {
+    "r": -0.03,
+    "ci90": [
+     -0.142,
+     0.077
+    ]
+   },
+   "rush_att": {
+    "r": -0.004,
+    "ci90": [
+     -0.117,
+     0.097
+    ]
+   },
+   "epa_rush": {
+    "r": -0.088,
+    "ci90": [
+     -0.201,
+     0.018
+    ]
+   },
+   "rush_td": {
+    "r": -0.066,
+    "ci90": [
+     -0.176,
+     0.039
+    ]
+   },
+   "pass_yds_incl_dpi": {
+    "r": -0.076,
+    "ci90": [
+     -0.185,
+     0.035
+    ]
+   },
+   "dropbacks": {
+    "r": -0.027,
+    "ci90": [
+     -0.124,
+     0.078
+    ]
+   },
+   "epa_db": {
+    "r": -0.094,
+    "ci90": [
+     -0.195,
+     0.012
+    ]
+   },
+   "pass_td": {
+    "r": -0.116,
+    "ci90": [
+     -0.223,
+     -0.005
+    ]
+   },
+   "pass_rate": {
+    "r": -0.008,
+    "ci90": [
+     -0.099,
+     0.101
+    ]
+   },
+   "points_vs_total": {
+    "r": -0.097,
+    "ci90": [
+     -0.202,
+     0.001
+    ]
+   },
+   "n_games": 256
+  },
+  "crew24_off_holding": {
+   "rush_yds": {
+    "r": -0.064,
+    "ci90": [
+     -0.154,
+     0.03
+    ]
+   },
+   "rush_att": {
+    "r": -0.036,
+    "ci90": [
+     -0.141,
+     0.064
+    ]
+   },
+   "epa_rush": {
+    "r": -0.127,
+    "ci90": [
+     -0.238,
+     -0.023
+    ]
+   },
+   "rush_td": {
+    "r": -0.142,
+    "ci90": [
+     -0.241,
+     -0.044
+    ]
+   },
+   "pass_yds_incl_dpi": {
+    "r": -0.063,
+    "ci90": [
+     -0.167,
+     0.044
+    ]
+   },
+   "dropbacks": {
+    "r": 0.06,
+    "ci90": [
+     -0.049,
+     0.157
+    ]
+   },
+   "epa_db": {
+    "r": -0.09,
+    "ci90": [
+     -0.188,
+     -0.001
+    ]
+   },
+   "pass_td": {
+    "r": -0.075,
+    "ci90": [
+     -0.172,
+     0.031
+    ]
+   },
+   "pass_rate": {
+    "r": 0.057,
+    "ci90": [
+     -0.044,
+     0.156
+    ]
+   },
+   "points_vs_total": {
+    "r": -0.128,
+    "ci90": [
+     -0.227,
+     -0.032
+    ]
+   },
+   "n_games": 256
+  },
+  "crew24_pass_coverage": {
+   "rush_yds": {
+    "r": -0.074,
+    "ci90": [
+     -0.177,
+     0.03
+    ]
+   },
+   "rush_att": {
+    "r": -0.057,
+    "ci90": [
+     -0.156,
+     0.045
+    ]
+   },
+   "epa_rush": {
+    "r": -0.044,
+    "ci90": [
+     -0.151,
+     0.059
+    ]
+   },
+   "rush_td": {
+    "r": -0.076,
+    "ci90": [
+     -0.173,
+     0.03
+    ]
+   },
+   "pass_yds_incl_dpi": {
+    "r": -0.083,
+    "ci90": [
+     -0.173,
+     0.013
+    ]
+   },
+   "dropbacks": {
+    "r": 0.002,
+    "ci90": [
+     -0.108,
+     0.108
+    ]
+   },
+   "epa_db": {
+    "r": -0.179,
+    "ci90": [
+     -0.262,
+     -0.091
+    ]
+   },
+   "pass_td": {
+    "r": -0.124,
+    "ci90": [
+     -0.227,
+     -0.021
+    ]
+   },
+   "pass_rate": {
+    "r": 0.039,
+    "ci90": [
+     -0.058,
+     0.145
+    ]
+   },
+   "points_vs_total": {
+    "r": -0.129,
+    "ci90": [
+     -0.223,
+     -0.033
+    ]
+   },
+   "n_games": 256
+  },
+  "crew24_run_play_flags": {
+   "rush_yds": {
+    "r": 0.009,
+    "ci90": [
+     -0.089,
+     0.109
+    ]
+   },
+   "rush_att": {
+    "r": -0.002,
+    "ci90": [
+     -0.099,
+     0.101
+    ]
+   },
+   "epa_rush": {
+    "r": -0.074,
+    "ci90": [
+     -0.167,
+     0.025
+    ]
+   },
+   "rush_td": {
+    "r": -0.073,
+    "ci90": [
+     -0.169,
+     0.028
+    ]
+   },
+   "pass_yds_incl_dpi": {
+    "r": -0.064,
+    "ci90": [
+     -0.174,
+     0.047
+    ]
+   },
+   "dropbacks": {
+    "r": -0.012,
+    "ci90": [
+     -0.109,
+     0.093
+    ]
+   },
+   "epa_db": {
+    "r": -0.078,
+    "ci90": [
+     -0.188,
+     0.042
+    ]
+   },
+   "pass_td": {
+    "r": -0.075,
+    "ci90": [
+     -0.183,
+     0.027
+    ]
+   },
+   "pass_rate": {
+    "r": -0.004,
+    "ci90": [
+     -0.096,
+     0.092
+    ]
+   },
+   "points_vs_total": {
+    "r": -0.096,
+    "ci90": [
+     -0.193,
+     0.011
+    ]
+   },
+   "n_games": 256
+  },
+  "crew24_pass_play_flags": {
+   "rush_yds": {
+    "r": -0.099,
+    "ci90": [
+     -0.21,
+     0.022
+    ]
+   },
+   "rush_att": {
+    "r": -0.049,
+    "ci90": [
+     -0.146,
+     0.046
+    ]
+   },
+   "epa_rush": {
+    "r": -0.092,
+    "ci90": [
+     -0.203,
+     0.009
+    ]
+   },
+   "rush_td": {
+    "r": -0.076,
+    "ci90": [
+     -0.173,
+     0.026
+    ]
+   },
+   "pass_yds_incl_dpi": {
+    "r": -0.046,
+    "ci90": [
+     -0.15,
+     0.062
+    ]
+   },
+   "dropbacks": {
+    "r": 0.036,
+    "ci90": [
+     -0.069,
+     0.138
+    ]
+   },
+   "epa_db": {
+    "r": -0.131,
+    "ci90": [
+     -0.232,
+     -0.035
+    ]
+   },
+   "pass_td": {
+    "r": -0.11,
+    "ci90": [
+     -0.221,
+     -0.004
+    ]
+   },
+   "pass_rate": {
+    "r": 0.053,
+    "ci90": [
+     -0.048,
+     0.161
+    ]
+   },
+   "points_vs_total": {
+    "r": -0.085,
+    "ci90": [
+     -0.19,
+     0.015
+    ]
+   },
+   "n_games": 256
+  }
+ },
+ "same_game_association": {
+  "off_holding": {
+   "rush_yds": -0.102,
+   "epa_rush": -0.11,
+   "rush_td": -0.057,
+   "pass_yds_incl_dpi": 0.093,
+   "epa_db": -0.023,
+   "pass_td": -0.048,
+   "pass_rate": 0.177
+  },
+  "pass_coverage": {
+   "rush_yds": -0.075,
+   "epa_rush": -0.072,
+   "rush_td": 0.075,
+   "pass_yds_incl_dpi": 0.233,
+   "epa_db": 0.044,
+   "pass_td": 0.135,
+   "pass_rate": 0.104
+  },
+  "run_play_flags": {
+   "rush_yds": -0.034,
+   "epa_rush": -0.017,
+   "rush_td": 0.016,
+   "pass_yds_incl_dpi": 0.106,
+   "epa_db": 0.043,
+   "pass_td": 0.001,
+   "pass_rate": 0.08
+  },
+  "pass_play_flags": {
+   "rush_yds": -0.143,
+   "epa_rush": -0.124,
+   "rush_td": -0.012,
+   "pass_yds_incl_dpi": 0.253,
+   "epa_db": 0.056,
+   "pass_td": 0.122,
+   "pass_rate": 0.234
+  },
+  "flags": {
+   "rush_yds": -0.124,
+   "epa_rush": -0.108,
+   "rush_td": -0.027,
+   "pass_yds_incl_dpi": 0.187,
+   "epa_db": -0.005,
+   "pass_td": 0.05,
+   "pass_rate": 0.221
+  }
+ },
+ "league_index": {
+  "flags": 13.34,
+  "off_holding": 2.65,
+  "pass_coverage": 2.41,
+  "run_play_flags": 2.19,
+  "pass_play_flags": 5.22
+ }
+}

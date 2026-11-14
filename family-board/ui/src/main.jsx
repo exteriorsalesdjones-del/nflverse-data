@@ -5,8 +5,8 @@ import { FB, useStore, loadData, connect, setToast, myItems } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 import { WeekView, TouchdownsView, BoardView, AdminView, ParlaysView, LinesView, DefenseView } from "./views.jsx";
 
-const TABS = [["week", "Week", P.week], ["parlays", "Parlays", P.parlays], ["lines", "Lines", P.lines], ["defense", "Defense", P.defense], ["touchdowns", "TDs", P.tds], ["board", "Board", P.board]];
-const ROUTES = ["week", "parlays", "lines", "defense", "touchdowns", "board", "picks", "admin"];
+const TABS = [["week", "Week", P.week], ["parlays", "Parlays", P.parlays], ["uploads", "Uploads", P.upload], ["defense", "Defense", P.defense], ["touchdowns", "TDs", P.tds], ["board", "Board", P.board]];
+const ROUTES = ["week", "parlays", "uploads", "lines", "defense", "touchdowns", "board", "picks", "admin"];
 
 /* Follows the viewer's theme: an explicit data-theme on <html>, otherwise the OS setting. */
 function useMode() {
@@ -89,9 +89,9 @@ function App() {
     const on = () => { setTab(hashTab()); setMsg(null); window.scrollTo(0, 0); };
     window.addEventListener("hashchange", on); return () => window.removeEventListener("hashchange", on);
   }, []);
-  const tabs = TABS; const navValue = tab === "picks" ? "board" : tab === "admin" ? false : tab;
+  const tabs = TABS; const navValue = tab === "lines" ? "uploads" : tab === "picks" ? "board" : tab === "admin" ? false : tab;
   const fresh = S.meta && `Updated ${FB.fmtEt(Date.parse(S.meta.refreshed_at), { month: "short", day: "numeric" })} ET${(Date.now() - Date.parse(S.meta.refreshed_at)) / 3600e3 > 36 ? " · may be out of date" : ""}`;
-  const View = { week: WeekView, parlays: ParlaysView, lines: LinesView, defense: DefenseView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView }[tab];
+  const View = { week: WeekView, parlays: ParlaysView, uploads: LinesView, lines: LinesView, defense: DefenseView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView }[tab];
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
