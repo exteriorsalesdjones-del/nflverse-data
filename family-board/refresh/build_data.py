@@ -39,9 +39,10 @@ import numpy as np
 import pandas as pd
 
 import matchup as MU
+import enhance as EN
 
 SEASON = 2026
-MODEL_VERSION = "baseline-usage-v0.1"
+MODEL_VERSION = "usage-v0.2"
 CACHE = Path(os.environ.get("FB_CACHE", Path(__file__).resolve().parents[1] / ".data" / "cache"))
 OUT = Path(os.environ.get("FB_OUT", Path(__file__).resolve().parents[1] / "artifact" / "data"))
 
@@ -382,12 +383,48 @@ def _metrics(p, y):
     return float(((p - y) ** 2).mean()), float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
 
 
-VARIANTS = {"baseline": None, "matchup_pos": False, "matchup_pos_cov": True}
+CONFIGS = {  # name: (recency, skill, kalman, calibrate)
+    "baseline": (False, False, False, False),
+    "recency": (True, False, False, False),
+    "recency_skill": (True, True, False, False),
+    "recency_skill_kalman": (True, True, True, False),
+    "full": (True, True, True, True),
+    "baseline_calibrated": (False, False, False, True),
+}
+MATCHUPS = ["matchup_pos", "matchup_pos_cov"]
+
+
+def off_td_counts(pbp) -> dict:
+    td = pbp[(pbp.touchdown == 1) & (pbp.two_point_attempt != 1) & ((pbp.pass_touchdown == 1) | (pbp.rush_touchdown == 1))]
+    return td.groupby(["game_id", "posteam"]).size().to_dict()
+
+
+def week_predictions(o_hist, rates, ratio, games_hist, offc, pos, pf, cf, g, ip):
+    """Raw (uncalibrated) predictions for one game's two offences under every config."""
+    kx = EN.kalman_team(games_hist, offc, ratio, implied_points)
+    out = []
+    for team, opp, pts in ((g.away_team, g.home_team, ip[0]), (g.home_team, g.away_team, ip[1])):
+        total = pts * ratio
+        base = EN.team_lambdas(o_hist, rates, team, total, False, False)
+        if base.empty:
+            continue
+        rec = EN.team_lambdas(o_hist, rates, team, total, True, False).set_index("pid")
+        rs = EN.team_lambdas(o_hist, rates, team, total, True, True).set_index("pid")
+        rsk = EN.team_lambdas(o_hist, rates, team, total * kx.get(team, 1.0), True, True).set_index("pid")
+        m1 = MU.adjust(base, opp, pos, pf, cf, False, total)
+        m2 = MU.adjust(base, opp, pos, pf, cf, True, total)
+        for i, r in enumerate(base.itertuples()):
+            out.append({"team": team, "opp": opp, "pid": r.pid, "baseline": r.p,
+                        "recency": rec.p.get(r.pid, r.p), "recency_skill": rs.p.get(r.pid, r.p),
+                        "recency_skill_kalman": rsk.p.get(r.pid, r.p),
+                        "matchup_pos": m1.p_adj.iloc[i], "matchup_pos_cov": m2.p_adj.iloc[i],
+                        "kalman_x": kx.get(team, 1.0)})
+    return out
 
 
 def validate(pbp, games, snaps, players, pfr) -> dict:
     """Walk-forward: for week w use only weeks < w. Score players who took an offensive snap.
-    Scores the baseline and each matchup variant on the same player-games."""
+    Every variant is scored on the same player-games."""
     o = opportunity_table(pbp)
     pos = players.dropna(subset=["gsis_id"]).drop_duplicates("gsis_id").set_index("gsis_id")["position"]
     pmap = players.dropna(subset=["pfr_id"]).drop_duplicates("pfr_id").set_index("pfr_id")["gsis_id"]
@@ -395,11 +432,13 @@ def validate(pbp, games, snaps, players, pfr) -> dict:
     played = snaps[snaps.offense_snaps.fillna(0) > 0].groupby("game_id").gsis.apply(set).to_dict()
     td = pbp[(pbp.touchdown == 1) & (pbp.two_point_attempt != 1)]
     scorers = td.groupby("game_id").td_player_id.apply(set).to_dict()
+    offc = off_td_counts(pbp)
     rows = []
     for w in range(4, int(games[games.result.notna()].week.max()) + 1):
         hist = o[o.week < w]
         rates = fit_rates(hist)
         hist_pbp = pbp[pbp.week < w]
+        gh = games[(games.week < w) & games.result.notna()]
         ratio = off_td_per_point(hist_pbp, games[games.week < w])
         pf = MU.pos_factors(hist_pbp, pos)
         cf = MU.cov_factors(pfr[pfr.week < w])
@@ -407,48 +446,56 @@ def validate(pbp, games, snaps, players, pfr) -> dict:
             ip = implied_points(g)
             if ip is None:
                 continue
-            for team, opp, pts in ((g.away_team, g.home_team, ip[0]), (g.home_team, g.away_team, ip[1])):
-                lam = player_lambdas(hist, rates, team, pts * ratio)
-                if lam.empty:
-                    continue
-                a1 = MU.adjust(lam, opp, pos, pf, cf, False, pts * ratio)
-                a2 = MU.adjust(lam, opp, pos, pf, cf, True, pts * ratio)
-                on = played.get(g.game_id, set())
-                for r, p1, p2 in zip(lam.itertuples(), a1.p_adj, a2.p_adj):
-                    if r.pid not in on:
-                        continue  # inactive or no offensive snap: a pick would be void
-                    rows.append((w, g.game_id, r.p, p1, p2, int(r.pid in scorers.get(g.game_id, set()))))
+            on = played.get(g.game_id, set())
+            for r in week_predictions(hist, rates, ratio, gh, offc, pos, pf, cf, g, ip):
+                if r["pid"] not in on:
+                    continue  # inactive or no offensive snap: a pick would be void
+                rows.append({**r, "week": w, "game_id": g.game_id, "y": int(r["pid"] in scorers.get(g.game_id, set()))})
     if not rows:
         return {"n": 0}
-    v = pd.DataFrame(rows, columns=["week", "game_id", "baseline", "matchup_pos", "matchup_pos_cov", "y"])
+    v = pd.DataFrame(rows)
+    # calibration layers, fitted on earlier weeks only
+    v["full"] = v.recency_skill_kalman.astype(float)
+    v["baseline_calibrated"] = v.baseline.astype(float)
+    for src, dst in (("recency_skill_kalman", "full"), ("baseline", "baseline_calibrated")):
+        for w in sorted(v.week.unique()):
+            prior = v[v.week < w]
+            ab = EN.fit_platt(prior[src].to_numpy(float), prior.y.to_numpy(float))
+            m = v.week == w
+            v.loc[m, dst] = EN.apply_platt(v.loc[m, src].to_numpy(float), ab)
     base = v.y.mean()
     brier0, ll0 = _metrics(np.full(len(v), base), v.y)
-    variants = {}
     rng = np.random.default_rng(7)
-    gids = v.game_id.unique()
-    for name in VARIANTS:
+    variants = {}
+    names = list(CONFIGS) + MATCHUPS
+    ll_row = {n: -(v.y * np.log(np.clip(v[n], 1e-6, 1)) + (1 - v.y) * np.log(np.clip(1 - v[n], 1e-6, 1))) for n in names}
+    for name in names:
         b, l = _metrics(v[name], v.y)
         bins = pd.cut(v[name], [0, .05, .1, .2, .3, .4, .5, 1], include_lowest=True)
         cal = [{"bin": str(k), "n": int(len(x)), "pred": float(x[name].mean()), "actual": float(x.y.mean())}
                for k, x in v.groupby(bins, observed=True)]
-        entry = {"brier": b, "log_loss": l, "calibration": cal}
+        entry = {"brier": b, "log_loss": l, "calibration": cal,
+                 "max_cal_gap": max((abs(c["pred"] - c["actual"]) for c in cal if c["n"] >= 50), default=None)}
         if name != "baseline":
-            # paired bootstrap over games: log-loss improvement vs baseline (positive = better)
-            per_game = v.assign(d=[_metrics([pb], [y])[1] - _metrics([pm], [y])[1] for pb, pm, y in zip(v.baseline, v[name], v.y)]).groupby("game_id").d.sum()
+            per_game = (ll_row["baseline"] - ll_row[name]).groupby(v.game_id).sum()
             boots = [per_game.sample(len(per_game), replace=True, random_state=int(rng.integers(1e9))).sum() / len(v) for _ in range(400)]
             entry["ll_gain"] = float(per_game.sum() / len(v))
             entry["ll_gain_ci90"] = [float(np.percentile(boots, 5)), float(np.percentile(boots, 95))]
         variants[name] = entry
-    best = min(variants, key=lambda k: variants[k]["log_loss"])
-    adopt = best != "baseline" and variants[best]["ll_gain_ci90"][0] > 0
-    chosen = best if adopt else "baseline"
+    passing = [n for n in names if n != "baseline" and variants[n]["ll_gain_ci90"][0] > 0]
+    chosen = min(passing, key=lambda n: variants[n]["log_loss"]) if passing else "baseline"
     c = variants[chosen]
+    platt = {}
+    for src, dst in (("recency_skill_kalman", "full"), ("baseline", "baseline_calibrated")):
+        platt[dst] = EN.fit_platt(v[src].to_numpy(float), v.y.to_numpy(float))
     return {"model_version": MODEL_VERSION, "weeks": [4, int(v.week.max())], "n": int(len(v)),
             "base_rate": float(base), "brier": c["brier"], "brier_constant": brier0,
             "log_loss": c["log_loss"], "log_loss_constant": ll0, "calibration": c["calibration"],
-            "variants": variants, "chosen": chosen, "best_by_log_loss": best,
+            "variants": variants, "chosen": chosen, "passing": passing, "platt": platt,
+            "settings": {"half_life_weeks": EN.HALF_LIFE, "skill_prior_tds": EN.A_PRIOR, "kalman_q": EN.KF_Q,
+                         "matchup_k_games": MU.K_GAMES, "matchup_k_targets": MU.K_TARGETS},
             "status": "research",
-            "note": "Each week is predicted from earlier weeks only, using closing spread and total and matchup factors built from earlier games. Scored on players who took an offensive snap (an inactive player's pick is void). A matchup variant is adopted only when the 90% bootstrap interval of its log-loss gain over the baseline is above zero. No sportsbook prices are included, so no closing-line value yet."}
+            "note": "Each week is predicted from earlier weeks only, using closing spread and total. Scored on players who took an offensive snap (an inactive player's pick is void). A variant is adopted only when the 90% bootstrap interval (resampling games) of its log-loss gain over the baseline is above zero; among those, the lowest log loss wins. No sportsbook prices are included, so no closing-line value yet."}
 
 
 def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
@@ -471,6 +518,7 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
     pf = MU.pos_factors(pbp, pos)
     cf = MU.cov_factors(pfr)
     chosen = validation.get("chosen", "baseline")
+    kx = EN.kalman_team(games[games.result.notna()], off_td_counts(pbp), ratio, implied_points)
     out_games = []
     gdf = games.set_index("game_id")
     for g in [x for x in games_out if x["week"] == week]:
@@ -489,9 +537,18 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                 lam = lam[lam.pid.isin(set(players.gsis_id))] if not lam.empty else lam
                 if not lam.empty:
                     adj = MU.adjust(lam, opp, pos, pf, cf, True, pts * ratio)
-                    lam = lam.assign(p_mu=adj.p_adj.values, f_rush=adj.f_rush, f_rec=adj.f_rec, f_cov=adj.f_cov)
-                    if chosen != "baseline":
+                    lam = lam.assign(p_raw=lam.p, p_mu=adj.p_adj.values, f_rush=adj.f_rush, f_rec=adj.f_rec, f_cov=adj.f_cov)
+                    cfg = CONFIGS.get(chosen)
+                    if cfg and (cfg[0] or cfg[1] or cfg[2]):
+                        total = pts * ratio * (kx.get(team, 1.0) if cfg[2] else 1.0)
+                        alt = EN.team_lambdas(o, rates, team, total, cfg[0], cfg[1]).set_index("pid")
+                        lam = lam.assign(p=[alt.p.get(i, q) for i, q in zip(lam.pid, lam.p)])
+                    elif chosen in MATCHUPS:
                         lam = lam.assign(p=lam.p_mu)
+                    if cfg and cfg[3]:
+                        ab = (validation.get("platt") or {}).get(chosen)
+                        lam = lam.assign(p=EN.apply_platt(lam.p.to_numpy(float), ab),
+                                         p_mu=EN.apply_platt(lam.p_mu.to_numpy(float), ab))
                 entry["opp_cov_factor"] = round(float(cf.get(opp, 1.0)), 3)
                 cands = []
                 for r in (lam.sort_values("p", ascending=False).head(14).itertuples() if not lam.empty else []):
@@ -519,7 +576,7 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                         "p_matchup": round(mu, 4), "matchup_pct": round((mu / p - 1) * 100, 1) if p > 0 else None,
                         "matchup_why": "; ".join(parts) or f"{opp} is close to league average against this role.",
                         "player": r.name, "full_name": nz(full.get(r.pid)), "gsis_id": r.pid, "pos": nz(pos.get(r.pid)), "team": team, "game_id": g["game_id"],
-                        "p": round(p, 4), "fair_american": american(p),
+                        "p": round(p, 4), "p_uncalibrated": round(float(r.p_raw), 4), "fair_american": american(p),
                         "lambda": round(float(r.lam), 3),
                         "share": round(float(r.share), 3), "opps": int(r.opp), "i10": int(r.i10),
                         "games": int(r.games), "injury": status, "quality": quality, "notes": notes,

@@ -46,3 +46,16 @@ A candidate can be labelled Value Play only when all hold: at least 2,000 graded
 
 ## Defender leaderboard (`defenders.json`)
 Season sums of PFR defensive charting per defender: targets, completions, yards, receiving TDs allowed, interceptions, missed tackles. Rates are shown only with 25+ targets.
+
+## Model enhancements (`enhance.py`, model `usage-v0.2`)
+Methods adapted from Cognitive Foundry (Java) and OnlineStats.jl (Julia), rewritten in Python. Settings were fixed before testing.
+
+| Method | Idea | Walk-forward result (weeks 4–10, 1,899 player-games) |
+|---|---|---|
+| Recency weighting | Opportunities weighted by 0.5^(weeks ago / 4) | No effect: log-loss gain +0.1 ×10⁻³ (90% range −2.1 to +2.5) |
+| Poisson-Gamma skill | Player TD factor (actual + 2) / (expected + 2) | Worse: −7.3 (−12.2 to −2.4) |
+| Kalman team filter | Team multiplier on expected TDs, updated game by game | Worse: −8.0 (−13.6 to −3.1) |
+| All + calibration | Above, then Platt scaling | Not proven: +7.2 (−3.7 to +19.0) |
+| **Usage + calibration (live)** | Platt scaling: logistic regression on log-odds, fitted on earlier weeks only | **+11.8 (+1.9 to +21.9)** — adopted |
+
+Platt scaling refits on all completed weeks at each refresh and only applies once 300+ earlier predictions exist. Current fit: slope ≈ 0.61, so the raw model's extremes are pulled toward the middle (low-usage players up, top favourites down). The full test table, including matchup variants, is in `validation.json` and on the This Week tab. Value Play stays off: the worst calibration band is still about 6 points off, above the 3-point bar.

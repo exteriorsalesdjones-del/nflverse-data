@@ -51,6 +51,7 @@ export function WeekView() {
         <Typography variant="body2">{gate.ok ? "Model meets the validation bar." : "No Value Plays: " + gate.reasons.join(" ")}</Typography>
         <Typography variant="body2" color="text.secondary">Missing: {s.missing.join("; ")}.</Typography>
       </Alert>
+      <ModelCheck />
       <Matchups />
       <Slates />
       <Section title={`Week ${s.week} games`}>
@@ -120,6 +121,36 @@ function TeamCol({ g, t, locked }) {
     </Box>
   );
 }
+const VARIANT_LABEL = {
+  baseline: "Usage share + betting total", recency: "+ recency weighting (half-life 4 weeks)", recency_skill: "+ Poisson-Gamma player skill",
+  recency_skill_kalman: "+ Kalman team filter", full: "All enhancements + calibration", baseline_calibrated: "Usage share + calibration",
+  matchup_pos: "+ position matchups", matchup_pos_cov: "+ position matchups and coverage",
+};
+function ModelCheck() {
+  const S = useStore(); const v = S.validation; const [open, setOpen] = useState(false);
+  if (!v.variants) return null;
+  const rows = Object.entries(v.variants).sort((a, b) => a[1].log_loss - b[1].log_loss);
+  return (
+    <Section title="How the model was tested" action={<Button size="small" onClick={() => setOpen(!open)}>{open ? "Hide" : "Show"} results</Button>}>
+      <Typography variant="body2">
+        Headline odds use <b>{VARIANT_LABEL[v.chosen] || v.chosen}</b>. Each candidate method predicted every week from earlier weeks only (weeks {v.weeks.join("–")}, {v.n} player-games). A method goes live only when its gain over the plain model is above zero across 90% of resampled games.
+      </Typography>
+      {open && (
+        <TableContainer><Table size="small">
+          <TableHead><TableRow>{["Method", "Log loss", "Gain ×1000 (90% range)", "Brier", "Worst calibration gap", "Status"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
+          <TableBody>{rows.map(([k, x]) => (
+            <TableRow key={k} selected={k === v.chosen}>
+              <TableCell>{VARIANT_LABEL[k] || k}</TableCell><TableCell><Num>{x.log_loss.toFixed(4)}</Num></TableCell>
+              <TableCell><Num>{x.ll_gain_ci90 ? `${(x.ll_gain * 1000).toFixed(1)} (${(x.ll_gain_ci90[0] * 1000).toFixed(1)} to ${(x.ll_gain_ci90[1] * 1000).toFixed(1)})` : "reference"}</Num></TableCell>
+              <TableCell><Num>{x.brier.toFixed(4)}</Num></TableCell><TableCell><Num>{x.max_cal_gap != null ? (x.max_cal_gap * 100).toFixed(1) + " pts" : "—"}</Num></TableCell>
+              <TableCell>{k === v.chosen ? <Chip size="small" color="success" label="live" /> : (v.passing || []).includes(k) ? <Chip size="small" variant="outlined" label="passes" />
+                : k === "baseline" ? <Chip size="small" variant="outlined" label="reference" /> : <Chip size="small" variant="outlined" label="not proven" />}</TableCell>
+            </TableRow>))}</TableBody>
+        </Table></TableContainer>
+      )}
+    </Section>
+  );
+}
 function Matchups() {
   const S = useStore(); const v = S.validation; const mv = v.variants || {};
   const open = S.slate.games.filter((g) => !FB.isLocked(g, Date.now()));
@@ -144,9 +175,9 @@ function Matchups() {
       <Typography variant="body2" color="text.secondary">
         How each opponent has allowed touchdowns this season, by position group, run or catch, and its charted coverage, moves touchdown chances between players on the same team. The team's total still comes from the betting line. Players with at least an 8% usage-model chance in open games.
       </Typography>
-      <Alert severity={v.chosen === "baseline" ? "info" : "success"} variant="outlined">
-        {v.chosen === "baseline"
-          ? `Untested: in the week-by-week check (weeks ${v.weeks.join("–")}, ${v.n} player-games), matchup adjustments have not yet improved accuracy over usage alone. Log-loss gain ×1000: position matchup ${gain("matchup_pos")}, plus coverage ${gain("matchup_pos_cov")}. Headline probabilities and fair odds stay on the usage model; this is rechecked every refresh.`
+      <Alert severity={!String(v.chosen).startsWith("matchup") ? "info" : "success"} variant="outlined">
+        {!String(v.chosen).startsWith("matchup")
+          ? `Untested: in the week-by-week check (weeks ${v.weeks.join("–")}, ${v.n} player-games), matchup adjustments have not yet improved accuracy over usage alone. Log-loss gain ×1000: position matchup ${gain("matchup_pos")}, plus coverage ${gain("matchup_pos_cov")}. Headline probabilities and fair odds don't include matchups; this is rechecked every refresh.`
           : `The matchup model beat usage alone in the week-by-week check, so headline probabilities now include it (${v.chosen}).`}
       </Alert>
       <Typography variant="subtitle2">Biggest boosts</Typography><T rows={up} />

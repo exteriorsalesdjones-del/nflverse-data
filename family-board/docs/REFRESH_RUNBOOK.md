@@ -5,7 +5,7 @@ The scheduled refresh runs this in a fresh Claude Code session on this repositor
 
 Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
 
-1. `cd family-board && python3 refresh/fetch_sources.py` (needs `refresh/matchup.py` beside `build_data.py`)
+1. `cd family-board && python3 refresh/fetch_sources.py` (needs `refresh/matchup.py` and `refresh/enhance.py` beside `build_data.py`)
    Downloads the nflverse files. A failed download keeps the previous good copy.
 2. `python3 refresh/build_data.py`
    Rebuilds `artifact/data/*.json`. Exit code 1 means a final game failed to
