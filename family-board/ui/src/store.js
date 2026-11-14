@@ -32,6 +32,12 @@ export function ensurePregame() {
   if (!pregamePromise) pregamePromise = loadJson("pregame_reads.json").then((d) => { S.pregame = d; emit(); }).catch(() => { S.pregame = null; emit(); });
   return pregamePromise;
 }
+/* Analysis tab (docs/ANALYSIS_W1_10.md): loaded only when the tab is opened. undefined = not loaded, null = unavailable. */
+let analysisPromise = null;
+export function ensureAnalysis() {
+  if (!analysisPromise) analysisPromise = loadJson("analysis.json").then((d) => { S.analysis = d; emit(); }).catch(() => { S.analysis = null; analysisPromise = null; emit(); });
+  return analysisPromise;
+}
 let extrasPromise = null;
 export function ensureExtras() {
   if (!extrasPromise) extrasPromise = (async () => {

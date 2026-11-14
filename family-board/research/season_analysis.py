@@ -506,6 +506,8 @@ def main():
     json.dump({"ats_and_totals": [dict(name=n, w=w, l=l, r=r, p=p, by_season=c) for n, w, l, r, p, c in ranked], "prime": prime_stats,
                "top_pick": {"hits": agg_k, "n": agg_n, "expected": float(g.p.sum())}, "implied_r": r_imp},
               open(ROOT / "research" / "season_analysis_results.json", "w"), indent=1, default=float)
+    import analysis_to_json  # the app's copy (artifact/data/analysis.json) is rebuilt from the Markdown
+    analysis_to_json.convert()
     print("wrote", out)
 
 

@@ -3,10 +3,11 @@ import { createRoot } from "react-dom/client";
 import { AppBar, Badge, Box, BottomNavigation, BottomNavigationAction, Button, ButtonBase, Container, CssBaseline, IconButton, Paper, Snackbar, Stack, ThemeProvider, Toolbar, Typography, createTheme, Alert } from "@mui/material";
 import { FB, useStore, loadData, connect, setToast, myItems, ensureExtras, allLineRows } from "./store.js";
 import { Icon, P } from "./icons.jsx";
+import { AnalysisView } from "./analysis.jsx";
 import { WeekView, TouchdownsView, BoardView, AdminView, ParlaysView, LinesView, DefenseView } from "./views.jsx";
 
-const TABS = [["week", "Week", P.week], ["parlays", "Parlays", P.parlays], ["uploads", "Uploads", P.upload], ["defense", "Defense", P.defense], ["touchdowns", "TDs", P.tds], ["board", "Board", P.board]];
-const ROUTES = ["week", "parlays", "uploads", "lines", "defense", "touchdowns", "board", "picks", "admin"];
+const TABS = [["week", "Week", P.week], ["parlays", "Parlays", P.parlays], ["uploads", "Uploads", P.upload], ["defense", "Defense", P.defense], ["touchdowns", "TDs", P.tds], ["board", "Board", P.board], ["analysis", "Analysis", P.analysis]];
+const ROUTES = ["week", "parlays", "uploads", "lines", "defense", "touchdowns", "board", "picks", "admin", "analysis"];
 
 /* Follows the viewer's theme: an explicit data-theme on <html>, otherwise the OS setting. */
 function useMode() {
@@ -96,7 +97,7 @@ function App() {
   const stale = S.slate ? allLineRows(S.slate.week).filter((r) => soon.has(r.gsis_id) && !FB.priceFresh(r, Date.now())).length : 0;
   const tabs = TABS; const navValue = tab === "lines" ? "uploads" : tab === "picks" ? "board" : tab === "admin" ? false : tab;
   const fresh = S.meta && `Updated ${FB.fmtEt(Date.parse(S.meta.refreshed_at), { month: "short", day: "numeric" })} ET${(Date.now() - Date.parse(S.meta.refreshed_at)) / 3600e3 > 36 ? " · may be out of date" : ""}`;
-  const View = { week: WeekView, parlays: ParlaysView, uploads: LinesView, lines: LinesView, defense: DefenseView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView }[tab];
+  const View = { week: WeekView, parlays: ParlaysView, uploads: LinesView, lines: LinesView, defense: DefenseView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView, analysis: AnalysisView }[tab];
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
