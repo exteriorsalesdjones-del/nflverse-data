@@ -6,7 +6,7 @@ import {
 } from "@mui/material";
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
-  exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot,
+  exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
   addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
@@ -876,7 +876,7 @@ export function LinesView() {
   const canWrite = !!S.uid && S.dbState === "ok";
   async function fromFile(f) {
     if (!f) return;
-    if (f.type.startsWith("image/")) return readLinesShot(f, book);
+    if (f.type.startsWith("image/")) return readLinesShots([f], book);
     const t = await f.text(); const raw = parseLinesCsv(t); const parsed = Object.assign(raw.map((r) => ({ ...r, book: r.book || book || "Upload" })), { skipped: raw.skipped });
     await uploadLines(parsed, "file");
   }
@@ -899,7 +899,7 @@ export function LinesView() {
         {bookChoice === "Other" && <TextField label="Which sportsbook?" placeholder="e.g. BetMGM, Caesars" value={otherBook} onChange={(e) => setOtherBook(e.target.value)} />}
         <Stack direction="row" sx={{ gap: 1 }}>
           <Button component="label" variant="contained" size="large" disabled={!canWrite} startIcon={<Icon d={P.upload} />} sx={{ flex: 1 }}>
-            Screenshot<input hidden type="file" accept="image/*" onChange={(e) => { fromFile(e.target.files[0]); e.target.value = ""; }} /></Button>
+            Screenshots<input hidden type="file" accept="image/*" multiple aria-label={`Choose up to ${MAX_SHOTS} screenshots`} onChange={(e) => { readLinesShots(e.target.files, book); e.target.value = ""; }} /></Button>
           <Button component="label" variant="outlined" size="large" disabled={!canWrite} sx={{ flex: 1 }}>
             CSV file<input hidden type="file" accept=".csv,.txt,text/csv,text/plain" onChange={(e) => { fromFile(e.target.files[0]); e.target.value = ""; }} /></Button>
         </Stack>
@@ -1090,13 +1090,14 @@ function LiveRecord() {
 function ShotReview() {
   const S = useStore(); const rows = S.shotReview || [];
   const upd = (id, patch) => setShotReview(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const multi = new Set(rows.map((r) => r.shot || 1)).size > 1;
   return (
     <Box sx={{ border: 2, borderColor: "warning.main", borderRadius: 2, p: 1.25, display: "grid", gap: 1 }} role="region" aria-label="Review screenshot prices">
-      <Typography sx={{ fontWeight: 700 }}>Check {rows.length} prices read from the screenshot</Typography>
+      <Typography sx={{ fontWeight: 700 }}>Check {rows.length} prices read from {new Set(rows.map((r) => r.shot || 1)).size > 1 ? `${new Set(rows.map((r) => r.shot || 1)).size} screenshots` : "the screenshot"}</Typography>
       <Typography variant="body2" color="text.secondary">Screenshot reading can misread numbers. Fix or remove anything wrong; nothing is shared until you confirm. Book: {rows[0] ? rows[0].book : ""}.</Typography>
       {rows.map((r) => (
         <Stack key={r.id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
-          <TextField size="small" label="Player" value={r.player} onChange={(e) => upd(r.id, { player: e.target.value })} sx={{ flex: 1, minWidth: 0 }} />
+          <TextField size="small" label={multi ? `Player · shot ${r.shot}` : "Player"} value={r.player} onChange={(e) => upd(r.id, { player: e.target.value })} sx={{ flex: 1, minWidth: 0 }} />
           <TextField size="small" label={r.market === "2plus_td" ? "2+ TDs" : "Anytime"} value={r.raw ?? (isFinite(r.american) ? (r.american > 0 ? "+" + r.american : String(r.american)) : "")}
             error={!isFinite(FB.parseAmerican(r.raw ?? r.american))} onChange={(e) => upd(r.id, { raw: e.target.value })} sx={{ width: 92 }} slotProps={{ htmlInput: { inputMode: "numeric" } }} />
           <Button aria-label={`Remove ${r.player}`} onClick={() => { setShotReview(rows.filter((x) => x.id !== r.id)); setTimeout(() => { const el = document.getElementById("shot-confirm"); if (el) el.focus(); }, 0); }} sx={{ minWidth: 44, minHeight: 44 }}>✕</Button>

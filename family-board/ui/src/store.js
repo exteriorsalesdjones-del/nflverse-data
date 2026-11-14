@@ -357,24 +357,53 @@ export function clearSkipped() { S.lastSkipped = null; emit(); }
 export async function confirmShot() {
   const rows = (S.shotReview || []).map((r) => ({ ...r, american: FB.parseAmerican(r.raw ?? r.american) })).filter((r) => r.player && isFinite(r.american));
   const bad = (S.shotReview || []).length - rows.length;
-  const r2 = rows.map(({ id, raw, ...r }) => r); r2.skipped = bad ? [{ line: `${bad} row(s)`, why: "missing player or invalid price" }] : [];
+  const r2 = rows.map(({ id, raw, shot, shot_name, ...r }) => r); r2.skipped = bad ? [{ line: `${bad} row(s)`, why: "missing player or invalid price" }] : [];
   if (await uploadLines(r2, "screenshot")) { S.shotReview = null; emit(); }
 }
-export async function readLinesShot(file, book) {
-  if (!file) return;
+export const MAX_SHOTS = 10;
+const SHOT_PROMPT = "Read this sportsbook screenshot of NFL player touchdown odds. Return a JSON array of objects {player, team, market, american} for every price visible in these markets only: Anytime Touchdown Scorer (market \"anytime\") and 2+ Touchdowns / To Score 2 or More (market \"2+\"). team is the NFL abbreviation if shown, else empty. american is a number like 180 or -120. Skip First TD, Last TD and every other market. Return only the array.";
+/* Read one or more screenshots (one at a time) and stage every price for review; nothing goes live until confirmed.
+   Rows from additional screenshots are added to any review already open. */
+export async function readLinesShots(files, book) {
+  files = Array.from(files || []).filter((f) => f && f.type && f.type.startsWith("image/"));
+  if (!files.length) return;
+  if (files.length > MAX_SHOTS) { toast(`Up to ${MAX_SHOTS} screenshots at a time; reading the first ${MAX_SHOTS}.`); files = files.slice(0, MAX_SHOTS); }
   const sample = S.sample || (window.claude && (await window.claude.use("sample")));
   if (!sample) { toast("Screenshot reading isn't available here. Paste the prices instead."); return; }
-  S.sample = sample; toast("Reading the screenshot…");
-  try {
-    const rows = await sample.json("Read this sportsbook screenshot of NFL player touchdown odds. Return a JSON array of objects {player, team, market, american} for every price visible in these markets only: Anytime Touchdown Scorer (market \"anytime\") and 2+ Touchdowns / To Score 2 or More (market \"2+\"). team is the NFL abbreviation if shown, else empty. american is a number like 180 or -120. Skip First TD, Last TD and every other market. Return only the array.", { images: [file] });
-    // AI-read prices are staged for review; nothing goes live until the uploader confirms
-    S.shotReview = (rows || []).map((r, i) => ({ id: i, player: String(r.player || ""), team: (r.team || "").toUpperCase(), market: normMarket(r.market) || "anytime_td",
-      american: FB.parseAmerican(r.american), book: book || "Screenshot", captured_at: new Date(file.lastModified || Date.now()).toISOString(),
-      time_source: file.lastModified ? "screenshot file time" : "upload time" }));
-    emit();
-    toast(S.shotReview.length ? `Read ${S.shotReview.length} prices. Check them below, then confirm.` : "No anytime or 2+ TD prices found in that screenshot.");
-  } catch (e) { toast(e && e.code === "not_granted" ? "Screenshot reading was declined." : "Couldn't read that screenshot. Paste the prices instead."); }
+  S.sample = sample;
+  const staged = [...(S.shotReview || [])]; let nextId = staged.reduce((m, r) => Math.max(m, r.id + 1), 0);
+  const shotBase = staged.reduce((m, r) => Math.max(m, r.shot || 0), 0); // keep numbering across batches added to one review
+  const failed = []; let read = 0;
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    S.shotProgress = { done: i, total: files.length }; emit();
+    toast(files.length > 1 ? `Reading screenshot ${i + 1} of ${files.length}…` : "Reading the screenshot…");
+    try {
+      const rows = await sample.json(SHOT_PROMPT, { images: [file] });
+      (rows || []).forEach((r) => {
+        staged.push({ id: nextId++, shot: shotBase + i + 1, shot_name: file.name || `Screenshot ${i + 1}`, player: String(r.player || ""), team: (r.team || "").toUpperCase(),
+          market: normMarket(r.market) || "anytime_td", american: FB.parseAmerican(r.american), book: book || "Screenshot",
+          captured_at: new Date(file.lastModified || Date.now()).toISOString(), time_source: file.lastModified ? "screenshot file time" : "upload time" });
+        read++;
+      });
+    } catch (e) {
+      if (e && e.code === "not_granted") { S.shotProgress = null; S.shotReview = staged.length ? staged : null; emit(); toast("Screenshot reading was declined."); return; }
+      failed.push(file.name || `Screenshot ${i + 1}`);
+    }
+  }
+  // overlapping screenshots show the same price twice: keep one copy (the later file time)
+  const byKey = {};
+  staged.forEach((r) => { const k = `${r.player.toLowerCase()}|${r.market}|${r.american}|${r.book}`; if (!byKey[k] || Date.parse(r.captured_at) > Date.parse(byKey[k].captured_at)) byKey[k] = r; });
+  const dupes = staged.length - Object.keys(byKey).length;
+  S.shotReview = Object.values(byKey).sort((a, b) => a.id - b.id); S.shotProgress = null;
+  if (!S.shotReview.length) S.shotReview = null;
+  emit();
+  const msg = [`Read ${read} price${read === 1 ? "" : "s"} from ${files.length - failed.length} screenshot${files.length - failed.length === 1 ? "" : "s"}`];
+  if (dupes) msg.push(`${dupes} duplicate${dupes === 1 ? "" : "s"} merged`);
+  if (failed.length) msg.push(`couldn't read ${failed.join(", ")}`);
+  toast(msg.join("; ") + (S.shotReview ? ". Check them below, then confirm." : "."));
 }
+export const readLinesShot = (file, book) => readLinesShots([file], book);
 
 /* ---------- parlays ---------- */
 const draftKey = "fb_parlay_draft";
