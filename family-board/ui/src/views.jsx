@@ -108,7 +108,8 @@ function GameCard({ g, onOpen }) {
           const shown = open ? avail : avail.slice(0, 1);
           return (
             <Box key={t.team} sx={{ borderTop: 1, borderColor: "divider", pt: 0.5 }}>
-              {open && <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 2 }}>{t.team} · {t.implied_points != null ? `${t.implied_points} implied pts` : "no line yet"}</Typography>}
+              {open && <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 2 }}>{t.team} · {t.implied_points != null ? `${t.implied_points} implied pts · ${t.expected_off_tds} expected TDs` : "no line yet"}</Typography>}
+              {open && <OppAllowed t={t} />}
               {shown.map((c) => <PlayerRow key={c.gsis_id} c={c} g={g} locked={locked} onOpen={onOpen} team={!open} />)}
               {open && out.length > 0 && <Typography variant="body2" color="text.secondary" sx={{ py: 0.5 }}>Not available: {out.map((c) => `${c.full_name || c.player} (${c.injury})`).join(", ")}</Typography>}
               {open && (t.removed || []).length > 0 && <Typography variant="body2" color="text.secondary" sx={{ pb: 0.5 }}>Off the active roster: {t.removed.map((d) => `${d.player} (${d.why})`).join(", ")}</Typography>}
@@ -117,6 +118,21 @@ function GameCard({ g, onOpen }) {
         })}
       </Box>
     </Card>
+  );
+}
+
+const POS_ORDER = ["RB", "WR", "TE", "QB", "FB"];
+function OppAllowed({ t }) {
+  const by = t.opp_td_allowed_by_pos || {}; const parts = POS_ORDER.filter((k) => by[k] > 0);
+  const total = Object.values(by).reduce((a, b) => a + b, 0);
+  return (
+    <Box sx={{ pb: 0.5 }}>
+      <Typography variant="caption" color="text.secondary">{t.opp} defense has allowed {total} offensive TDs in {t.opp_games} games:</Typography>
+      <Stack direction="row" sx={{ gap: 0.5, flexWrap: "wrap", mt: 0.25 }}>
+        {parts.map((k) => <Chip key={k} size="small" variant="outlined" label={`${by[k]} ${k}`} sx={{ height: 22, fontVariantNumeric: "tabular-nums" }} />)}
+        {!parts.length && <Typography variant="caption" color="text.secondary">none yet</Typography>}
+      </Stack>
+    </Box>
   );
 }
 
@@ -810,6 +826,76 @@ export function LinesView() {
           </CardContent></Card>
         );
       })}
+    </Stack>
+  );
+}
+
+/* =========================== DEFENSE (TDs allowed by position) =========================== */
+const DPOS = ["RB", "WR", "TE", "QB"];
+function defenseTable(S, lastN) {
+  const finals = S.games.filter((g) => g.status === "final");
+  const maxW = Math.max(0, ...finals.map((g) => g.week)); const minW = lastN ? maxW - lastN + 1 : 0;
+  const games = {}; finals.filter((g) => g.week >= minW).forEach((g) => { [g.home, g.away].forEach((t) => { games[t] = (games[t] || 0) + 1; }); });
+  const rows = Object.fromEntries(Object.keys(games).map((t) => [t, { team: t, games: games[t], total: 0, rush: 0, rec: 0, ...Object.fromEntries(DPOS.map((k) => [k, 0])) }]));
+  S.tds.filter((t) => t.unit === "offense" && t.week >= minW && rows[t.opp]).forEach((t) => {
+    const r = rows[t.opp]; const pos = DPOS.includes(t.scorer_pos) ? t.scorer_pos : t.scorer_pos === "FB" ? "RB" : null;
+    r.total++; if (pos) r[pos]++; if (t.type === "rushing") r.rush++; else if (t.type === "passing") r.rec++;
+  });
+  return rows;
+}
+function AllowedChips({ r, hi }) {
+  return (
+    <Stack direction="row" sx={{ gap: 0.5, flexWrap: "wrap" }}>
+      {DPOS.map((k) => <Chip key={k} size="small" variant={hi === k ? "filled" : "outlined"} color={hi === k ? "primary" : "default"} label={`${r[k]} ${k}`} sx={{ height: 24, fontVariantNumeric: "tabular-nums" }} />)}
+    </Stack>
+  );
+}
+export function DefenseView() {
+  const S = useStore(); const [sortBy, setSortBy] = useState("total"); const [span, setSpan] = useState("season");
+  if (!S.extrasLoaded) return <Stack spacing={1.5}><H2>Defense</H2><LinearProgress /></Stack>;
+  const rows = defenseTable(S, span === "last4" ? 4 : 0);
+  const per = (r, k) => (r.games ? r[k] / r.games : 0);
+  const list = Object.values(rows).sort((a, b) => per(b, sortBy) - per(a, sortBy) || b[sortBy] - a[sortBy]);
+  const rank = Object.fromEntries(list.map((r, i) => [r.team, i + 1]));
+  const open = S.slate.games;
+  return (
+    <Stack spacing={1.5}>
+      <H2>Defense · TDs allowed</H2>
+      <Typography variant="body2" color="text.secondary">Offensive touchdowns each defense has allowed, by the scorer's position. Rushing and receiving touchdowns both count. Research only: on its own this hasn't beaten the main odds in testing.</Typography>
+      <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
+        <ToggleButtonGroup exclusive size="small" value={span} onChange={(e, v) => v && setSpan(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 1.5, textTransform: "none" } }}>
+          <ToggleButton value="season">Season</ToggleButton><ToggleButton value="last4">Last 4 weeks</ToggleButton>
+        </ToggleButtonGroup>
+        <TextField select size="small" label="Sort by" value={sortBy} onChange={(e) => setSortBy(e.target.value)} sx={{ minWidth: 140 }}>
+          <MenuItem value="total">Most TDs allowed</MenuItem>{DPOS.map((k) => <MenuItem key={k} value={k}>Most {k} TDs</MenuItem>)}
+          <MenuItem value="rush">Most rushing TDs</MenuItem><MenuItem value="rec">Most receiving TDs</MenuItem>
+        </TextField>
+      </Stack>
+      <Fold title={`Week ${S.slate.week} matchups`} summary="Each offense against the defense it faces" defaultExpanded>
+        <Stack spacing={1}>
+          {open.map((g) => (
+            <Box key={g.game_id} sx={{ borderBottom: 1, borderColor: "divider", pb: 1 }}>
+              <Typography sx={{ fontWeight: 700 }}>{g.away} at {g.home} <Typography component="span" variant="caption" color="text.secondary">{kick(g)}</Typography></Typography>
+              {g.teams.map((t) => { const r = rows[t.opp]; if (!r) return null; return (
+                <Box key={t.team} sx={{ mt: 0.5 }}>
+                  <Typography variant="body2">{t.team} offense vs <b>{t.opp}</b> defense <Typography component="span" variant="caption" color="text.secondary">· {r.total} allowed in {r.games} games · #{rank[t.opp]} of {list.length}</Typography></Typography>
+                  <AllowedChips r={r} hi={DPOS.includes(sortBy) ? sortBy : null} />
+                </Box>); })}
+            </Box>
+          ))}
+        </Stack>
+      </Fold>
+      <Typography variant="h6" component="h3">All defenses</Typography>
+      {list.map((r, i) => (
+        <Card key={r.team} variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 }, display: "grid", gap: 0.5 }}>
+          <Stack direction="row" sx={{ alignItems: "baseline", gap: 1 }}>
+            <Typography sx={{ fontWeight: 700, flex: 1 }}>{i + 1}. {r.team}</Typography>
+            <Typography variant="body2"><Num>{r.total} TDs · {(r.total / (r.games || 1)).toFixed(1)}/game</Num></Typography>
+          </Stack>
+          <AllowedChips r={r} hi={DPOS.includes(sortBy) ? sortBy : null} />
+          <Typography variant="caption" color="text.secondary">{r.rush} rushing · {r.rec} receiving · {r.games} games</Typography>
+        </CardContent></Card>
+      ))}
     </Stack>
   );
 }
