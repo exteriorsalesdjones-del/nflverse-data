@@ -75,7 +75,12 @@ export function WeekView() {
         <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · research odds, no sportsbook prices yet</Typography>
       </Box>
       {open.length === 0 && <Empty>Every game this week has kicked off. The next slate appears after the Tuesday refresh.</Empty>}
-      <Typography variant="caption" color="text.secondary">Tap a game to see every player.</Typography>
+      {open.some(isWindy) && (
+        <Alert severity="warning" sx={{ borderRadius: 2 }}>
+          <b>Wind 15+ mph forecast:</b> {open.filter(isWindy).map((g) => `${g.away} at ${g.home} (${Math.round(g.weather.wind_mph)} mph)`).join(", ")}. Passing is harder in strong wind; pass-catchers there are tagged "Windy". The betting total usually drops with the forecast, so the chances already reflect part of it.
+        </Alert>
+      )}
+      <Typography variant="caption" color="text.secondary">Tap a game to see every player.{s.weather_fetched_at ? ` Weather forecast as of ${et(s.weather_fetched_at, { hour: "numeric", minute: "2-digit" })}.` : ""}</Typography>
       {open.map((g) => <GameCard key={g.game_id} g={g} onOpen={setSheet} />)}
       {locked.length > 0 && (
         <Button variant="outlined" size="large" onClick={() => setShowLocked(!showLocked)}>{showLocked ? "Hide" : "Show"} {locked.length} started or final game{locked.length > 1 ? "s" : ""}</Button>
@@ -88,6 +93,21 @@ export function WeekView() {
   );
 }
 
+/* ---------- weather ---------- */
+const isWindy = (g) => !!(g && g.weather && g.weather.windy);
+const windHit = (c, g) => isWindy(g) && (c.rec_share ?? 0) >= 0.5; // mostly a pass-catcher in a 15+ mph game
+function wxText(w) {
+  if (!w) return null;
+  if (w.roof === "dome") return "Dome";
+  if (w.wind_mph == null) return w.roof === "retractable" ? "Retractable roof · no forecast yet" : "No forecast yet";
+  const bits = [`Wind ${Math.round(w.wind_mph)} mph`, `${w.temp_f}°F`]; if (w.precip_pct >= 30) bits.push(`rain ${w.precip_pct}%`);
+  return (w.roof === "retractable" ? "Retractable roof · " : "") + bits.join(" · ");
+}
+function WindChip({ g }) {
+  if (!isWindy(g)) return null;
+  return <Chip size="small" color="warning" label={`Wind ${Math.round(g.weather.wind_mph)} mph`} sx={{ fontWeight: 700 }} />;
+}
+
 function GameCard({ g, onOpen }) {
   const [open, setOpen] = useState(false);
   const locked = FB.isLocked(g, Date.now());
@@ -98,6 +118,11 @@ function GameCard({ g, onOpen }) {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="h6" component="h3">{g.away} at {g.home}</Typography>
           <Typography variant="body2" color="text.secondary">{kick(g)}{g.teams.every((t) => t.implied_points != null) ? ` · ${g.away} ${g.teams[0].implied_points}, ${g.home} ${g.teams[1].implied_points} pts` : ""}</Typography>
+          {g.weather && <Stack direction="row" sx={{ alignItems: "center", gap: 0.75, mt: 0.25, flexWrap: "wrap" }}>
+            <WindChip g={g} />
+            {!isWindy(g) && <Typography variant="caption" color="text.secondary">{wxText(g.weather)}</Typography>}
+            {isWindy(g) && <Typography variant="caption" color="text.secondary">{g.weather.temp_f}°F{g.weather.precip_pct >= 30 ? ` · rain ${g.weather.precip_pct}%` : ""}</Typography>}
+          </Stack>}
         </Box>
         <Chip size="small" label={status} color={locked ? "default" : "primary"} variant={locked ? "outlined" : "filled"} />
         <Icon d={P.expand} sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s", color: "text.secondary" }} />
@@ -168,6 +193,7 @@ function PlayerRow({ c, g, locked, onOpen, team }) {
           <Typography variant="caption" color="text.secondary">{team ? `${c.team} ` : ""}{c.pos}</Typography>
           {c.injury && <Chip size="small" color={c.quality === "unavailable" ? "error" : "warning"} variant="outlined" label={c.injury} sx={{ height: 20 }} />}
           {mu != null && <Typography variant="caption" sx={{ color: mu > 0 ? "success.main" : "error.main", fontWeight: 600 }}>matchup {mu > 0 ? "+" : ""}{Math.round(mu)}%</Typography>}
+          {windHit(c, g) && <Chip size="small" color="warning" variant="outlined" label="Windy" sx={{ height: 20 }} />}
         </Stack>
         <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
           <LinearProgress variant="determinate" value={Math.min(100, c.p * 100)} sx={{ flex: 1, maxWidth: 160, height: 6, borderRadius: 3 }} aria-hidden />
@@ -190,11 +216,14 @@ function PlayerSheet({ c, onClose }) {
     ...(e ? [["Edge", `${e.edgePts.toFixed(1)} pts · EV ${e.evPerDollar >= 0 ? "+" : ""}${e.evPerDollar.toFixed(2)} per $1${FB.priceFresh(pr, Date.now(), 120) ? "" : " · price is stale"}`]] : []),
     ["2+ TDs price", (() => { const p2 = priceFor(c, g.week, "2plus_td"); return p2 ? `${p2.book} ${am(p2.american)} · ${et(p2.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not uploaded"; })()],
     ["With matchup (untested)", c.p_matchup != null ? `${pct1(c.p_matchup)} (${c.matchup_pct > 0 ? "+" : ""}${c.matchup_pct}%)` : "—"],
-    ["Usage", `${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10 · ${c.games} games`]];
+    ["Usage", `${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10 · ${c.games} games`],
+    ["Scores by", c.rec_share != null ? `${Math.round(c.rec_share * 100)}% catching, ${Math.round((1 - c.rec_share) * 100)}% running` : "—"],
+    ["Weather", wxText(g.weather) || "No forecast"]];
   return (
     <Sheet open onClose={onClose} title={`${c.full_name || c.player} · ${c.pos || ""} ${c.team}`}
       actions={<>{!locked && c.quality !== "unavailable" && <Button size="large" variant="outlined" onClick={() => addLeg({ ...c, game_id: g.game_id })}>Add to parlay</Button>}<PickButton c={c} g={g} locked={locked} size="large" /></>}>
       <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {kick(g)}</Typography>
+      {windHit(c, g) && <Alert severity="warning" sx={{ borderRadius: 2 }}>Wind {Math.round(g.weather.wind_mph)} mph forecast. Most of {c.full_name || c.player}'s touchdown chances come from catches, and passing is harder in strong wind.</Alert>}
       {c.injury && <Alert severity={c.quality === "unavailable" ? "error" : "warning"} sx={{ borderRadius: 2 }}>{c.injury}{c.override ? ` (set by an admin${c.override.note ? `: ${c.override.note}` : ""})` : " on the injury report"}</Alert>}
       <Box component="dl" sx={{ display: "grid", gridTemplateColumns: "minmax(110px, max-content) minmax(0,1fr)", gap: "6px 12px", m: 0 }}>
         {rows.map(([k, v]) => [<Typography key={k} component="dt" variant="body2" color="text.secondary">{k}</Typography>,
@@ -214,7 +243,8 @@ function Slates() {
   const cands = open.flatMap((g) => g.teams.flatMap((t) => t.candidates)).map(effCand);
   const defs = [[3, "game", "3-leg"], [5, "game", "5-leg"], [7, "game", "7-leg"], [10, "team", "10-leg (one per team)"], [open.length, "game", "Full week"]];
   const m = by === "matchup";
-  const legTxt = (l) => m ? `${l.full_name || l.player} ${pct(l.p)}→${pct(l.p_matchup)}` : `${l.full_name || l.player} ${pct(l.p)}`;
+  const gmap = Object.fromEntries(open.map((g) => [g.game_id, g]));
+  const legTxt = (l) => (m ? `${l.full_name || l.player} ${pct(l.p)}→${pct(l.p_matchup)}` : `${l.full_name || l.player} ${pct(l.p)}`) + (windHit(l, gmap[l.game_id]) ? " (windy)" : "");
   return (
     <>
       <ToggleButtonGroup exclusive fullWidth size="small" value={by} onChange={(e, v) => v && setBy(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none" } }}>
@@ -274,6 +304,14 @@ function HowItWorks({ open, onClose }) {
       <DialogContent dividers sx={{ display: "grid", gap: 1.5 }}>
         <Typography variant="body2">Each player's chance to score comes from his share of his team's scoring chances this season (carries and targets, weighted toward the goal line), times the touchdowns the betting line expects from his team, then calibrated against earlier weeks. Players must be on their team's active roster. "Fair odds" is that chance written as American odds.</Typography>
         <Alert severity="warning" sx={{ borderRadius: 2 }}>Research only. "Value Play" stays off until the model passes its checks{gate.ok ? "" : ` (${gate.reasons.length} still open)`} and real sportsbook prices are imported. A week with no value plays is normal.</Alert>
+        {s.wind_study && <>
+          <Typography variant="subtitle2">Wind</Typography>
+          <Typography variant="body2" color="text.secondary">Outdoor games with a 15+ mph kickoff forecast are flagged, and pass-catchers there are tagged "Windy". We checked {s.wind_study.outdoor_team_games.toLocaleString()} outdoor team-games ({s.wind_study.seasons}). Passing touchdowns do drop in strong wind, but the betting total drops with the forecast too, and the model builds every team's touchdowns from that total. Shifting chances further from passing to rushing made predictions worse when tested on seasons it wasn't fitted to, so chances are not changed for wind.</Typography>
+          <TableContainer><Table size="small">
+            <TableHead><TableRow>{["Wind", "Team-games", "Pass TDs", "Rush TDs", "Line (pts)"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
+            <TableBody>{s.wind_study.bands.map((b) => <TableRow key={b.band}><TableCell>{b.band} mph</TableCell><TableCell><Num>{b.team_games}</Num></TableCell><TableCell><Num>{b.pass_td}</Num></TableCell><TableCell><Num>{b.rush_td}</Num></TableCell><TableCell><Num>{b.implied_pts}</Num></TableCell></TableRow>)}</TableBody>
+          </Table></TableContainer>
+        </>}
         <Typography variant="subtitle2">Not connected yet</Typography>
         <Typography variant="body2" color="text.secondary">{s.missing.join("; ")}.</Typography>
         <Typography variant="subtitle2">How the model was tested</Typography>
@@ -754,7 +792,8 @@ export function ParlaysView() {
         {legs.map((l) => { const g = S.gameById[l.game_id] || {}; return (
           <Stack key={l.gsis_id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
             <Box sx={{ flex: 1, minWidth: 0 }}><Typography sx={{ fontWeight: 600 }} noWrap>{l.player} <Typography component="span" variant="caption" color="text.secondary">{l.pos} {l.team}</Typography></Typography>
-              <Typography variant="caption" color="text.secondary">{g.away} at {g.home} · {pct(l.p)}{l.p_matchup != null && l.matchup_pct >= 8 ? ` → ${pct(l.p_matchup)} matchup` : ""}{FB.isLocked(g, now) ? " · started" : ""}</Typography></Box>
+              <Typography variant="caption" color="text.secondary">{g.away} at {g.home} · {pct(l.p)}{l.p_matchup != null && l.matchup_pct >= 8 ? ` → ${pct(l.p_matchup)} matchup` : ""}{FB.isLocked(g, now) ? " · started" : ""}</Typography>
+              {isWindy(g) && <Chip size="small" color="warning" variant="outlined" label={`Wind ${Math.round(g.weather.wind_mph)} mph`} sx={{ height: 20, ml: 0.5 }} />}</Box>
             <Button onClick={() => removeLeg(l.gsis_id)} sx={{ minHeight: 44 }}>Remove</Button>
           </Stack>); })}
         {legs.length > 0 && <>

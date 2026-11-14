@@ -59,3 +59,10 @@ Methods adapted from Cognitive Foundry (Java) and OnlineStats.jl (Julia), rewrit
 | **Usage + calibration (live)** | Platt scaling: logistic regression on log-odds, fitted on earlier weeks only | **+11.8 (+1.9 to +21.9)** — adopted |
 
 Platt scaling refits on all completed weeks at each refresh and only applies once 300+ earlier predictions exist. Current fit: slope ≈ 0.61, so the raw model's extremes are pulled toward the middle (low-usage players up, top favourites down). The full test table, including matchup variants, is in `validation.json` and on the This Week tab. Value Play stays off: the worst calibration band is still about 6 points off, above the 3-point bar.
+
+
+## Weather (wind)
+
+Kickoff forecasts come from the National Weather Service hourly forecast (US stadiums) or Open-Meteo (international, and fallback). Wind is the mean sustained wind from kickoff through three hours after. Outdoor games at 15 mph or more are flagged; players who score mostly by catching (at least half of their expected touchdowns from targets) are tagged "Windy". Domes are skipped and retractable roofs are shown but not flagged.
+
+Chances are **not** adjusted for wind. `refresh/wind_study.py` (results in `refresh/wind_study.json`) joined 2000–2020 game-time station weather (ThompsonJamesBliss/WeatherData) to nflverse play-by-play 2010–2020: 4,170 outdoor team-games, 364 at 15+ mph. Passing touchdowns fall in strong wind (1.55 per team-game under 10 mph, 1.24 at 20+), but closing totals fall too, and the model takes each team's touchdowns from the betting line. A further passing-to-rushing shift fitted on 2010–15 and tested on 2016–20 (and the reverse) lowered log-likelihood in both directions (−0.020 and −0.071 per windy game, the second with a 90% interval below zero), because the shift reverses between eras. Revisit if a later season shows a stable effect.

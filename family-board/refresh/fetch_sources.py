@@ -45,6 +45,12 @@ def main() -> int:
         except Exception as e:  # keep the previous good copy
             failed.append(name)
             print(name, "FAILED, keeping previous copy:", e, file=sys.stderr)
+    # kickoff weather for the upcoming week (failure keeps the page working without it)
+    try:
+        import weather
+        weather.main()
+    except Exception as e:
+        print("weather FAILED, games will show no forecast:", e, file=sys.stderr)
     missing = [n for n in FILES if not (CACHE / n).exists()]
     return 1 if missing else 0
 

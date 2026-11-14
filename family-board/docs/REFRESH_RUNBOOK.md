@@ -5,7 +5,7 @@ The scheduled refresh runs this in a fresh Claude Code session on this repositor
 
 Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
 
-1. `cd family-board && python3 refresh/fetch_sources.py` (needs `refresh/matchup.py` and `refresh/enhance.py` beside `build_data.py`)
+1. `cd family-board && python3 refresh/fetch_sources.py` (needs `refresh/matchup.py`, `refresh/enhance.py`, `refresh/weather.py` and `refresh/wind_study.json` beside `build_data.py`). This also fetches kickoff wind forecasts for the upcoming week (National Weather Service, Open-Meteo for international games; needs api.weather.gov and api.open-meteo.com allowed). A failed forecast is not an error: those games show "No forecast yet".
    Downloads the nflverse files. A failed download keeps the previous good copy.
 2. `python3 refresh/build_data.py`
    Rebuilds `artifact/data/*.json`. Exit code 1 means a final game failed to

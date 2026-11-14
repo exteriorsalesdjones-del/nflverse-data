@@ -1,0 +1,69 @@
+{
+ "seasons": "2010-2020",
+ "outdoor_team_games": 4170,
+ "windy_team_games": 364,
+ "bands": [
+  {
+   "band": "under 10",
+   "team_games": 2812,
+   "pass_td": 1.55,
+   "rush_td": 0.81,
+   "implied_pts": 22.5,
+   "pass_share": 0.657
+  },
+  {
+   "band": "10-15",
+   "team_games": 994,
+   "pass_td": 1.45,
+   "rush_td": 0.77,
+   "implied_pts": 22.3,
+   "pass_share": 0.653
+  },
+  {
+   "band": "15-20",
+   "team_games": 284,
+   "pass_td": 1.54,
+   "rush_td": 0.87,
+   "implied_pts": 21.8,
+   "pass_share": 0.637
+  },
+  {
+   "band": "20+",
+   "team_games": 80,
+   "pass_td": 1.24,
+   "rush_td": 0.79,
+   "implied_pts": 21.2,
+   "pass_share": 0.611
+  }
+ ],
+ "tests": [
+  {
+   "split": "fit 2010-15, test 2016-20",
+   "pass_factor": 1.082,
+   "rush_factor": 1.033,
+   "windy_test_games": 87,
+   "gain_per_game": -0.0197,
+   "ci90": [
+    -0.0424,
+    0.0031
+   ]
+  },
+  {
+   "split": "fit 2016-20, test 2010-15",
+   "pass_factor": 0.903,
+   "rush_factor": 1.164,
+   "windy_test_games": 95,
+   "gain_per_game": -0.0706,
+   "ci90": [
+    -0.1209,
+    -0.0199
+   ]
+  }
+ ],
+ "pooled": {
+  "pass_factor": 0.995,
+  "rush_factor": 1.102
+ },
+ "adopted": false,
+ "conclusion": "Wind lowers passing TDs, but the betting total already moves with the forecast. Beyond the line, a wind shift from passing to rushing did not improve predictions in either half, so chances are not adjusted; 15+ mph games are flagged."
+}

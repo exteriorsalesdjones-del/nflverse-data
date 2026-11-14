@@ -529,6 +529,11 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
     cf = MU.cov_factors(pfr)
     chosen = validation.get("chosen", "baseline")
     kx = EN.kalman_team(games[games.result.notna()], off_td_counts(pbp), ratio, implied_points)
+    wpath = CACHE / "weather_forecast.json"
+    wx = json.loads(wpath.read_text()) if wpath.exists() else {}
+    wx_games = wx.get("games", {}) if wx.get("week") == week else {}
+    study_path = Path(__file__).with_name("wind_study.json")
+    wind_study = json.loads(study_path.read_text()) if study_path.exists() else None
     out_games = []
     gdf = games.set_index("game_id")
     for g in [x for x in games_out if x["week"] == week]:
@@ -599,6 +604,7 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                         "player": r.name, "full_name": nz(full.get(r.pid)), "gsis_id": r.pid, "pos": nz(pos.get(r.pid)), "team": team, "game_id": g["game_id"],
                         "p": round(p, 4), "p_uncalibrated": round(float(r.p_raw), 4), "fair_american": american(p),
                         "lambda": round(float(r.lam), 3),
+                        "rec_share": round(float(r.lam_rec / r.lam), 3) if r.lam > 0 else None,
                         "share": round(float(r.share), 3), "opps": int(r.opp), "i10": int(r.i10),
                         "games": int(r.games), "injury": status, "quality": quality, "notes": notes,
                         "reason": f"{r.share:.0%} of {team}'s expected TD opportunity this season ({r.i10} touches inside the 10).",
@@ -607,12 +613,12 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                 entry["candidates"] = [c for c in cands if c["quality"] != "unavailable"][:8] + [c for c in cands if c["quality"] == "unavailable"]
                 entry["removed"] = dropped[:10]
             teams.append(entry)
-        out_games.append({**g, "teams": teams})
+        out_games.append({**g, "teams": teams, "weather": wx_games.get(g["game_id"])})
     return {"week": week, "model_version": MODEL_VERSION, "status": "research", "td_per_point": round(ratio, 4),
             "headline_model": chosen, "roster_week": roster_week,
+            "weather_fetched_at": wx.get("fetched_at") if wx_games else None, "windy_mph": wx.get("windy_mph", 15), "wind_study": wind_study,
             "games": out_games,
             "missing": ["sportsbook prices (PropLine key not configured; manual import available to admins)",
-                        "weather forecasts (no permitted source connected)",
                         "confirmed inactives (published about 90 minutes before kickoff; not yet in nflverse injuries)",
                         "individual defender matchups (no public coverage-assignment data)"]}
 
@@ -644,10 +650,10 @@ def main() -> int:
             {"name": "PFR defensive charting (nflverse pfr_advstats)", "fields": "receiving TDs allowed per defender per game", "through_week": int(pfr.week.max())},
             {"name": "nflverse injuries 2026", "fields": "weekly practice and game status", "through_week": int(injuries.week.max()) if len(injuries) else None},
             {"name": "nflverse snap counts 2026", "fields": "who played (validation only)", "through_week": int(snaps.week.max()) if len(snaps) else None},
+            {"name": "National Weather Service hourly forecast (US) and Open-Meteo (international, fallback)", "fields": "kickoff wind, temperature, rain chance; outdoor 15+ mph flagged", "through_week": slate.get("week") if slate.get("weather_fetched_at") else None},
         ],
         "not_connected": ["NFL.com official game books (blocked from this refresh environment; reconciliation uses official final scores instead)",
-                          "film (NFL+ / NFL Pro) and paid charting (PFF)", "sportsbook prices (PropLine key not configured)",
-                          "weather forecasts"],
+                          "film (NFL+ / NFL Pro) and paid charting (PFF)", "sportsbook prices (PropLine key not configured)"],
     }
     # who took at least one snap in each game (offense, defense or special teams), for settling picks
     pmap = players.dropna(subset=["pfr_id"]).drop_duplicates("pfr_id").set_index("pfr_id")["gsis_id"]
