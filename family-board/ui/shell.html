@@ -1,0 +1,17 @@
+<title>Anytime TD Family Board</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: MUI app shell; tokens here only colour the page before React mounts and the safe-area band */
+:root{--fb-bg:#f3f4ef;--fb-ink:#18211b;--fb-turf:#1d6b43;--fb-display:"Barlow Condensed","Arial Narrow",sans-serif;--fb-mono:"JetBrains Mono",ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--fb-bg:#101512;--fb-ink:#e7ece6;--fb-turf:#3a9d68;color-scheme:dark}}
+:root[data-theme="dark"]{--fb-bg:#101512;--fb-ink:#e7ece6;--fb-turf:#3a9d68;color-scheme:dark}
+body{background:var(--fb-bg);color:var(--fb-ink)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:1200;background:var(--fb-turf)}
+#root{min-height:100%}
+</style>
+<div id="root"></div>
+<script>
+/*APP*/
+</script>

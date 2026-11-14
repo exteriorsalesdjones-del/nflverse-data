@@ -4,7 +4,8 @@ A private Claude artifact for a family group: research the NFL slate, save anyti
 and browse every 2026 touchdown with evidence-based defender responsibility.
 
 - **App:** https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD (private; share from the page's Share menu)
-- `artifact/index.template.html` + `artifact/lib.js` → `python3 artifact/build_page.py` → `artifact/dist/index.html` (published page)
+- **UI (Material UI 9.5 + React 19):** `ui/src/*.jsx` + `artifact/lib.js` → `cd ui && npm ci && npm run build && python3 build_page.py` → `artifact/dist/index.html` (published page, one inlined bundle)
+- `artifact/index.vanilla.html` — the earlier no-dependency page, kept as a fallback; `artifact/index.template.html` + `artifact/build_page.py` rebuild it
 - `artifact/data/*.json` — season data files published beside the page
 - `refresh/` — `fetch_sources.py`, `build_data.py`, `make_locks.py`
 - `tests/lib.test.js` — pick, lock, settlement, odds and slate rules (`node --test tests/lib.test.js`)
