@@ -61,14 +61,22 @@ const hashTab = () => { const t = (location.hash || "#week").slice(1); return RO
 
 function SlateBar() {
   const S = useStore();
-  if (!S.uid || !S.slate) return null;
-  const mine = Object.values(myItems()).filter((p) => p.week === S.slate.week && p.status === "submitted");
-  if (!mine.length) return null;
+  if (!S.slate) return null;
+  const mine = S.uid ? Object.values(myItems()).filter((p) => p.week === S.slate.week && p.status === "submitted") : [];
+  const legs = S.draft.length;
+  if (!mine.length && !legs) return null;
+  const bar = { justifyContent: "space-between", px: 2, py: 1.25, borderRadius: 3, boxShadow: 3, minHeight: 48 };
   return (
-    <ButtonBase onClick={() => { location.hash = "picks"; }} sx={{ width: "100%", justifyContent: "space-between", px: 2, py: 1.25, bgcolor: "primary.main", color: "primary.contrastText", borderRadius: 3, boxShadow: 3 }}>
-      <Typography sx={{ fontWeight: 700 }}>My week {S.slate.week} slate · {mine.length} pick{mine.length > 1 ? "s" : ""}</Typography>
-      <Typography variant="body2" noWrap sx={{ opacity: 0.9, ml: 1, maxWidth: "55%" }}>{mine.map((p) => p.player.split(" ").slice(-1)[0]).join(", ")}</Typography>
-    </ButtonBase>
+    <Stack direction="row" sx={{ gap: 1 }}>
+      {mine.length > 0 && <ButtonBase onClick={() => { location.hash = "picks"; }} sx={{ ...bar, flex: 1, minWidth: 0, bgcolor: "primary.main", color: "primary.contrastText" }}>
+        <Typography sx={{ fontWeight: 700 }} noWrap>{legs ? "" : `My week ${S.slate.week} slate · `}{mine.length} pick{mine.length > 1 ? "s" : ""}</Typography>
+        {!legs && <Typography variant="body2" noWrap sx={{ opacity: 0.9, ml: 1, maxWidth: "55%" }}>{mine.map((p) => p.player.split(" ").slice(-1)[0]).join(", ")}</Typography>}
+      </ButtonBase>}
+      {legs > 0 && <ButtonBase onClick={() => { location.hash = "parlays"; }} sx={{ ...bar, flex: 1, minWidth: 0, bgcolor: "secondary.main", color: "secondary.contrastText" }}>
+        <Typography sx={{ fontWeight: 700 }} noWrap>Parlay · {legs} leg{legs > 1 ? "s" : ""}</Typography>
+        {!mine.length && <Typography variant="body2" sx={{ opacity: 0.9, ml: 1 }}>Build ›</Typography>}
+      </ButtonBase>}
+    </Stack>
   );
 }
 

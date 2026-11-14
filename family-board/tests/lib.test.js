@@ -97,3 +97,18 @@ test("parlay locks at the first leg's kickoff", () => {
   const c = FB.parlayChance([{ p: 0.5, game_id: "a" }, { p: 0.4, game_id: "a" }]);
   assert.ok(Math.abs(c.p - 0.2) < 1e-9 && c.sameGame);
 });
+
+test("matchup slates rank by boost with a 15% floor, one per game", () => {
+  const c = [
+    { gsis_id: "a", game_id: "g1", p: 0.50, p_matchup: 0.52, matchup_pct: 4 },
+    { gsis_id: "b", game_id: "g1", p: 0.25, p_matchup: 0.32, matchup_pct: 28 },
+    { gsis_id: "c", game_id: "g2", p: 0.06, p_matchup: 0.10, matchup_pct: 66 },   // below floor
+    { gsis_id: "d", game_id: "g2", p: 0.30, p_matchup: 0.27, matchup_pct: -10 },  // a cut, never suggested
+    { gsis_id: "e", game_id: "g3", p: 0.20, p_matchup: 0.24, matchup_pct: 20 },
+  ];
+  const s = FB.suggestSlate(c, 3, "game", { by: "matchup" });
+  assert.deepStrictEqual(s.legs.map((x) => x.gsis_id), ["b", "e"]);
+  assert.strictEqual(s.short, 1);
+  assert.ok(Math.abs(s.jointMatchupP - 0.32 * 0.24) < 1e-9 && Math.abs(s.jointP - 0.25 * 0.2) < 1e-9);
+  assert.deepStrictEqual(FB.suggestSlate(c, 2, "game").legs.map((x) => x.gsis_id), ["a", "d"]);
+});

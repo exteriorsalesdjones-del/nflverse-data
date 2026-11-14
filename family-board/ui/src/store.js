@@ -318,11 +318,13 @@ const saveDraft = () => { try { localStorage.setItem(draftKey, JSON.stringify(S.
 export const myParlays = () => (S.parlaysAll[S.uid] && S.parlaysAll[S.uid].items) || {};
 export function addLeg(c) {
   if (S.draft.some((l) => l.gsis_id === c.gsis_id)) { toast(`${c.full_name || c.player} is already in your parlay.`); return; }
-  S.draft = S.draft.concat([{ gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, game_id: c.game_id, p: c.p }]);
+  S.draft = S.draft.concat([{ gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, game_id: c.game_id, p: c.p, p_matchup: c.p_matchup ?? null, matchup_pct: c.matchup_pct ?? null }]);
   saveDraft(); toast(`Added ${c.full_name || c.player} to your parlay (${S.draft.length} leg${S.draft.length > 1 ? "s" : ""}).`);
 }
+export const inDraft = (gsis) => S.draft.some((l) => l.gsis_id === gsis);
+export function toggleLeg(c) { if (inDraft(c.gsis_id)) { removeLeg(c.gsis_id); toast(`Removed ${c.full_name || c.player} from your parlay.`); } else addLeg(c); }
 export function removeLeg(gsis) { S.draft = S.draft.filter((l) => l.gsis_id !== gsis); saveDraft(); }
-export function setDraft(legs) { S.draft = legs.map((c) => ({ gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, game_id: c.game_id, p: c.p })); saveDraft(); }
+export function setDraft(legs) { S.draft = legs.map((c) => ({ gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, game_id: c.game_id, p: c.p, p_matchup: c.p_matchup ?? null, matchup_pct: c.matchup_pct ?? null })); saveDraft(); }
 export async function saveParlay(name) {
   if (!S.uid || !S.db) { toast("Sign in to Claude to save parlays."); return false; }
   const legs = S.draft.filter((l) => S.gameById[l.game_id]);

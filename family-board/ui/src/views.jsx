@@ -7,12 +7,13 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot,
-  addLeg, removeLeg, setDraft, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 
 /* ---------- shared bits ---------- */
 const pct = (p) => (p == null || isNaN(p) ? "—" : (p * 100).toFixed(0) + "%");
+const odds1 = (p) => (p == null || isNaN(p) ? "—" : p >= 0.01 ? (p * 100).toFixed(1) + "%" : p > 0 ? `1 in ${Math.round(1 / p).toLocaleString()}` : "0%");
 const pct1 = (p) => (p == null || isNaN(p) ? "—" : (p * 100).toFixed(1) + "%");
 const am = (a) => (a == null || isNaN(a) ? "—" : (a > 0 ? "+" : "") + a);
 const et = (iso, opts) => (iso ? FB.fmtEt(Date.parse(iso), { month: "short", day: "numeric", ...opts }) + " ET" : "—");
@@ -147,13 +148,23 @@ function PickButton({ c, g, locked, size = "medium" }) {
     </Button>
   );
 }
+function ParlayButton({ c, locked }) {
+  useStore(); const on = inDraft(c.gsis_id);
+  return (
+    <Button variant={on ? "contained" : "outlined"} color="secondary" disabled={(locked || c.quality === "unavailable") && !on}
+      onClick={(e) => { e.stopPropagation(); toggleLeg({ ...c, game_id: c.game_id }); }}
+      sx={{ minWidth: 0, minHeight: 44, px: 1, flexShrink: 0, fontSize: 13, lineHeight: 1.1 }} aria-label={on ? `Remove ${c.full_name || c.player} from parlay` : `Add ${c.full_name || c.player} to parlay`}>
+      {on ? "✓ Parlay" : "+ Parlay"}
+    </Button>
+  );
+}
 function PlayerRow({ c, g, locked, onOpen, team }) {
   const mu = c.p_matchup != null && Math.abs(c.matchup_pct) >= 8 ? c.matchup_pct : null;
   return (
     <Stack direction="row" sx={{ alignItems: "center", gap: 1, py: 0.75 }}>
       <ButtonBase onClick={() => onOpen({ ...c, _g: g })} sx={{ flex: 1, minWidth: 0, justifyContent: "flex-start", textAlign: "left", borderRadius: 1, minHeight: 44, display: "block" }}>
         <Stack direction="row" sx={{ alignItems: "baseline", gap: 0.75, flexWrap: "wrap" }}>
-          <Typography sx={{ fontWeight: 600 }} noWrap>{c.full_name || c.player}</Typography>
+          <Typography sx={{ fontWeight: 600, lineHeight: 1.25 }}>{c.full_name || c.player}</Typography>
           <Typography variant="caption" color="text.secondary">{team ? `${c.team} ` : ""}{c.pos}</Typography>
           {c.injury && <Chip size="small" color={c.quality === "unavailable" ? "error" : "warning"} variant="outlined" label={c.injury} sx={{ height: 20 }} />}
           {mu != null && <Typography variant="caption" sx={{ color: mu > 0 ? "success.main" : "error.main", fontWeight: 600 }}>matchup {mu > 0 ? "+" : ""}{Math.round(mu)}%</Typography>}
@@ -164,6 +175,7 @@ function PlayerRow({ c, g, locked, onOpen, team }) {
           <Typography variant="body2" color="text.secondary"><Num>fair {am(c.fair_american)}</Num></Typography>
         </Stack>
       </ButtonBase>
+      <ParlayButton c={c} locked={locked} />
       <PickButton c={c} g={g} locked={locked} />
     </Stack>
   );
@@ -197,20 +209,30 @@ function PlayerSheet({ c, onClose }) {
 }
 
 function Slates() {
-  const S = useStore();
+  const S = useStore(); const [by, setBy] = useState("chance");
   const open = S.slate.games.filter((g) => !FB.isLocked(g, Date.now()));
   const cands = open.flatMap((g) => g.teams.flatMap((t) => t.candidates)).map(effCand);
   const defs = [[3, "game", "3-leg"], [5, "game", "5-leg"], [7, "game", "7-leg"], [10, "team", "10-leg (one per team)"], [open.length, "game", "Full week"]];
+  const m = by === "matchup";
+  const legTxt = (l) => m ? `${l.full_name || l.player} ${pct(l.p)}→${pct(l.p_matchup)}` : `${l.full_name || l.player} ${pct(l.p)}`;
   return (
     <>
-      <Typography variant="body2" color="text.secondary">Highest chances first, one player per game (10-leg: one per team). The combined chance is a model estimate; sportsbook parlay odds are never quoted.</Typography>
+      <ToggleButtonGroup exclusive fullWidth size="small" value={by} onChange={(e, v) => v && setBy(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none" } }}>
+        <ToggleButton value="chance">Highest chance</ToggleButton><ToggleButton value="matchup">Best matchup</ToggleButton>
+      </ToggleButtonGroup>
+      <Typography variant="body2" color="text.secondary">{m
+        ? "Players whose chance goes up most against this week's defense (by position allowed and charted coverage), counting only players at 15% or better after the matchup. One per game (10-leg: one per team). Matchup boosts haven't beaten the main odds in testing yet, so treat these as research."
+        : "Highest chances first, one player per game (10-leg: one per team)."} The combined chance is a model estimate; sportsbook parlay odds are never quoted.</Typography>
       {defs.filter(([n]) => n).map(([n, rule, label]) => {
-        const s = FB.suggestSlate(cands, n, rule);
+        const s = FB.suggestSlate(cands, n, rule, { by });
+        if (m && label === "Full week" && s.legs.length < 2) return null;
         return (
           <Box key={label} sx={{ border: 1, borderColor: "divider", borderRadius: 2, p: 1.5, display: "grid", gap: 0.5 }}>
-            <Stack direction="row" sx={{ justifyContent: "space-between", gap: 1 }}><Typography sx={{ fontWeight: 600 }}>{label}</Typography><Num>all hit: {pct1(s.jointP)}</Num></Stack>
-            {s.short > 0 && <Typography variant="body2" color="error">Only {s.legs.length} of {n} legs available.</Typography>}
-            <Typography variant="body2">{s.legs.map((l) => `${l.full_name || l.player} ${pct(l.p)}`).join(" · ") || "—"}</Typography>
+            <Stack direction="row" sx={{ justifyContent: "space-between", gap: 1 }}><Typography sx={{ fontWeight: 600 }}>{label}</Typography>
+              <Num>all hit: {m ? `${odds1(s.jointP)} → ${odds1(s.jointMatchupP)}` : odds1(s.jointP)}</Num></Stack>
+            {s.short > 0 && <Typography variant="body2" color="error">Only {s.legs.length} of {n} legs {m ? "have a matchup boost" : "available"}.</Typography>}
+            <Typography variant="body2">{s.legs.map(legTxt).join(" · ") || "—"}</Typography>
+            {m && s.legs.length > 0 && <Typography variant="caption" color="text.secondary">Boosts: {s.legs.map((l) => `+${Math.round(l.matchup_pct)}%`).join(", ")}</Typography>}
             {rule === "team" && <Typography variant="caption" color="text.secondary">{s.jointNote}</Typography>}
             {s.legs.length >= 2 && <Box><Button variant="outlined" onClick={() => { setDraft(s.legs); toast(`Loaded ${s.legs.length} legs into your builder.`); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Use in my builder</Button></Box>}
           </Box>
@@ -684,7 +706,7 @@ function ParlayCard({ uid, par, r, onDelete }) {
         <Typography sx={{ fontWeight: 700, flex: 1, minWidth: 0 }} noWrap>{uid ? `${nameOf(uid)} · ` : ""}{par.name}</Typography>
         <Result r={r} />
       </Stack>
-      <Typography variant="caption" color="text.secondary">Week {par.week} · {par.legs.length} legs · model chance all score {pct1(ch.p)}{ch.sameGame ? " (has same-game legs)" : ""}</Typography>
+      <Typography variant="caption" color="text.secondary">Week {par.week} · {par.legs.length} legs · model chance all score {odds1(ch.p)}{ch.sameGame ? " (has same-game legs)" : ""}</Typography>
       {par.legs.map((l, i) => {
         const st = r.legStates ? r.legStates[i] : "pending"; const g = S.gameById[l.game_id] || {};
         return (
@@ -732,11 +754,12 @@ export function ParlaysView() {
         {legs.map((l) => { const g = S.gameById[l.game_id] || {}; return (
           <Stack key={l.gsis_id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
             <Box sx={{ flex: 1, minWidth: 0 }}><Typography sx={{ fontWeight: 600 }} noWrap>{l.player} <Typography component="span" variant="caption" color="text.secondary">{l.pos} {l.team}</Typography></Typography>
-              <Typography variant="caption" color="text.secondary">{g.away} at {g.home} · {pct(l.p)}{FB.isLocked(g, now) ? " · started" : ""}</Typography></Box>
+              <Typography variant="caption" color="text.secondary">{g.away} at {g.home} · {pct(l.p)}{l.p_matchup != null && l.matchup_pct >= 8 ? ` → ${pct(l.p_matchup)} matchup` : ""}{FB.isLocked(g, now) ? " · started" : ""}</Typography></Box>
             <Button onClick={() => removeLeg(l.gsis_id)} sx={{ minHeight: 44 }}>Remove</Button>
           </Stack>); })}
         {legs.length > 0 && <>
-          <Typography variant="body2"><b>Chance every leg scores:</b> {pct1(ch.p)}{ch.p ? ` · fair odds ${am(FB.probToAmerican(ch.p))}` : ""}</Typography>
+          <Typography variant="body2"><b>Chance every leg scores:</b> {odds1(ch.p)}{ch.p ? ` · fair odds ${am(FB.probToAmerican(ch.p))}` : ""}</Typography>
+          {legs.some((l) => l.p_matchup != null) && Math.abs(ch.pMatchup - ch.p) > 1e-4 && <Typography variant="body2" color="text.secondary">With matchups: {odds1(ch.pMatchup)} · fair odds {am(FB.probToAmerican(ch.pMatchup))} (research only)</Typography>}
           {ch.sameGame && <Alert severity="info" sx={{ borderRadius: 2 }}>Two legs are in the same game. Their touchdowns are linked, so the combined chance is only a rough estimate.</Alert>}
           {stale.length > 0 && <Alert severity="warning" sx={{ borderRadius: 2 }}>{stale.map((l) => l.player).join(", ")} {stale.length > 1 ? "are" : "is"} in a game that has started. Remove to save.</Alert>}
           <Typography variant="caption" color="text.secondary">Locks when its first game kicks off. If a player doesn't play, that leg is dropped and the rest still count. Sportsbook parlay odds are never quoted here.</Typography>
@@ -747,7 +770,7 @@ export function ParlaysView() {
           </Stack>
         </>}
       </CardContent></Card>
-      <Fold title="Suggested slates" summary="Highest chances, one player per game" defaultExpanded><Slates /></Fold>
+      <Fold title="Suggested slates" summary="Highest chance or best matchup" defaultExpanded><Slates /></Fold>
       <MyParlays />
     </Stack>
   );

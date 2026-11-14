@@ -123,24 +123,31 @@
   }
   /* Model chance that every leg scores. Legs in the same game are treated as independent; flagged. */
   function parlayChance(legs) {
-    var p = 1, games = {}, same = false;
-    (legs || []).forEach(function (l) { p *= l.p || 0; if (games[l.game_id]) same = true; games[l.game_id] = 1; });
-    return { p: (legs || []).length ? p : null, sameGame: same };
+    var p = 1, pm = 1, games = {}, same = false;
+    (legs || []).forEach(function (l) { p *= l.p || 0; pm *= (l.p_matchup != null ? l.p_matchup : l.p) || 0; if (games[l.game_id]) same = true; games[l.game_id] = 1; });
+    return { p: (legs || []).length ? p : null, pMatchup: (legs || []).length ? pm : null, sameGame: same };
   }
 
   /* Suggested research slates. candidates: [{gsis_id, player, team, game_id, p, quality}] */
-  function suggestSlate(candidates, legs, rule) {
-    var pool = candidates.filter(function (c) { return c.quality !== "unavailable" && c.p > 0; })
-      .slice().sort(function (a, b) { return b.p - a.p; });
+  /* opts.by: "chance" (default, highest model chance first) or "matchup" (biggest matchup boost first,
+     only players whose chance after the matchup is at least opts.floor, default 15%). */
+  function suggestSlate(candidates, legs, rule, opts) {
+    opts = opts || {};
+    var byMatchup = opts.by === "matchup", floor = opts.floor == null ? 0.15 : opts.floor;
+    var pool = candidates.filter(function (c) {
+      if (c.quality === "unavailable" || !(c.p > 0)) return false;
+      return byMatchup ? (c.p_matchup >= floor && c.matchup_pct > 0) : true;
+    }).slice().sort(byMatchup ? function (a, b) { return b.matchup_pct - a.matchup_pct || b.p_matchup - a.p_matchup; } : function (a, b) { return b.p - a.p; });
     var used = {}, out = [];
     pool.forEach(function (c) {
       var k = rule === "team" ? c.team : c.game_id;
       if (out.length < legs && !used[k]) { used[k] = 1; out.push(c); }
     });
     var joint = out.reduce(function (acc, c) { return acc * c.p; }, 1);
+    var jointM = out.reduce(function (acc, c) { return acc * (c.p_matchup != null ? c.p_matchup : c.p); }, 1);
     return {
       legs: out, wanted: legs, short: Math.max(0, legs - out.length),
-      jointP: out.length ? joint : null,
+      jointP: out.length ? joint : null, jointMatchupP: out.length ? jointM : null,
       jointNote: rule === "team"
         ? "Independence assumed. Two legs may share a game (one per team), so same-game scoring can make this joint figure wrong."
         : "One player per game, combined assuming games are independent."
