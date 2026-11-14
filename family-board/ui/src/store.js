@@ -153,7 +153,9 @@ export function priceFor(c, week, market = "anytime_td") {
 export function settlePick(uid, p) {
   const g = S.gameById[p.game_id];
   const lock = S.locks[p.game_id] && S.locks[p.game_id].picks ? S.locks[p.game_id].picks[uid] || {} : undefined;
-  return FB.settle(p, g, S.tds.filter((t) => t.game_id === p.game_id), S.played[p.game_id], lock, Date.now());
+  const r = FB.settle(p, g, S.tds.filter((t) => t.game_id === p.game_id), S.played[p.game_id], lock, Date.now());
+  const held = S.locks[p.game_id] && S.locks[p.game_id].review && S.locks[p.game_id].review[uid] && S.locks[p.game_id].review[uid][p.key];
+  return held && r.state === "needs_review" ? { ...r, why: held } : r;
 }
 
 /* ---------- writes ---------- */
@@ -268,11 +270,14 @@ export async function readShot(file, book) {
 }
 export async function freeze(games) {
   for (const g of games) {
-    if (S.locks[g.game_id]) continue;
-    const picks = {};
+    if (S.locks[g.game_id]) continue; // existing snapshots are never rewritten
+    const picks = {}; const review = {};
     for (const [uid, d] of Object.entries(S.allPicks)) {
-      const mine = Object.values(d.items || {}).filter((p) => p.game_id === g.game_id && p.status === "submitted");
-      if (mine.length) picks[uid] = Object.fromEntries(mine.map((p) => [p.key, { gsis_id: p.gsis_id, status: p.status, price: p.price || null }]));
+      const sub = Object.values(d.items || {}).filter((p) => p.game_id === g.game_id && p.status === "submitted");
+      const ok = sub.filter((p) => FB.snapshotEligibility(p, g).ok);
+      if (ok.length) picks[uid] = Object.fromEntries(ok.map((p) => [p.key, { gsis_id: p.gsis_id, status: p.status, price: p.price || null }]));
+      const held = sub.filter((p) => !FB.snapshotEligibility(p, g).ok);
+      if (held.length) review[uid] = Object.fromEntries(held.map((p) => [p.key, FB.snapshotEligibility(p, g).why]));
     }
     const parlays = {};
     for (const [uid, d] of Object.entries(S.parlaysAll)) {
@@ -281,7 +286,7 @@ export async function freeze(games) {
         if (first && first.game_id === g.game_id) (parlays[uid] ||= {})[par.id] = par.legs.map((l) => l.gsis_id);
       }
     }
-    try { await S.db.doc("locks/" + g.game_id).set({ frozen_at: new Date().toISOString(), by: "admin page", picks, parlays }); }
+    try { await S.db.doc("locks/" + g.game_id).set({ frozen_at: new Date().toISOString(), by: "admin page", picks, review, parlays }); }
     catch (e) { toast("Couldn't snapshot " + g.game_id); return; }
   }
   toast("Snapshots saved.");

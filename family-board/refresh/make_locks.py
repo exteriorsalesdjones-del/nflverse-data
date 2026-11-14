@@ -56,35 +56,38 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
         gid = g["game_id"]
         if gid in existing or gid not in wanted:
             continue
-        frozen = {}
+        frozen, review = {}, {}
         for uid, items in picks.items():
             kick = kickoff_utc(g["kickoff_et"])
-            def before_kick(p):
-                """Best-effort only. submitted_at is written by the member's device, so it is not trusted time:
-                a pick whose own timestamp is at or after kickoff is left out (it then settles as "needs review").
-                A device whose clock runs slow writes an early-looking time and is NOT caught here; the snapshot
-                itself (taken by the scheduled refresh after kickoff) is the real cut-off."""
-                t = p.get("submitted_at") or p.get("saved_at")
-                if t is None:
-                    return True
+            def eligibility(p):
+                """Same rule as snapshotEligibility() in artifact/lib.js. submitted_at is written by the member's device,
+                so this is a consistency check, not proof of when the pick was made: a device clock that runs slow writes
+                an early-looking time and is not caught. The snapshot preserves the picks as they were when this job ran;
+                without a trusted per-pick timestamp it cannot prove each included pick was submitted before kickoff."""
+                t = p.get("submitted_at")
+                if not t:
+                    return "No submission time on record; needs review."
                 try:
                     ts = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
                 except ValueError:
-                    return False  # unreadable timestamp: not frozen, goes to review
+                    return "Submission time is unreadable; needs review."
                 if ts.tzinfo is None:
-                    return False
-                return ts < kick  # the UI locks AT kickoff, so a pick stamped exactly at kickoff is late too
-            mine = {k: {"gsis_id": p["gsis_id"], "status": p["status"], "price": p.get("price")}
-                    for k, p in items.items() if p.get("game_id") == gid and p.get("status") == "submitted" and before_kick(p)}
+                    return "Submission time has no time zone; needs review."
+                return None if ts < kick else "Submission time is at or after kickoff; needs review."
+            sub = {k: p for k, p in items.items() if p.get("game_id") == gid and p.get("status") == "submitted"}
+            mine = {k: {"gsis_id": p["gsis_id"], "status": p["status"], "price": p.get("price")} for k, p in sub.items() if eligibility(p) is None}
+            held = {k: eligibility(p) for k, p in sub.items() if eligibility(p) is not None}
             if mine:
                 frozen[uid] = mine
+            if held:
+                review.setdefault(uid, {}).update(held)  # kept visible, not counted as on-time
         fpar = {}
         for uid, items in parlays.items():
             for pid, par in items.items():
                 if first_game(par) == gid:
                     fpar.setdefault(uid, {})[pid] = [l["gsis_id"] for l in par.get("legs", [])]
         audit = {uid: doc_updated.get(uid) for uid in frozen if doc_updated.get(uid)}
-        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen, "parlays": fpar,
+        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen, "review": review, "parlays": fpar,
                                                      "picks_doc_server_updated_at": audit}))
         made.append(gid)
     return made

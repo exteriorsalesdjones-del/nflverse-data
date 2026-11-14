@@ -113,6 +113,19 @@
     return { state: "loss", why: "Played, no touchdown." };
   }
 
+  /* Eligibility of a submitted pick for a NEW kickoff snapshot. submitted_at is written by the member's device, so this
+     is a consistency check, not proof of submission time. A pick with no timestamp, an unreadable one, one without a time
+     zone, or one at/after kickoff is left out and settles as "needs review". Existing snapshots are never re-evaluated. */
+  function snapshotEligibility(pick, game) {
+    var t = pick && pick.submitted_at;
+    if (!t) return { ok: false, why: "No submission time on record; needs review." };
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(String(t))) return { ok: false, why: "Submission time has no time zone; needs review." };
+    var ms = Date.parse(t);
+    if (!isFinite(ms)) return { ok: false, why: "Submission time is unreadable; needs review." };
+    if (ms >= etToUtcMs(game.kickoff_et)) return { ok: false, why: "Submission time is at or after kickoff; needs review." };
+    return { ok: true, why: null };
+  }
+
   /* Parlay: locks at the first leg's kickoff. legs: [{game_id, gsis_id}], gameById: {id: game} */
   function parlayLocked(legs, gameById, nowMs) {
     return (legs || []).some(function (l) { return isLocked(gameById[l.game_id], nowMs); });
@@ -255,7 +268,7 @@
       others: pool.slice(1).map(function (r) { return { book: r.book, american: r.american, captured_at: r.captured_at }; }) });
   }
 
-  var api = { PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

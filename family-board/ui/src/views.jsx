@@ -13,6 +13,8 @@ import { Icon, P } from "./icons.jsx";
 
 /* ---------- shared bits ---------- */
 const pct = (p) => (p == null || isNaN(p) ? "—" : (p * 100).toFixed(0) + "%");
+/* Every price time is reported by whoever uploaded it; none is verified against the sportsbook. */
+const timeBasis = (src) => (src === "upload time" ? "time = when it was uploaded (unverified)" : src === "screenshot file time" ? "time = screenshot file time (unverified)" : "time as reported by the uploader (unverified)");
 const odds1 = (p) => (p == null || isNaN(p) ? "—" : p >= 0.01 ? (p * 100).toFixed(1) + "%" : p > 0 ? `1 in ${Math.round(1 / p).toLocaleString()}` : "0%");
 const pct1 = (p) => (p == null || isNaN(p) ? "—" : (p * 100).toFixed(1) + "%");
 const am = (a) => (a == null || isNaN(a) ? "—" : (a > 0 ? "+" : "") + a);
@@ -230,10 +232,10 @@ function PlayerSheet({ c, onClose }) {
   const g = c._g; const locked = FB.isLocked(g, Date.now());
   const pr = priceFor(c, g.week); const e = pr ? FB.edge(c.p, pr.american) : null;
   const rows = [["Chance to score", pct1(c.p)], ["Fair odds", am(c.fair_american)],
-    ["Anytime TD price", pr ? `${pr.stale ? "Latest (stale)" : pr.books > 1 ? `Best of ${pr.books} books` : "Best"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)}${pr.others.length ? ` · also ${pr.others.map((o) => `${o.book} ${am(o.american)}`).join(", ")}` : ""}` : "Not uploaded yet (Uploads tab)"],
+    ["Anytime TD price", pr ? `${pr.stale ? "Latest (stale)" : pr.books > 1 ? `Best of ${pr.books} books` : "Best"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)} · ${timeBasis(pr.time_source)}${pr.others.length ? ` · also ${pr.others.map((o) => `${o.book} ${am(o.american)}`).join(", ")}` : ""}` : "Not uploaded yet (Uploads tab)"],
     ...(e ? [["Model vs price", pr.stale
       ? `Price is over ${FB.PRICE_FRESH_MIN / 60} hours old and may no longer be available, so no EV is shown.`
-      : `Model ${pct1(c.p)} vs implied ${pct1(e.implied)} (book margin included): ${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} percentage points. If the model's chance were right, expected return would be ${e.evPerDollar >= 0 ? "+" : "-"}$${Math.abs(e.evPerDollar).toFixed(2)} per $1 staked. Unproven: in testing (weeks 3-4) sportsbook prices predicted better than the model.`]] : []),
+      : `Model ${pct1(c.p)} vs implied ${pct1(e.implied)} (book margin included): ${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} percentage points. Conditional EV ${e.evPerDollar >= 0 ? "+" : "-"}$${Math.abs(e.evPerDollar).toFixed(2)} per $1 staked, only if the model's chance is right and this price is still available (its time is unverified). Unproven: in testing (weeks 3-4) sportsbook prices predicted better than the model.`]] : []),
     ["2+ TDs price", (() => { const p2 = priceFor(c, g.week, "2plus_td"); return p2 ? `${p2.stale ? "Latest (stale)" : "Best"}: ${p2.book} ${am(p2.american)} · ${et(p2.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not uploaded"; })()],
     ["Usage", `${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10 · ${c.games} games`],
     ...(c.team_games_2026 != null ? [
@@ -331,7 +333,7 @@ function HowItWorks({ open, onClose }) {
       <DialogTitle>How this works</DialogTitle>
       <DialogContent dividers sx={{ display: "grid", gap: 1.5 }}>
         <Typography variant="body2">Each player's chance to score starts from the touchdowns the betting line expects from his team, then his share of the team's carries and targets (2026, with 2025 at half weight), his goal-line role (RBs and QBs: carries inside the 5, goal-to-go carries, QB designed runs and sneaks), his depth-chart spot before kickoff, and his own touchdown rate. The weights are refit every refresh on every game already played. Players must be on their team's active roster. "Fair odds" is that chance written as American odds.</Typography>
-        {v.v03 && <Alert severity="info" sx={{ borderRadius: 2 }}>Model {v.v03.model}, adopted after a week-by-week test on 2026 weeks 1–9 ({v.v03.n.toLocaleString()} player-games). Against the previous model on weeks {v.v03.vs_previous.weeks} it improved log loss by {(v.v03.vs_previous.ll_gain * 1000).toFixed(1)}×10⁻³ per player-game (90% range {(v.v03.vs_previous.ci90[0] * 1000).toFixed(1)}–{(v.v03.vs_previous.ci90[1] * 1000).toFixed(1)}), better for every position. Against {v.v03.market.book} prices on weeks {v.v03.market.weeks} ({v.v03.market.n} player-games), the sportsbook's own implied chances (margin included) predicted better than the model: log loss {(v.v03.market.log_loss_market_raw ?? v.v03.market.log_loss_market_devig).toFixed(3)} vs {v.v03.market.log_loss_model.toFixed(3)}. A profitable edge has not been shown.</Alert>}
+        {v.v03 && <Alert severity="info" sx={{ borderRadius: 2 }}>Model {v.v03.model}, adopted after a week-by-week test on 2026 weeks 1–9 ({v.v03.n.toLocaleString()} player-games). Against the previous model on weeks {v.v03.vs_previous.weeks} it improved log loss by {(v.v03.vs_previous.ll_gain * 1000).toFixed(1)}×10⁻³ per player-game (90% range {(v.v03.vs_previous.ci90[0] * 1000).toFixed(1)}–{(v.v03.vs_previous.ci90[1] * 1000).toFixed(1)}), better for every position. Against {v.v03.market.book} prices on weeks {v.v03.market.weeks} ({v.v03.market.n} player-games), the sportsbook's own implied chances (margin included) predicted better than the model{v.v03.market.log_loss_market_raw != null ? `: log loss ${v.v03.market.log_loss_market_raw.toFixed(3)} vs ${v.v03.market.log_loss_model.toFixed(3)}` : ""}. A profitable edge has not been shown.</Alert>}
         <Alert severity="warning" sx={{ borderRadius: 2 }}>Research only. "Value Play" stays off until the model passes its checks{gate.ok ? "" : ` (${gate.reasons.length} still open)`} and real sportsbook prices are imported. A week with no value plays is normal.</Alert>
         <LiveRecord />
         {s.wind_study && <>
@@ -621,7 +623,7 @@ function MyPicks() {
                       <Result r={r} />
                     </Stack>
                     <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {g.kickoff_et ? kick(g) : ""}</Typography>
-                    <Typography variant="body2" color="text.secondary">{p.price ? <Num>{p.price.book} {am(p.price.american)} when picked{p.price.stale || p.price_warning ? " (stale price)" : ""}</Num> : "No sportsbook price when picked"}{p.model_p ? ` · model ${pct(p.model_p)}` : ""}</Typography>
+                    <Typography variant="body2" color="text.secondary">{p.price ? <Num>{p.price.book} {am(p.price.american)} when picked{p.price.stale || p.price_warning ? " (stale price)" : ""} · price time unverified</Num> : "No sportsbook price when picked"}{p.model_p ? ` · model ${pct(p.model_p)}` : ""}</Typography>
                     {!locked && (
                       <Stack direction="row" sx={{ gap: 1, mt: 0.5 }}>
                         {p.status === "draft" && <Button variant="contained" size="large" onClick={() => setPickStatus(p.key, "submitted")}>Submit</Button>}
@@ -698,7 +700,7 @@ function FamilyBoard() {
                     return (
                       <Stack key={p.key} direction="row" sx={{ alignItems: "center", gap: 1, py: 0.5 }}>
                         <Box sx={{ flex: 1, minWidth: 0 }}><Typography noWrap>{p.player} <Typography component="span" variant="caption" color="text.secondary">{p.team}</Typography></Typography>
-                          <Typography variant="caption" color="text.secondary">{g.away} at {g.home}{p.model_p ? ` · model ${pct(p.model_p)}` : ""}{p.price ? ` · ${p.price.book} ${am(p.price.american)}${p.price.stale || p.price_warning ? " (stale)" : ""}` : ""}</Typography></Box>
+                          <Typography variant="caption" color="text.secondary">{g.away} at {g.home}{p.model_p ? ` · model ${pct(p.model_p)}` : ""}{p.price ? ` · ${p.price.book} ${am(p.price.american)}${p.price.stale || p.price_warning ? " (stale)" : ""}, price time unverified` : ""}</Typography></Box>
                         <Result r={r} />
                       </Stack>
                     );
@@ -940,7 +942,7 @@ export function LinesView() {
             {!r.gsis_id && r.uploaded_by === S.uid && <Autocomplete size="small" options={cands} getOptionLabel={(o) => o.label} onChange={(e, v) => v && matchLine(r, v)} renderInput={(p) => <TextField {...p} label={`Match "${r.player}" to a player`} />} />}
             <Typography variant="body2" color="text.secondary">{r.book} · implied {pct1(imp)}{e ? ` · model ${pct1(c.p)} (${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} pts vs price; model unproven vs sportsbooks)` : ""}{!r.gsis_id ? " · not matched to a player" : ""}</Typography>
             <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>{nameOf(r.uploaded_by)} · {r.source || "upload"} · observed {et(r.captured_at, { hour: "numeric", minute: "2-digit" })}{r.time_source === "upload time" ? " (upload time)" : r.time_source === "screenshot file time" ? " (screenshot file time)" : ""}{FB.priceFresh(r, Date.now()) ? "" : ` · stale (over ${FB.PRICE_FRESH_MIN / 60} h)`}</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>{nameOf(r.uploaded_by)} · {r.source || "upload"} · observed {et(r.captured_at, { hour: "numeric", minute: "2-digit" })}{` (${timeBasis(r.time_source)})`}{FB.priceFresh(r, Date.now()) ? "" : ` · stale (over ${FB.PRICE_FRESH_MIN / 60} h)`}</Typography>
               {canDel && r.uploaded_by && S.lines[r.uploaded_by] && <Button size="small" onClick={() => deleteLines(r.uploaded_by, (x) => x.player === r.player && x.book === r.book && (x.market || "anytime_td") === market)}>Remove</Button>}
             </Stack>
           </CardContent></Card>
@@ -1080,7 +1082,7 @@ function LiveRecord() {
       <TableHead><TableRow>{["Chance band", "Players", "Forecast", "Scored"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
       <TableBody>{m.calibration.map((b) => <TableRow key={b.bin}><TableCell>{b.bin}</TableCell><TableCell><Num>{b.n}</Num></TableCell><TableCell><Num>{pct(b.pred)}</Num></TableCell><TableCell><Num>{pct(b.actual)}</Num></TableCell></TableRow>)}</TableBody>
     </Table></TableContainer>
-    <Typography variant="body2" color="text.secondary">{k && k.n ? `Against uploaded sportsbook prices (${k.n} player-games, weeks ${k.weeks.join(", ")}): model log loss ${k.log_loss_model} vs the books' raw implied chances ${k.log_loss_market_raw} (margin included; lower is better)${k.log_loss_model < k.log_loss_market_raw ? ", model ahead on this sample" : ", books ahead"}. Value Play stays off until 200+ priced player-games show the model ahead.` : "No uploaded prices have been graded yet. Upload lines before kickoff on the Uploads tab to build the model-vs-market record (200+ priced player-games needed before Value Play can switch on)."}</Typography>
+    <Typography variant="body2" color="text.secondary">{k && k.n && k.log_loss_market_raw == null ? "The market record is in an older format; it will update at the next data refresh." : k && k.n ? `Against uploaded sportsbook prices (${k.n} player-games, weeks ${k.weeks.join(", ")}): model log loss ${k.log_loss_model} vs the books' raw implied chances ${k.log_loss_market_raw} (margin included; lower is better)${k.log_loss_model < k.log_loss_market_raw ? ", model ahead on this sample" : ", books ahead"}. Value Play stays off until 200+ priced player-games show the model ahead.` : "No uploaded prices have been graded yet. Upload lines before kickoff on the Uploads tab to build the model-vs-market record (200+ priced player-games needed before Value Play can switch on)."}</Typography>
   </>;
 }
 

@@ -64,7 +64,12 @@ with tempfile.TemporaryDirectory() as t:
     made = make_locks.main(str(T), str(T / "out"), [])
     assert gid in made
     lock = json.loads((T / "out" / "locks" / f"{gid}.json").read_text())
-    assert sorted(lock["picks"]["u1"]) == ["before", "legacy"], lock["picks"]
+    assert sorted(lock["picks"]["u1"]) == ["before"], lock["picks"]          # only the clearly on-time pick counts
+    assert sorted(lock["review"]["u1"]) == ["after", "exactly", "garbage", "legacy", "nozone"], lock["review"]  # kept visible
+    assert "No submission time" in lock["review"]["u1"]["legacy"] and "no time zone" in lock["review"]["u1"]["nozone"]
     assert lock["picks_doc_server_updated_at"] == {"u1": "2026-11-13T02:00:00Z"}
+    # an existing snapshot is never rebuilt: passing its id leaves it out of the run entirely
+    out2 = T / "out2"
+    assert make_locks.main(str(T), str(out2), [gid]) == [] and not (out2 / "locks" / f"{gid}.json").exists()
 
 print("grade and snapshot tests passed")

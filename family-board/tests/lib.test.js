@@ -221,3 +221,26 @@ test("model vs price: percentage points and EV per $1, worked by hand", () => {
   assert.strictEqual(FB.edge(0.4, NaN), null);
   assert.strictEqual(FB.edge(null, 200), null);
 });
+
+test("new-snapshot eligibility: missing, zone-less, unreadable, at and after kickoff all go to review", () => {
+  const g = { kickoff_et: "2026-11-15T13:00", status: "upcoming" }; // 18:00Z
+  const el = (t) => FB.snapshotEligibility(t === undefined ? {} : { submitted_at: t }, g);
+  assert.strictEqual(el("2026-11-15T17:59:59Z").ok, true);
+  assert.strictEqual(el("2026-11-15T12:59:00-05:00").ok, true);
+  for (const [t, re] of [[undefined, /No submission time/], ["2026-11-15T17:00:00", /time zone/], ["soon", /time zone|unreadable/],
+                         ["2026-11-15T18:00:00Z", /at or after/], ["2026-11-15T18:00:01Z", /at or after/]]) {
+    const r = el(t); assert.strictEqual(r.ok, false, String(t)); assert.match(r.why, re);
+  }
+});
+
+test("historical compatibility vs eligibility: an existing snapshot keeps a legacy pick's result", () => {
+  const key = FB.pickKey(10, "00-1");
+  const legacy = { key, week: 10, gsis_id: "00-1", status: "submitted" }; // predates submitted_at
+  const fin = { kickoff_et: "2026-11-15T13:00", status: "final" };
+  const later = Date.parse("2026-11-16T12:00:00Z");
+  // already frozen (existing snapshot): settles normally, never re-evaluated
+  assert.strictEqual(FB.settle(legacy, fin, [{ scorer_id: "00-1" }], ["00-1"], { [key]: { gsis_id: "00-1", status: "submitted" } }, later).state, "win");
+  // new snapshot under the current rule: held out, so the same pick settles as needs_review
+  assert.strictEqual(FB.snapshotEligibility(legacy, fin).ok, false);
+  assert.strictEqual(FB.settle(legacy, fin, [{ scorer_id: "00-1" }], ["00-1"], {}, later).state, "needs_review");
+});
