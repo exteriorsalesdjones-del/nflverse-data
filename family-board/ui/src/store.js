@@ -354,6 +354,8 @@ export async function deleteLines(uid, filter) {
 }
 export function setShotReview(rows) { S.shotReview = rows; emit(); }
 export function clearSkipped() { S.lastSkipped = null; emit(); }
+/* Reset the Uploads screen: drops an unconfirmed screenshot review and messages. Saved prices are not touched. */
+export function resetUploadScreen() { S.shotReview = null; S.lastSkipped = null; S.shotProgress = null; emit(); }
 export async function confirmShot() {
   const rows = (S.shotReview || []).map((r) => ({ ...r, american: FB.parseAmerican(r.raw ?? r.american) })).filter((r) => r.player && isFinite(r.american));
   const bad = (S.shotReview || []).length - rows.length;

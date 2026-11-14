@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 
@@ -887,7 +887,11 @@ export function LinesView() {
       <RefereeUploads />
       <DbNote />
       <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 1.25, p: 1.5, "&:last-child": { pb: 1.5 } }}>
-        <Typography variant="h6" component="h3">Current lines</Typography>
+        <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+          <Typography variant="h6" component="h3" sx={{ flex: 1 }}>Current lines</Typography>
+          <Button onClick={() => { resetUploadScreen(); setBookChoice("FanDuel"); setOtherBook(""); setText(""); setWho(null); setMPrice(""); setMMarket("anytime_td"); setMarket("anytime_td"); toast("Upload screen reset. Saved prices weren't changed."); }}
+            aria-label="Reset the upload screen (saved prices are not deleted)" sx={{ minHeight: 44 }}>Reset</Button>
+        </Stack>
         <Typography variant="body2" color="text.secondary">Anytime TD and 2+ TDs only. Prices go live for everyone right away, labeled with your name and the time.</Typography>
         <Box>
           <Typography variant="caption" color="text.secondary">Sportsbook</Typography>
