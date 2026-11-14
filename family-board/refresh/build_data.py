@@ -506,6 +506,16 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
     o = opportunity_table(pbp)
     rates = fit_rates(o)
     ratio = off_td_per_point(pbp, games)
+    # current roster: only players on this team's active roster in the latest roster week can be candidates
+    rpath = CACHE / f"roster_weekly_{SEASON}.parquet"
+    roster = pd.read_parquet(rpath) if rpath.exists() else pd.DataFrame()
+    if len(roster):
+        rw = roster[roster.week <= week]
+        rw = rw[rw.week == rw.week.max()]
+        cur = {r.gsis_id: (r.team, r.status) for r in rw.itertuples()}
+        roster_week = int(rw.week.max())
+    else:
+        cur, roster_week = {}, None
     inj = injuries[injuries.week == injuries[injuries.week <= week].week.max()] if len(injuries) else injuries
     inj_map = {r.gsis_id: r for r in inj.itertuples()} if len(inj) else {}
     pos = players.dropna(subset=["gsis_id"]).drop_duplicates("gsis_id").set_index("gsis_id")["position"]
@@ -551,14 +561,25 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                                          p_mu=EN.apply_platt(lam.p_mu.to_numpy(float), ab))
                 entry["opp_cov_factor"] = round(float(cf.get(opp, 1.0)), 3)
                 cands = []
-                for r in (lam.sort_values("p", ascending=False).head(14).itertuples() if not lam.empty else []):
+                dropped = []
+                for r in (lam.sort_values("p", ascending=False).itertuples() if not lam.empty else []):
+                    if cur:
+                        rteam, rstat = cur.get(r.pid, (None, None))
+                        if rteam != team or rstat not in ("ACT", "INA"):
+                            dropped.append({"player": nz(full.get(r.pid)) or r.name, "gsis_id": r.pid,
+                                            "why": "not on the roster" if rteam is None else (f"now with {rteam}" if rteam != team else {"RES": "on injured reserve", "CUT": "released", "DEV": "on the practice squad", "TRD": "traded", "RET": "retired", "EXE": "exempt list"}.get(rstat, f"roster status {rstat}"))})
+                            continue
+                    if len(cands) >= 14:
+                        break
                     ir = inj_map.get(r.pid)
                     status = nz(getattr(ir, "report_status", None)) if ir is not None else None
                     quality = "ok"
                     notes = []
                     if r.games < 3:
                         quality = "limited"; notes.append(f"only {r.games} game(s) of usage with {team}")
-                    if status in ("Out", "Doubtful"):
+                    if cur and cur.get(r.pid, (None, None))[1] == "INA":
+                        status = status or "Inactive"
+                    if status in ("Out", "Doubtful", "Inactive"):
                         quality = "unavailable"
                     elif status == "Questionable":
                         notes.append("questionable on the injury report")
@@ -584,10 +605,11 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
                         "risk": "; ".join(notes) or "Usage share can shift with game script and red-zone play calls.",
                     })
                 entry["candidates"] = [c for c in cands if c["quality"] != "unavailable"][:8] + [c for c in cands if c["quality"] == "unavailable"]
+                entry["removed"] = dropped[:10]
             teams.append(entry)
         out_games.append({**g, "teams": teams})
     return {"week": week, "model_version": MODEL_VERSION, "status": "research", "td_per_point": round(ratio, 4),
-            "headline_model": chosen,
+            "headline_model": chosen, "roster_week": roster_week,
             "games": out_games,
             "missing": ["sportsbook prices (PropLine key not configured; manual import available to admins)",
                         "weather forecasts (no permitted source connected)",

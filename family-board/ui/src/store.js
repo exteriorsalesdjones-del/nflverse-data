@@ -9,7 +9,7 @@ const S = {
   meta: null, games: [], gameById: {}, tds: [], weekly: [], slate: null, validation: null, played: {}, recon: {},
   loadError: null,
   db: null, user: null, uid: null, canWrite: false, isAdmin: false, names: {},
-  allPicks: {}, odds: {}, locks: {}, reviews: {}, dbState: "connecting", downloads: null, sample: null,
+  allPicks: {}, odds: {}, locks: {}, reviews: {}, overrides: {}, extrasLoaded: false, dbState: "connecting", downloads: null, sample: null,
   version: 0,
 };
 const subs = new Set();
@@ -28,11 +28,14 @@ async function loadJson(n) {
 
 export async function loadData() {
   try {
-    const names = ["meta", "games", "touchdowns", "weekly", "slate", "validation", "played", "reconciliation"];
-    const [meta, games, tds, weekly, slate, validation, played, recon] = await Promise.all(names.map((n) => loadJson(n + ".json")));
-    Object.assign(S, { meta, games, tds, weekly, slate, validation, played, recon });
-    S.defenders = await loadJson("defenders.json").catch(() => null);
+    // what This Week needs first; the touchdown history loads right after, in the background
+    const [meta, games, slate, validation] = await Promise.all(["meta", "games", "slate", "validation"].map((n) => loadJson(n + ".json")));
+    Object.assign(S, { meta, games, slate, validation });
     S.gameById = Object.fromEntries(games.map((g) => [g.game_id, g]));
+    emit();
+    const [tds, weekly, played, recon, defenders] = await Promise.all(
+      ["touchdowns", "weekly", "played", "reconciliation", "defenders"].map((n) => loadJson(n + ".json").catch(() => null)));
+    Object.assign(S, { tds: tds || [], weekly: weekly || [], played: played || {}, recon: recon || {}, defenders, extrasLoaded: true });
   } catch (e) {
     S.loadError = String(e);
   }
@@ -59,6 +62,7 @@ export async function connect() {
   }, fail);
   db.collection("odds").onSnapshot((s) => { S.odds = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
   db.collection("locks").onSnapshot((s) => { S.locks = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
+  db.collection("overrides").onSnapshot((s) => { S.overrides = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
   db.collection("reviews").onSnapshot((s) => { S.reviews = Object.fromEntries(s.docs.map((d) => [d.id.replace("~", ":"), d.data()])); emit(); }, fail);
   window.claude.use("downloads").then((d) => { S.downloads = d; });
   if (S.isAdmin) window.claude.use("sample").then((s) => { S.sample = s; emit(); });
@@ -77,6 +81,14 @@ export const effAttr = (t) => {
   const r = S.reviews[t.key];
   return r ? { ...t.attribution, status: r.status, defenders: r.defenders || [], missing: r.missing || t.attribution.missing, reviewed: r } : t.attribution;
 };
+/* Admin player-status overrides for the slate week: {gsis_id: {status, note, at}} */
+export const overrideFor = (gsis) => { const w = S.slate && S.overrides["w" + S.slate.week]; return (w && w.players && w.players[gsis]) || null; };
+export function effCand(c) {
+  const o = overrideFor(c.gsis_id);
+  if (!o) return c;
+  const out = o.status === "Clear" ? {} : { injury: o.status, quality: ["Out", "Doubtful", "Not on roster", "Inactive"].includes(o.status) ? "unavailable" : c.quality };
+  return { ...c, ...out, override: o };
+}
 export const slateCands = () => (S.slate ? S.slate.games.flatMap((g) => g.teams.flatMap((t) => t.candidates)) : []);
 export const myItems = () => (S.allPicks[S.uid] && S.allPicks[S.uid].items) || {};
 const liveOddsRows = (week) => { const d = S.odds["w" + week]; return d && d.status === "live" ? d.rows || [] : []; };
@@ -94,7 +106,7 @@ export function settlePick(uid, p) {
 /* ---------- writes ---------- */
 let toastFn = () => {};
 export const setToast = (f) => { toastFn = f; };
-export const toast = (m) => toastFn(m);
+export const toast = (m, action) => toastFn(m, action);
 let writing = false;
 
 async function savePicks(items) {
@@ -117,10 +129,24 @@ export async function addPick(c) {
   const pick = { week, game_id: c.game_id, gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, market: "anytime_td" };
   const errs = FB.validatePick(items, pick, g, Date.now());
   if (errs.length) { toast(errs[0]); return; }
-  Object.assign(pick, { key: FB.pickKey(week, c.gsis_id), status: "draft", model_p: c.p, model_version: S.slate.model_version,
-    saved_at: new Date().toISOString() }, priceSnapshot(priceFor(c, week), "save"));
+  const now = new Date().toISOString();
+  Object.assign(pick, { key: FB.pickKey(week, c.gsis_id), status: "submitted", model_p: c.p, model_version: S.slate.model_version,
+    saved_at: now, submitted_at: now }, priceSnapshot(priceFor(c, week), "submission"));
   items[pick.key] = pick;
-  if (await savePicks(items)) toast(`Saved ${pick.player}. Submit it from My Picks.`);
+  if (await savePicks(items)) toast(`Picked ${pick.player}. Locks at kickoff.`, { label: "Undo", run: () => removePick(pick.key) });
+}
+export async function removePick(key) {
+  const items = structuredClone(myItems()); const p = items[key]; if (!p) return;
+  if (FB.isLocked(S.gameById[p.game_id], Date.now())) { toast("This game has kicked off. The pick is locked."); return; }
+  delete items[key];
+  if (await savePicks(items)) toast(`Removed ${p.player}.`);
+}
+export async function setOverride(gsis, name, team, status, note) {
+  const id = "w" + S.slate.week; const cur = structuredClone(S.overrides[id] || { players: {} });
+  if (status === "Clear") delete cur.players[gsis];
+  else cur.players[gsis] = { status, note: note || "", player: name, team, at: new Date().toISOString(), by: S.uid };
+  try { await S.db.doc("overrides/" + id).set(cur); toast(status === "Clear" ? `Cleared ${name}.` : `${name} marked ${status}.`); }
+  catch (e) { toast("Couldn't save the player status."); }
 }
 export async function setPickStatus(key, status) {
   const items = structuredClone(myItems()); const p = items[key]; if (!p) return;

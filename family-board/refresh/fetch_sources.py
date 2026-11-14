@@ -23,6 +23,7 @@ FILES = {
     "players.parquet": f"{BASE}/players/players.parquet",
     f"injuries_{SEASON}.parquet": f"{BASE}/injuries/injuries_{SEASON}.parquet",
     f"snap_counts_{SEASON}.parquet": f"{BASE}/snap_counts/snap_counts_{SEASON}.parquet",
+    f"roster_weekly_{SEASON}.parquet": f"{BASE}/weekly_rosters/roster_weekly_{SEASON}.parquet",
 }
 CACHE = Path(os.environ.get("FB_CACHE", Path(__file__).resolve().parents[1] / ".data" / "cache"))
 

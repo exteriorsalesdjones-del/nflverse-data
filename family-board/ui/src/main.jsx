@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AppBar, Box, Container, CssBaseline, Snackbar, Stack, Tab, Tabs, ThemeProvider, Toolbar, Typography, createTheme, Alert } from "@mui/material";
-import { FB, useStore, loadData, connect, setToast, nameOf } from "./store.js";
+import { AppBar, Box, BottomNavigation, BottomNavigationAction, Button, ButtonBase, Container, CssBaseline, IconButton, Paper, Snackbar, Stack, ThemeProvider, Toolbar, Typography, createTheme, Alert } from "@mui/material";
+import { FB, useStore, loadData, connect, setToast, myItems } from "./store.js";
+import { Icon, P } from "./icons.jsx";
 import { WeekView, TouchdownsView, PicksView, BoardView, AdminView } from "./views.jsx";
 
-const TABS = [["week", "This Week"], ["touchdowns", "Touchdowns"], ["picks", "My Picks"], ["board", "Family Board"], ["admin", "Admin"]];
+const TABS = [["week", "This week", P.week], ["touchdowns", "Touchdowns", P.tds], ["picks", "My picks", P.picks], ["board", "Board", P.board], ["admin", "Admin", P.admin]];
 
 /* Follows the viewer's theme: an explicit data-theme on <html>, otherwise the OS setting. */
 function useMode() {
@@ -48,42 +49,67 @@ function makeTheme(mode) {
       MuiTableCell: { styleOverrides: { head: { fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" } } },
       MuiTab: { styleOverrides: { root: { fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 600, fontSize: 16, letterSpacing: "0.04em" } } },
       MuiCard: { defaultProps: { variant: "outlined" } },
+      MuiButton: { styleOverrides: { root: { minHeight: 40, textTransform: "none", fontSize: 15, borderRadius: 10 }, sizeLarge: { minHeight: 48 } } },
+      MuiChip: { styleOverrides: { root: { fontWeight: 600 } } },
+      MuiBottomNavigationAction: { styleOverrides: { root: { minWidth: 64, padding: "6px 4px" }, label: { fontSize: 12, "&.Mui-selected": { fontSize: 12, fontWeight: 700 } } } },
     },
   });
 }
 
-const blank = { week: "all", off: "", def: "", scorer: "", defender: "", type: "", status: "" };
 const hashTab = () => { const t = (location.hash || "#week").slice(1); return TABS.some(([k]) => k === t) ? t : "week"; };
+
+function SlateBar() {
+  const S = useStore();
+  if (!S.uid || !S.slate) return null;
+  const mine = Object.values(myItems()).filter((p) => p.week === S.slate.week && p.status === "submitted");
+  if (!mine.length) return null;
+  return (
+    <ButtonBase onClick={() => { location.hash = "picks"; }} sx={{ width: "100%", justifyContent: "space-between", px: 2, py: 1.25, bgcolor: "primary.main", color: "primary.contrastText", borderRadius: 3, boxShadow: 3 }}>
+      <Typography sx={{ fontWeight: 700 }}>My week {S.slate.week} slate · {mine.length} pick{mine.length > 1 ? "s" : ""}</Typography>
+      <Typography variant="body2" noWrap sx={{ opacity: 0.9, ml: 1, maxWidth: "55%" }}>{mine.map((p) => p.player.split(" ").slice(-1)[0]).join(", ")}</Typography>
+    </ButtonBase>
+  );
+}
 
 function App() {
   const S = useStore(); const mode = useMode(); const theme = useMemo(() => makeTheme(mode), [mode]);
-  const [tab, setTab] = useState(hashTab); const [f, setF] = useState(blank); const [msg, setMsg] = useState(null);
-  useEffect(() => { setToast(setMsg); loadData().then(connect); const on = () => setTab(hashTab()); window.addEventListener("hashchange", on); return () => window.removeEventListener("hashchange", on); }, []);
+  const [tab, setTab] = useState(hashTab); const [msg, setMsg] = useState(null);
+  useEffect(() => {
+    setToast((text, action) => setMsg(text ? { text, action, k: Date.now() } : null));
+    loadData().then(connect);
+    const on = () => { setTab(hashTab()); setMsg(null); window.scrollTo(0, 0); };
+    window.addEventListener("hashchange", on); return () => window.removeEventListener("hashchange", on);
+  }, []);
   const tabs = TABS.filter(([k]) => k !== "admin" || S.isAdmin);
-  const fresh = S.meta && `2026 season · final games through Week ${S.meta.latest_final_week} · refreshed ${FB.fmtEt(Date.parse(S.meta.refreshed_at), { month: "short", day: "numeric" })} ET${(Date.now() - Date.parse(S.meta.refreshed_at)) / 3600e3 > 36 ? " · stale" : ""}`;
-  const me = S.uid && S.names[S.uid] && S.names[S.uid].name;
+  const fresh = S.meta && `Updated ${FB.fmtEt(Date.parse(S.meta.refreshed_at), { month: "short", day: "numeric" })} ET${(Date.now() - Date.parse(S.meta.refreshed_at)) / 3600e3 > 36 ? " · may be out of date" : ""}`;
   const View = { week: WeekView, touchdowns: TouchdownsView, picks: PicksView, board: BoardView, admin: AdminView }[tab];
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <AppBar position="sticky" elevation={0} sx={{ top: "env(safe-area-inset-top, 0px)" }}>
-        <Toolbar sx={{ flexDirection: "column", alignItems: "stretch", gap: 0.5, pt: 1, px: "max(16px, env(safe-area-inset-left, 0px))" }}>
-          <Stack direction="row" sx={{ flexWrap: "wrap", alignItems: "baseline", columnGap: 1.5 }}>
-            <Typography component="h1" sx={{ fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 700, fontSize: 26, textTransform: "uppercase", letterSpacing: "0.02em" }}>Anytime TD Family Board</Typography>
-            <Typography variant="caption" sx={{ opacity: 0.9 }}>{fresh || "Loading data…"}{me ? ` · signed in as ${me}` : ""}</Typography>
-          </Stack>
-          <Tabs value={tab} onChange={(e, v) => { location.hash = v; }} variant="scrollable" scrollButtons="auto" textColor="inherit"
-            slotProps={{ indicator: { sx: { bgcolor: "warning.main", height: 3 } } }} aria-label="Sections">
-            {tabs.map(([k, l]) => <Tab key={k} value={k} label={l} />)}
-          </Tabs>
+      <AppBar position="static" elevation={0}>
+        <Toolbar sx={{ minHeight: 52, px: "max(16px, env(safe-area-inset-left, 0px))", gap: 1 }}>
+          <Typography component="h1" sx={{ fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 700, fontSize: 22, textTransform: "uppercase", letterSpacing: "0.02em", flex: 1 }} noWrap>Anytime TD Family Board</Typography>
+          <Typography variant="caption" sx={{ opacity: 0.85, display: { xs: "none", sm: "block" } }}>{fresh}</Typography>
         </Toolbar>
       </AppBar>
-      <Container maxWidth="lg" sx={{ py: 2, pb: 6, px: "max(16px, env(safe-area-inset-left, 0px))" }}>
+      <Container maxWidth="md" sx={{ pt: 2, pb: "calc(150px + env(safe-area-inset-bottom, 0px))", px: "max(16px, env(safe-area-inset-left, 0px))" }}>
         {S.loadError ? <Alert severity="error">The season data didn't load. Reload the page; if it keeps failing, the last refresh may be incomplete.</Alert>
           : !S.meta ? <Box sx={{ p: 2, color: "text.secondary" }}>Loading the 2026 season…</Box>
-          : <View f={f} setF={setF} />}
+          : <View />}
+        {S.meta && <Typography variant="caption" color="text.secondary" sx={{ display: { xs: "block", sm: "none" }, mt: 3, textAlign: "center" }}>{fresh}</Typography>}
       </Container>
-      <Snackbar open={!!msg} autoHideDuration={3500} onClose={() => setMsg(null)} message={msg || ""} anchorOrigin={{ vertical: "bottom", horizontal: "center" }} />
+      <Box sx={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 1100 }}>
+        {tab === "week" && <Box sx={{ px: "max(12px, env(safe-area-inset-left, 0px))", pb: 1, maxWidth: 900, mx: "auto" }}><SlateBar /></Box>}
+        <Paper elevation={8} square sx={{ pb: "env(safe-area-inset-bottom, 0px)" }}>
+          <BottomNavigation showLabels value={tab} onChange={(e, v) => { location.hash = v; }} sx={{ height: 60, maxWidth: 900, mx: "auto" }}>
+            {tabs.map(([k, l, d]) => <BottomNavigationAction key={k} value={k} label={l} icon={<Icon d={d} />} />)}
+          </BottomNavigation>
+        </Paper>
+      </Box>
+      <Snackbar key={msg && msg.k} open={!!msg} autoHideDuration={msg && msg.action ? 6000 : 3500} onClose={(e, r) => { if (r !== "clickaway") setMsg(null); }}
+        message={msg ? msg.text : ""} anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        sx={{ bottom: "calc(140px + env(safe-area-inset-bottom, 0px)) !important" }}
+        action={msg && msg.action ? <Button color="warning" size="small" onClick={() => { msg.action.run(); setMsg(null); }}>{msg.action.label}</Button> : null} />
     </ThemeProvider>
   );
 }
