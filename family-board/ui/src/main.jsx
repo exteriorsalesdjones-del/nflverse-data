@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AppBar, Box, BottomNavigation, BottomNavigationAction, Button, ButtonBase, Container, CssBaseline, IconButton, Paper, Snackbar, Stack, ThemeProvider, Toolbar, Typography, createTheme, Alert } from "@mui/material";
-import { FB, useStore, loadData, connect, setToast, myItems } from "./store.js";
+import { AppBar, Badge, Box, BottomNavigation, BottomNavigationAction, Button, ButtonBase, Container, CssBaseline, IconButton, Paper, Snackbar, Stack, ThemeProvider, Toolbar, Typography, createTheme, Alert } from "@mui/material";
+import { FB, useStore, loadData, connect, setToast, myItems, ensureExtras, allLineRows } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 import { WeekView, TouchdownsView, BoardView, AdminView, ParlaysView, LinesView, DefenseView } from "./views.jsx";
 
@@ -89,6 +89,11 @@ function App() {
     const on = () => { setTab(hashTab()); setMsg(null); window.scrollTo(0, 0); };
     window.addEventListener("hashchange", on); return () => window.removeEventListener("hashchange", on);
   }, []);
+  useEffect(() => { if (["touchdowns", "defense", "board", "picks", "admin"].includes(tab)) ensureExtras(); }, [tab]);
+  // prices older than 2 hours for games kicking off in the next 24 hours (worth refreshing before lock)
+  const soon = new Set(S.slate ? S.slate.games.filter((g) => { const k = FB.etToUtcMs(g.kickoff_et) - Date.now(); return k > 0 && k < 864e5; })
+    .flatMap((g) => g.teams.flatMap((t) => t.candidates.map((c) => c.gsis_id))) : []);
+  const stale = S.slate ? allLineRows(S.slate.week).filter((r) => soon.has(r.gsis_id) && !FB.priceFresh(r, Date.now(), 120)).length : 0;
   const tabs = TABS; const navValue = tab === "lines" ? "uploads" : tab === "picks" ? "board" : tab === "admin" ? false : tab;
   const fresh = S.meta && `Updated ${FB.fmtEt(Date.parse(S.meta.refreshed_at), { month: "short", day: "numeric" })} ET${(Date.now() - Date.parse(S.meta.refreshed_at)) / 3600e3 > 36 ? " · may be out of date" : ""}`;
   const View = { week: WeekView, parlays: ParlaysView, uploads: LinesView, lines: LinesView, defense: DefenseView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView }[tab];
@@ -103,6 +108,7 @@ function App() {
         </Toolbar>
       </AppBar>
       <Container maxWidth="md" sx={{ pt: 2, pb: "calc(150px + env(safe-area-inset-bottom, 0px))", px: "max(16px, env(safe-area-inset-left, 0px))" }}>
+        {S.meta && S.meta.health && !S.meta.health.ok && <Alert severity="warning" sx={{ mb: 1.5, borderRadius: 2 }}>The last data refresh had a problem: {S.meta.health.problems.join(" ")}</Alert>}
         {S.loadError ? <Alert severity="error">The season data didn't load. Reload the page; if it keeps failing, the last refresh may be incomplete.</Alert>
           : !S.meta ? <Box sx={{ p: 2, color: "text.secondary" }}>Loading the 2026 season…</Box>
           : <View />}
@@ -112,7 +118,8 @@ function App() {
         {tab === "week" && <Box sx={{ px: "max(12px, env(safe-area-inset-left, 0px))", pb: 1, maxWidth: 900, mx: "auto" }}><SlateBar /></Box>}
         <Paper elevation={8} square sx={{ pb: "env(safe-area-inset-bottom, 0px)" }}>
           <BottomNavigation showLabels value={navValue} onChange={(e, v) => { location.hash = v; }} sx={{ height: 60, maxWidth: 900, mx: "auto" }}>
-            {tabs.map(([k, l, d]) => <BottomNavigationAction key={k} value={k} label={l} icon={<Icon d={d} />} />)}
+            {tabs.map(([k, l, d]) => <BottomNavigationAction key={k} value={k} label={l}
+              icon={k === "uploads" && stale > 0 ? <Badge color="warning" badgeContent={stale} max={99}><Icon d={d} /></Badge> : <Icon d={d} />} />)}
           </BottomNavigation>
         </Paper>
       </Box>

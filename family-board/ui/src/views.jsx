@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 
@@ -75,6 +75,9 @@ export function WeekView() {
         <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · research odds, no sportsbook prices yet</Typography>
       </Box>
       {open.length === 0 && <Empty>Every game this week has kicked off. The next slate appears after the Tuesday refresh.</Empty>}
+      {S.uid && open.length > 0 && !Object.values(myItems()).some((p) => p.week === s.week && p.status === "submitted") && (
+        <Alert severity="info" sx={{ borderRadius: 2 }}><b>No pick yet for week {s.week}.</b> Next kickoff {kick(open[0])}. Tap Pick on any player below.</Alert>
+      )}
       {open.some(isWindy) && (
         <Alert severity="warning" sx={{ borderRadius: 2 }}>
           <b>Wind 15+ mph forecast:</b> {open.filter(isWindy).map((g) => `${g.away} at ${g.home} (${Math.round(g.weather.wind_mph)} mph)`).join(", ")}. Passing is harder in strong wind; pass-catchers there are tagged "Windy". The betting total usually drops with the forecast, so the chances already reflect part of it.
@@ -86,7 +89,6 @@ export function WeekView() {
         <Button variant="outlined" size="large" onClick={() => setShowLocked(!showLocked)}>{showLocked ? "Hide" : "Show"} {locked.length} started or final game{locked.length > 1 ? "s" : ""}</Button>
       )}
       {showLocked && locked.map((g) => <GameCard key={g.game_id} g={g} onOpen={setSheet} />)}
-      <Fold title="Matchup boosts" summary="Who the opponent's defense helps or hurts (untested)"><Matchups onOpen={setSheet} /></Fold>
       <HowItWorks open={how} onClose={() => setHow(false)} />
       <PlayerSheet c={sheet} onClose={() => setSheet(null)} />
     </Stack>
@@ -208,7 +210,6 @@ function PlayerRow({ c, g, locked, onOpen, team }) {
           <Typography sx={{ fontWeight: 600, lineHeight: 1.25 }}>{c.full_name || c.player}</Typography>
           <Typography variant="caption" color="text.secondary">{team ? `${c.team} ` : ""}{c.pos}</Typography>
           {c.injury && <Chip size="small" color={c.quality === "unavailable" ? "error" : "warning"} variant="outlined" label={c.injury} sx={{ height: 20 }} />}
-          {mu != null && <Typography variant="caption" sx={{ color: mu > 0 ? "success.main" : "error.main", fontWeight: 600 }}>matchup {mu > 0 ? "+" : ""}{Math.round(mu)}%</Typography>}
           {windHit(c, g) && <Chip size="small" color="warning" variant="outlined" label="Windy" sx={{ height: 20 }} />}
           {c.role_change && <Chip size="small" color={c.role_change.dir === "up" ? "success" : "default"} variant="outlined" label={c.role_change.dir === "up" ? "Role ↑" : "Role ↓"} sx={{ height: 20 }} />}
         </Stack>
@@ -229,10 +230,9 @@ function PlayerSheet({ c, onClose }) {
   const g = c._g; const locked = FB.isLocked(g, Date.now());
   const pr = priceFor(c, g.week); const e = pr ? FB.edge(c.p, pr.american) : null;
   const rows = [["Chance to score", pct1(c.p)], ["Fair odds", am(c.fair_american)],
-    ["Anytime TD price", pr ? `${pr.book} ${am(pr.american)} (${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)}` : "Not uploaded yet (Lines tab)"],
+    ["Anytime TD price", pr ? `${pr.book} ${am(pr.american)} (${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)}` : "Not uploaded yet (Uploads tab)"],
     ...(e ? [["Edge", `${e.edgePts.toFixed(1)} pts · EV ${e.evPerDollar >= 0 ? "+" : ""}${e.evPerDollar.toFixed(2)} per $1${FB.priceFresh(pr, Date.now(), 120) ? "" : " · price is stale"}`]] : []),
     ["2+ TDs price", (() => { const p2 = priceFor(c, g.week, "2plus_td"); return p2 ? `${p2.book} ${am(p2.american)} · ${et(p2.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not uploaded"; })()],
-    ["With matchup (untested)", c.p_matchup != null ? `${pct1(c.p_matchup)} (${c.matchup_pct > 0 ? "+" : ""}${c.matchup_pct}%)` : "—"],
     ["Usage", `${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10 · ${c.games} games`],
     ...(c.team_games_2026 != null ? [
       ...(["RB", "QB"].includes(c.pos) || c.i5_carries ? [["Carries inside the 5", c.team_i5_carries ? `${c.i5_carries} of ${c.team}'s ${c.team_i5_carries} (${Math.round(100 * c.i5_carries / c.team_i5_carries)}%) · ${c.team_games_2026} games` : `None yet (${c.team} has no carries inside the 5 in 2026)`]] : []),
@@ -240,11 +240,14 @@ function PlayerSheet({ c, onClose }) {
       ...(c.depth_rank ? [["Depth chart", `#${c.depth_rank} at ${c.pos} (last update before kickoff)`]] : []),
       ...(c.role_change ? [["Role change", `${c.role_change.dir === "up" ? "Up" : "Down"}: ${Math.round(c.role_change.recent * 100)}% of team carries+targets in the last 3 games vs ${Math.round(c.role_change.season * 100)}% overall`]] : []),
     ] : []),
+    ...(c.proj ? [["Projection", [c.proj.rush_yds != null && `${Math.round(c.proj.rush_yds)} rush yds`, c.proj.receptions != null && `${c.proj.receptions} catches on ${c.proj.targets} targets`,
+      c.proj.rec_yds != null && `${Math.round(c.proj.rec_yds)} rec yds`, c.proj.pass_yds != null && `${Math.round(c.proj.pass_yds)} pass yds`].filter(Boolean).join(" · ") + " (targets use est. routes)"]] : []),
     ["Scores by", c.rec_share != null ? `${Math.round(c.rec_share * 100)}% catching, ${Math.round((1 - c.rec_share) * 100)}% running` : "—"],
     ["Weather", wxText(g.weather) || "No forecast"]];
   return (
     <Sheet open onClose={onClose} title={`${c.full_name || c.player} · ${c.pos || ""} ${c.team}`}
-      actions={<>{!locked && c.quality !== "unavailable" && <Button size="large" variant="outlined" onClick={() => addLeg({ ...c, game_id: g.game_id })}>Add to parlay</Button>}<PickButton c={c} g={g} locked={locked} size="large" /></>}>
+      actions={<>{S.isAdmin && !locked && c.injury !== "Inactive" && <Button size="large" color="error" onClick={() => markInactive(c)}>Mark inactive</Button>}
+        {!locked && c.quality !== "unavailable" && <Button size="large" variant="outlined" onClick={() => addLeg({ ...c, game_id: g.game_id })}>Add to parlay</Button>}<PickButton c={c} g={g} locked={locked} size="large" /></>}>
       <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {kick(g)}</Typography>
       {windHit(c, g) && <Alert severity="warning" sx={{ borderRadius: 2 }}>Wind {Math.round(g.weather.wind_mph)} mph forecast. Most of {c.full_name || c.player}'s touchdown chances come from catches, and passing is harder in strong wind.</Alert>}
       {c.injury && <Alert severity={c.quality === "unavailable" ? "error" : "warning"} sx={{ borderRadius: 2 }}>{c.injury}{c.override ? ` (set by an admin${c.override.note ? `: ${c.override.note}` : ""})` : " on the injury report"}</Alert>}
@@ -328,6 +331,7 @@ function HowItWorks({ open, onClose }) {
         <Typography variant="body2">Each player's chance to score starts from the touchdowns the betting line expects from his team, then his share of the team's carries and targets (2026, with 2025 at half weight), his goal-line role (RBs and QBs: carries inside the 5, goal-to-go carries, QB designed runs and sneaks), his depth-chart spot before kickoff, and his own touchdown rate. The weights are refit every refresh on every game already played. Players must be on their team's active roster. "Fair odds" is that chance written as American odds.</Typography>
         {v.v03 && <Alert severity="info" sx={{ borderRadius: 2 }}>Model {v.v03.model}, adopted after a week-by-week test on 2026 weeks 1–9 ({v.v03.n.toLocaleString()} player-games). Against the previous model on weeks {v.v03.vs_previous.weeks} it improved log loss by {(v.v03.vs_previous.ll_gain * 1000).toFixed(1)}×10⁻³ per player-game (90% range {(v.v03.vs_previous.ci90[0] * 1000).toFixed(1)}–{(v.v03.vs_previous.ci90[1] * 1000).toFixed(1)}), better for every position. Against {v.v03.market.book} prices on weeks {v.v03.market.weeks} ({v.v03.market.n} player-games) the market was still slightly more accurate (log loss {v.v03.market.log_loss_market_devig.toFixed(3)} vs {v.v03.market.log_loss_model.toFixed(3)}).</Alert>}
         <Alert severity="warning" sx={{ borderRadius: 2 }}>Research only. "Value Play" stays off until the model passes its checks{gate.ok ? "" : ` (${gate.reasons.length} still open)`} and real sportsbook prices are imported. A week with no value plays is normal.</Alert>
+        <LiveRecord />
         {s.wind_study && <>
           <Typography variant="subtitle2">Wind</Typography>
           <Typography variant="body2" color="text.secondary">Outdoor games with a 15+ mph kickoff forecast are flagged, and pass-catchers there are tagged "Windy". We checked {s.wind_study.outdoor_team_games.toLocaleString()} outdoor team-games ({s.wind_study.seasons}). Passing touchdowns do drop in strong wind, but the betting total drops with the forecast too, and the model builds every team's touchdowns from that total. Shifting chances further from passing to rushing made predictions worse when tested on seasons it wasn't fitted to, so chances are not changed for wind.</Typography>
@@ -641,11 +645,21 @@ function FamilyBoard() {
   const weeks = [...new Set(all.map((x) => x.p.week))].sort((a, b) => b - a);
   const totals = {}; all.forEach(({ uid, r }) => { const t = (totals[uid] ||= { win: 0, loss: 0, void: 0, pending: 0, needs_review: 0 }); t[r.state] = (t[r.state] || 0) + 1; });
   const standings = Object.entries(totals).sort((a, b) => b[1].win - a[1].win || a[1].loss - b[1].loss);
+  // per member: hit rate, streak, wins vs model expectation, best pick, parlay record
+  const stats = {};
+  all.filter((x) => x.r.state === "win" || x.r.state === "loss").sort((a, b) => String(a.p.submitted_at).localeCompare(String(b.p.submitted_at))).forEach(({ uid, p, r }) => {
+    const t = (stats[uid] ||= { n: 0, win: 0, exp: 0, streak: 0, sdir: null, best: null });
+    t.n++; t.win += r.state === "win"; t.exp += p.model_p || 0;
+    const d = r.state === "win" ? "W" : "L"; t.streak = t.sdir === d ? t.streak + 1 : 1; t.sdir = d;
+    if (r.state === "win" && p.model_p && (!t.best || p.model_p < t.best.model_p)) t.best = p;
+  });
   const parl = Object.entries(S.parlaysAll).flatMap(([uid, d]) => Object.values(d.items || {}).map((par) => ({ uid, par, r: settleParlayFor(uid, par) })))
     .sort((a, b) => b.par.week - a.par.week || String(b.par.created_at).localeCompare(String(a.par.created_at)));
+  const precs = {}; parl.forEach(({ uid, r }) => { const t = (precs[uid] ||= { win: 0, loss: 0 }); if (r.state === "win") t.win++; if (r.state === "loss") t.loss++; });
   return (
     <Stack spacing={1.5}>
       {!all.length && !parl.length && <Empty>No picks yet. Picks show up here as soon as anyone makes one.</Empty>}
+      <WeekRecap all={all} parl={parl} />
       {standings.length > 0 && (
         <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
           <Typography variant="overline" color="text.secondary">Season standings</Typography>
@@ -655,6 +669,9 @@ function FamilyBoard() {
               <Num sx={{ fontWeight: 600 }}>{t.win}–{t.loss}</Num>
               {t.pending > 0 && <Chip size="small" variant="outlined" color="warning" label={`${t.pending} pending`} />}
               {t.void > 0 && <Chip size="small" variant="outlined" label={`${t.void} void`} />}
+              {stats[uid] && <Typography variant="caption" color="text.secondary" sx={{ width: "100%" }}>
+                {Math.round(100 * stats[uid].win / stats[uid].n)}% hit · {stats[uid].sdir}{stats[uid].streak} streak · {stats[uid].win - stats[uid].exp >= 0 ? "+" : ""}{(stats[uid].win - stats[uid].exp).toFixed(1)} wins vs the model's chances
+                {stats[uid].best ? ` · best: ${stats[uid].best.player} at ${pct(stats[uid].best.model_p)}` : ""}{precs[uid] ? ` · parlays ${precs[uid].win}–${precs[uid].loss}` : ""}</Typography>}
             </Stack>
           ))}
         </CardContent></Card>
@@ -679,7 +696,7 @@ function FamilyBoard() {
                     return (
                       <Stack key={p.key} direction="row" sx={{ alignItems: "center", gap: 1, py: 0.5 }}>
                         <Box sx={{ flex: 1, minWidth: 0 }}><Typography noWrap>{p.player} <Typography component="span" variant="caption" color="text.secondary">{p.team}</Typography></Typography>
-                          <Typography variant="caption" color="text.secondary">{g.away} at {g.home}{p.price ? ` · ${p.price.book} ${am(p.price.american)}` : ""}</Typography></Box>
+                          <Typography variant="caption" color="text.secondary">{g.away} at {g.home}{p.model_p ? ` · model ${pct(p.model_p)}` : ""}{p.price ? ` · ${p.price.book} ${am(p.price.american)}` : ""}</Typography></Box>
                         <Result r={r} />
                       </Stack>
                     );
@@ -706,6 +723,8 @@ export function AdminView() {
   const queue = S.extrasLoaded ? S.tds.filter((t) => t.unit === "offense" && effAttr(t).status !== "verified_individual").slice(-20).reverse() : [];
   return (
     <Stack spacing={1.5}>
+      {S.meta && S.meta.health && <Alert severity={S.meta.health.ok ? (S.meta.health.problems.length ? "info" : "success") : "warning"} sx={{ borderRadius: 2 }}>
+        <b>Last refresh:</b> model {S.meta.health.model} · {S.meta.health.predictions_saved} pregame chances saved{S.meta.health.problems.length ? ". " + S.meta.health.problems.join(" ") : ". No problems."}</Alert>}
       <H2>Admin</H2>
       <Fold title="Player status" summary="Mark players Out or off the roster before the data catches up" defaultExpanded>
         <Autocomplete options={cands} value={who} onChange={(e, v) => setWho(v)} getOptionLabel={(o) => o.label} isOptionEqualToValue={(a, b) => a.gsis_id === b.gsis_id}
@@ -913,6 +932,7 @@ export function LinesView() {
               <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>{r.player} <Typography component="span" variant="caption" color="text.secondary">{r.team}</Typography></Typography>
               <Typography sx={{ fontWeight: 700 }}><Num>{am(r.american)}</Num></Typography>
             </Stack>
+            {!r.gsis_id && r.uploaded_by === S.uid && <Autocomplete size="small" options={cands} getOptionLabel={(o) => o.label} onChange={(e, v) => v && matchLine(r, v)} renderInput={(p) => <TextField {...p} label={`Match "${r.player}" to a player`} />} />}
             <Typography variant="body2" color="text.secondary">{r.book} · implied {pct1(imp)}{e ? ` · model ${pct1(c.p)} · edge ${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} pts` : ""}{!r.gsis_id ? " · not matched to a player" : ""}</Typography>
             <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
               <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>{nameOf(r.uploaded_by)} · {r.source || "upload"} · {et(r.captured_at, { hour: "numeric", minute: "2-digit" })}{FB.priceFresh(r, Date.now(), 120) ? "" : " · older than 2 hours"}</Typography>
@@ -1021,4 +1041,35 @@ function RefereeUploads() {
       </>}
     </Fold>
   );
+}
+
+/* =========================== WEEK RECAP =========================== */
+function WeekRecap({ all, parl }) {
+  const settled = all.filter((x) => ["win", "loss", "void"].includes(x.r.state));
+  if (!settled.length) return null;
+  const w = Math.max(...settled.map((x) => x.p.week)); const wk = all.filter((x) => x.p.week === w);
+  if (wk.some((x) => x.r.state === "pending")) return null; // recap once the week is done
+  const by = {}; wk.forEach(({ uid, r }) => { const t = (by[uid] ||= { win: 0, loss: 0 }); if (r.state === "win") t.win++; if (r.state === "loss") t.loss++; });
+  const wins = wk.filter((x) => x.r.state === "win" && x.p.model_p).sort((a, b) => a.p.model_p - b.p.model_p);
+  const pw = parl.filter((x) => x.par.week === w && x.r.state === "win").map((x) => ({ ...x, ch: FB.parlayChance(x.par.legs).p })).sort((a, b) => a.ch - b.ch);
+  return (
+    <Card variant="outlined" sx={{ borderRadius: 2, borderColor: "primary.main" }}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 }, display: "grid", gap: 0.5 }}>
+      <Typography variant="overline" color="primary">Week {w} recap</Typography>
+      <Typography variant="body2">{Object.entries(by).sort((a, b) => b[1].win - a[1].win).map(([uid, t]) => `${nameOf(uid)} ${t.win}–${t.loss}`).join(" · ")}</Typography>
+      {wins[0] && <Typography variant="body2"><b>Best pick:</b> {nameOf(wins[0].uid)} took {wins[0].p.player} at {pct(wins[0].p.model_p)} — and he scored.</Typography>}
+      {pw[0] && <Typography variant="body2"><b>Parlay of the week:</b> {nameOf(pw[0].uid)}'s {pw[0].par.legs.length}-leg "{pw[0].par.name}" hit ({odds1(pw[0].ch)} chance).</Typography>}
+    </CardContent></Card>
+  );
+}
+function LiveRecord() {
+  const S = useStore(); const gr = S.grades; if (!gr || !gr.model || !gr.model.n) return null; const m = gr.model; const k = gr.market;
+  return <>
+    <Typography variant="subtitle2">Live record</Typography>
+    <Typography variant="body2" color="text.secondary">Every pregame chance is saved and graded after the game ({m.n.toLocaleString()} player-games, weeks {m.weeks[0]}–{m.weeks[m.weeks.length - 1]}; weeks 1–9 are the backtest). Log loss {m.log_loss.toFixed(3)} vs {m.log_loss_constant.toFixed(3)} for a flat rate (lower is better).</Typography>
+    <TableContainer><Table size="small">
+      <TableHead><TableRow>{["Chance band", "Players", "Forecast", "Scored"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
+      <TableBody>{m.calibration.map((b) => <TableRow key={b.bin}><TableCell>{b.bin}</TableCell><TableCell><Num>{b.n}</Num></TableCell><TableCell><Num>{pct(b.pred)}</Num></TableCell><TableCell><Num>{pct(b.actual)}</Num></TableCell></TableRow>)}</TableBody>
+    </Table></TableContainer>
+    <Typography variant="body2" color="text.secondary">{k && k.n ? `Against uploaded sportsbook prices (${k.n} player-games, weeks ${k.weeks.join(", ")}): model log loss ${k.log_loss_model} vs market ${k.log_loss_market}${k.log_loss_model < k.log_loss_market ? " — model ahead" : " — market ahead"}. Value Play needs 200+ priced player-games and the model ahead.` : "No uploaded prices have been graded yet. Upload lines before kickoff on the Uploads tab to build the model-vs-market record (200+ priced player-games needed before Value Play can switch on)."}</Typography>
+  </>;
 }

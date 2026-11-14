@@ -40,6 +40,7 @@ import pandas as pd
 
 import matchup as MU
 import model_v03 as V3
+import referee_index as RI
 import enhance as EN
 
 SEASON = 2026
@@ -536,6 +537,7 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
         v3 = v3.set_index("pid")
     except Exception as e:  # keep the board working on the old model
         print("v0.3 model failed, using v0.2:", e, file=sys.stderr)
+        HEALTH["problems"].append(f"Model v0.3c failed ({type(e).__name__}); the older v0.2 chances are shown.")
         v3, v3_meta = None, {"error": str(e)}
     # 2026 goal-line and end-zone counts with their denominators (shown on player details)
     q = pbp[pbp.play_type.isin(["run", "pass"]) & (pbp.two_point_attempt != 1)]
@@ -639,12 +641,40 @@ def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
         out_games.append({**g, "teams": teams, "weather": wx_games.get(g["game_id"]), "referee": nz(row.get("referee"))})
     return {"week": week, "model_version": MODEL_VERSION, "status": "research", "td_per_point": round(ratio, 4),
             "headline_model": V3.MODEL_VERSION if v3 is not None else chosen, "roster_week": roster_week, "v3": v3_meta,
-            "referees": json.loads(Path(__file__).with_name("referee_index.json").read_text()) if Path(__file__).with_name("referee_index.json").exists() else None,
+            "referees": referee_index_safe(),
             "weather_fetched_at": wx.get("fetched_at") if wx_games else None, "windy_mph": wx.get("windy_mph", 15), "wind_study": wind_study,
             "games": out_games,
             "missing": ["sportsbook prices (PropLine key not configured; manual import available to admins)",
                         "confirmed inactives (published about 90 minutes before kickoff; not yet in nflverse injuries)",
                         "individual defender matchups (no public coverage-assignment data)"]}
+
+
+def projections(x, position):
+    """Secondary stat projections (volume x rate), validated in research/secondary.py on 2026 weeks 1-9.
+    Routes are estimated from snaps (est. routes). QB passing yards only for the depth-chart starter."""
+    f = lambda v, d=np.nan: d if v is None or (isinstance(v, float) and np.isnan(v)) else float(v)
+    shrink = lambda val, n, prior, k: (f(val, prior) * f(n, 0) + prior * k) / (f(n, 0) + k)
+    g = f(x.hist_games, 0)
+    if g < 1:
+        return None
+    plays, dbr = f(x.team_plays_g), f(x.team_db_rate)
+    if np.isnan(plays) or np.isnan(dbr):
+        return None
+    out = {}
+    if position in ("RB", "QB"):
+        ypc = shrink(x.ypc, f(x.carries_g, 0) * g, 4.3, 40)
+        out["rush_yds"] = round(plays * (1 - dbr) * f(x.carry_share, 0) * ypc, 1)
+    if position in ("RB", "WR", "TE"):
+        tprr = min(f(x.targets_g, 0) / f(x.est_routes_g, np.nan), 0.6) if f(x.est_routes_g, 0) > 0 else 0.12
+        tg = f(x.snap_share, 0) * plays * dbr * tprr
+        n_t = f(x.targets_g, 0) * g
+        out["targets"] = round(tg, 1)
+        out["receptions"] = round(tg * shrink(x.catch_rate, n_t, 0.64, 25), 1)
+        out["rec_yds"] = round(tg * shrink(x.ypt, n_t, 7.3, 25), 1)
+    if position == "QB" and f(x.depth_rank, 9) == 1 and f(x.att_g, 0) >= 15:
+        n_a = f(x.att_g) * g
+        out["pass_yds"] = round(f(x.att_g) * shrink(x.cmp_rate, n_a, 0.64, 60) * shrink(x.yds_per_cmp, f(x.cmp_rate, .64) * n_a, 10.8, 40), 0)
+    return out or None
 
 
 def v3_fields(x, pid, team, i5_p, i5_t, ez_p, ez_t, team_games, status, position):
@@ -688,10 +718,40 @@ def v3_fields(x, pid, team, i5_p, i5_t, ez_p, ez_t, team_games, status, position
         unc = "Teammates out free up touches; how they are split is uncertain."
     else:
         unc = "Touchdowns are rare events: even a strong 40% chance misses most weeks."
+    out["proj"] = projections(x, position)
     out.update(model="usage-v0.3c", main_reason=reasons.get(drv), uncertainty=unc, role_change=role,
                carry_share=round(cs, 3), target_share=round(ts, 3), i5_share=round(num(x.i5_share) or 0, 3),
                ez_share=round(num(x.ez_share) or 0, 3), depth_rank=int(x.depth_rank) if num(x.depth_rank) else None)
     return out
+
+
+HEALTH = {"problems": []}
+
+
+def referee_index_safe():
+    try:
+        idx = RI.build(SEASON)
+        Path(__file__).with_name("referee_index.json").write_text(json.dumps(idx, indent=1))
+        return idx
+    except Exception as e:
+        HEALTH["problems"].append(f"Referee index not rebuilt ({type(e).__name__}); using the saved copy.")
+        f = Path(__file__).with_name("referee_index.json")
+        return json.loads(f.read_text()) if f.exists() else None
+
+
+def save_predictions(slate: dict, games_out: list) -> int:
+    """Keep each player's latest pregame chance per game; games that have kicked off are frozen."""
+    path = OUT / "predictions.json"
+    preds = json.loads(path.read_text()) if path.exists() else {}
+    locked = {g["game_id"] for g in games_out if g["status"] != "upcoming"}
+    n = 0
+    for g in slate.get("games", []):
+        if g["game_id"] in locked:
+            continue
+        preds[g["game_id"]] = {c["gsis_id"]: {"p": c["p"], "model": c.get("model", MODEL_VERSION)} for t in g["teams"] for c in t["candidates"]}
+        n += len(preds[g["game_id"]])
+    write_json("predictions.json", preds)
+    return n
 
 
 def american(p: float):
@@ -748,6 +808,23 @@ def main() -> int:
     write_json("validation.json", validation)
     write_json("slate.json", slate)
     write_json("reconciliation.json", recon)
+    n_pred = save_predictions(slate, games_out)
+    try:
+        import grade
+        grade.main(os.environ.get("FB_LINES_DIR"))
+    except Exception as e:
+        HEALTH["problems"].append(f"Weekly grading failed ({type(e).__name__}).")
+    fs = CACHE / "fetch_status.json"
+    fstat = json.loads(fs.read_text()) if fs.exists() else {}
+    for f in fstat.get("failed", []):
+        HEALTH["problems"].append(f"Download failed, previous copy used: {f}")
+    wx = slate.get("games", [])
+    outdoor = [g for g in wx if (g.get("weather") or {}).get("roof") in ("outdoor", "retractable")]
+    no_fc = [g["game_id"] for g in outdoor if (g.get("weather") or {}).get("wind_mph") is None]
+    if no_fc:
+        HEALTH["problems"].append(f"No weather forecast for {len(no_fc)} of {len(outdoor)} open-air games.")
+    meta["health"] = {"model": slate.get("headline_model"), "predictions_saved": n_pred, "problems": HEALTH["problems"],
+                      "ok": not any(("failed" in x and "Weekly" not in x) or "v0.2" in x for x in HEALTH["problems"])}
     write_json("meta.json", meta)  # last: its timestamp marks a complete refresh
     print(json.dumps({"final_games": len(finals), "reconciled": meta["reconciled_games"], "unreconciled": bad,
                       "touchdowns": len(tds), "slate_week": slate["week"], "validation_n": validation.get("n")}))

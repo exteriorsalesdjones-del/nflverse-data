@@ -7,8 +7,15 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
 
 1. `cd family-board && python3 refresh/fetch_sources.py` (needs `refresh/matchup.py`, `refresh/enhance.py`, `refresh/weather.py` and `refresh/wind_study.json` beside `build_data.py`). This also fetches kickoff wind forecasts for the upcoming week (National Weather Service, Open-Meteo for international games; needs api.weather.gov and api.open-meteo.com allowed). A failed forecast is not an error: those games show "No forecast yet".
    Downloads the nflverse files. A failed download keeps the previous good copy.
-2. `python3 refresh/build_data.py`
-   Rebuilds `artifact/data/*.json`. Exit code 1 means a final game failed to
+2. Export uploaded lines for weekly grading (read only):
+   `ArtifactData list collection=lines` gives one document per uploader id; for each id,
+   `ArtifactData list collection=lines/<id>/weeks out_dir=<tmp>`.
+   Then `FB_LINES_DIR=<tmp> python3 refresh/build_data.py`
+   (needs `features.py`, `model_v03.py`, `v03_backtest.json`, `referee_index.py`, `grade.py` beside it, and the
+   artifact's `data/predictions.json` saved to `artifact/data/predictions.json` first, so pregame chances accumulate).
+   If there are no lines yet, run it without `FB_LINES_DIR`.
+   Rebuilds `artifact/data/*.json` (including `predictions.json` and `grades.json`; publish both).
+   `meta.json` → `health` lists any problem (failed download, model fallback, missing forecasts). Exit code 1 means a final game failed to
    reconcile with the official score: do **not** publish; report the game ids it printed.
    `meta.json` is written last, so a crash leaves the old data and old timestamp in place.
 3. `python3 -m pytest -q tests` is not needed; run `node --test tests/lib.test.js`
@@ -25,4 +32,4 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
      (create only; never overwrite an existing lock).
 6. Report: final games, reconciled games, touchdowns, new snapshots, and any failure.
 
-Never write to `picks`, `parlays`, `lines`, `odds`, `overrides` or `reviews` from the refresh. Those belong to members and admins.
+Never write to `picks`, `parlays`, `lines`, `refs`, `odds`, `overrides` or `reviews` from the refresh. Those belong to members and admins.

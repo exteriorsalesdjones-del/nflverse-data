@@ -57,6 +57,7 @@ def main() -> int:
         weather.main()
     except Exception as e:
         print("weather FAILED, games will show no forecast:", e, file=sys.stderr)
+    (CACHE / "fetch_status.json").write_text(__import__("json").dumps({"failed": failed}))
     missing = [n for n in FILES if not (CACHE / n).exists()]
     return 1 if missing else 0
 

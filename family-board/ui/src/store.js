@@ -26,6 +26,17 @@ async function loadJson(n) {
   return r.json();
 }
 
+let extrasPromise = null;
+export function ensureExtras() {
+  if (!extrasPromise) extrasPromise = (async () => {
+    const [tds, weekly, played, recon, defenders, grades] = await Promise.all(
+      ["touchdowns", "weekly", "played", "reconciliation", "defenders", "grades"].map((n) => loadJson(n + ".json").catch(() => null)));
+    Object.assign(S, { tds: tds || [], weekly: weekly || [], played: played || {}, recon: recon || {}, defenders, grades, extrasLoaded: true });
+    if (grades && grades.market && S.validation) S.validation = { ...S.validation, clv_n: grades.market.n };
+    emit();
+  })();
+  return extrasPromise;
+}
 export async function loadData() {
   try {
     // what This Week needs first; the touchdown history loads right after, in the background
@@ -33,9 +44,8 @@ export async function loadData() {
     Object.assign(S, { meta, games, slate, validation });
     S.gameById = Object.fromEntries(games.map((g) => [g.game_id, g]));
     emit();
-    const [tds, weekly, played, recon, defenders] = await Promise.all(
-      ["touchdowns", "weekly", "played", "reconciliation", "defenders"].map((n) => loadJson(n + ".json").catch(() => null)));
-    Object.assign(S, { tds: tds || [], weekly: weekly || [], played: played || {}, recon: recon || {}, defenders, extrasLoaded: true });
+    // the touchdown history, results and grades load once a screen needs them, or after the first screen settles
+    setTimeout(ensureExtras, 2500);
   } catch (e) {
     S.loadError = String(e);
   }
@@ -183,6 +193,14 @@ export async function removePick(key) {
   if (FB.isLocked(S.gameById[p.game_id], Date.now())) { toast("This game has kicked off. The pick is locked."); return; }
   delete items[key];
   if (await savePicks(items)) toast(`Removed ${p.player}.`);
+}
+export const markInactive = (c) => setOverride(c.gsis_id, c.full_name || c.player, c.team, "Inactive", "Game-day inactive");
+/* Match one of my uploaded rows that no player matched */
+export async function matchLine(row, c) {
+  const week = S.slate.week; const rows = (S.lines[S.uid] || []).map((r) => (r === row || (r.player === row.player && r.book === row.book && r.market === row.market && !r.gsis_id))
+    ? { ...r, gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, matched_by_hand: true } : r);
+  try { await S.db.doc(`lines/${S.uid}/weeks/w${week}`).set({ rows, updated_at: new Date().toISOString() }); toast(`Matched to ${c.full_name || c.player}.`); }
+  catch (e) { toast("Couldn't save the match."); }
 }
 export async function setOverride(gsis, name, team, status, note) {
   const id = "w" + S.slate.week; const cur = structuredClone(S.overrides[id] || { players: {} });
