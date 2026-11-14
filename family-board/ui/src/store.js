@@ -26,6 +26,12 @@ async function loadJson(n) {
   return r.json();
 }
 
+/* Blind pre-game reads (weeks 1-9): loaded only when the TDs tab section is opened. undefined = not loaded, null = unavailable. */
+let pregamePromise = null;
+export function ensurePregame() {
+  if (!pregamePromise) pregamePromise = loadJson("pregame_reads.json").then((d) => { S.pregame = d; emit(); }).catch(() => { S.pregame = null; emit(); });
+  return pregamePromise;
+}
 let extrasPromise = null;
 export function ensureExtras() {
   if (!extrasPromise) extrasPromise = (async () => {

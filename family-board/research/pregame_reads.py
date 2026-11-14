@@ -166,6 +166,9 @@ def main(weeks=range(1, 10), out_path=None, games_override=None):
             out_md += ["", "**Anytime TD read:** " + td + "." + (" " + sentence("; ".join(env)) if env else ""), ""]
         print("week", w, "done", flush=True)
     (Path(out_path) if out_path else ROOT / "docs" / "PREGAME_READS_W1_9.md").write_text("\n".join(out_md) + "\n")
+    if not out_path:  # the app's copy (artifact/data/pregame_reads.json) is rebuilt from the Markdown
+        import pregame_to_json
+        pregame_to_json.convert()
 
 
 if __name__ == "__main__":

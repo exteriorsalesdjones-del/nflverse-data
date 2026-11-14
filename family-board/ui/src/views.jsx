@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Autocomplete, Box, Button, ButtonBase, Card, CardContent, Chip, Dialog,
   DialogActions, DialogContent, DialogTitle, Drawer, LinearProgress, MenuItem, Stack, Table, TableBody, TableCell,
@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 
@@ -400,6 +400,7 @@ export function TouchdownsView() {
       {rows.slice(0, limit).map((t) => <PlayCard key={t.key} t={t} onOpen={() => setPlay(t)} />)}
       {rows.length > limit && <Button variant="outlined" size="large" onClick={() => setLimit(limit + 50)}>Show more ({rows.length - limit} left)</Button>}
       {rows.length === 0 && <Empty>No touchdowns match these filters.</Empty>}
+      <Fold title="Pre-game reads, weeks 1-9" summary="Each game as it looked before kickoff (results not shown)"><PregameReads /></Fold>
       <Fold title="Defender leaderboard" summary="Receiving TDs allowed, from Pro Football Reference charting"><Leaderboard /></Fold>
       <Fold title="Defender credits on these plays" summary="Only where charting points to one defender"><Defenders rows={rows} open={setPlay} /></Fold>
       <Fold title="About this data" summary="Checks against official scores, and attribution coverage by week"><Coverage /></Fold>
@@ -1112,5 +1113,58 @@ function ShotReview() {
         <Button size="large" onClick={() => setShotReview(null)}>Discard</Button>
       </Stack>
     </Box>
+  );
+}
+
+/* =========================== BLIND PRE-GAME READS =========================== */
+function PregameReads() {
+  const S = useStore(); const [w, setW] = useState("1"); const [open, setOpen] = useState(null);
+  useEffect(() => { ensurePregame(); }, []);
+  if (S.pregame === undefined) return <LinearProgress aria-label="Loading pre-game reads" />;
+  if (!S.pregame) return <Typography variant="body2" color="text.secondary">The pre-game reads couldn't be loaded. Try again after the next refresh.</Typography>;
+  const weeks = Object.keys(S.pregame.weeks).sort((a, b) => a - b);
+  const games = S.pregame.weeks[w] || [];
+  const fav = (g) => { const m = /^(\S+) (-[\d.]+)/.exec(g.line || ""); return m ? `${m[1]} ${m[2].replace("-", "−")}` : null; };
+  return (
+    <Stack spacing={1}>
+      <Typography variant="body2" color="text.secondary">
+        How each game read before kickoff, using only what was known then: the closing line, earlier results, the final pre-game injury report, the
+        pre-kickoff depth chart and the model's touchdown chances refit on earlier games. Results are deliberately left out. A "lean" means a simple
+        margin rating disagreed with the line by 3+ points; it hasn't been tested and isn't a proven edge.
+      </Typography>
+      <ToggleButtonGroup exclusive size="small" value={w} onChange={(e, v) => { if (v) { setW(v); setOpen(null); } }} aria-label="Week"
+        sx={{ flexWrap: "wrap", "& .MuiToggleButton-root": { minWidth: 44, minHeight: 44 } }}>
+        {weeks.map((k) => <ToggleButton key={k} value={k} aria-label={`Week ${k}`}>{k}</ToggleButton>)}
+      </ToggleButtonGroup>
+      <Typography variant="caption" color="text.secondary">Week {w}: {games.length} games · {games.filter((g) => g.close).length} close · {games.filter((g) => g.lean).length} with a lean</Typography>
+      {games.map((g, i) => {
+        const id = `${w}-${g.away}-${g.home}`; const isOpen = open === id;
+        return (
+          <Card key={id} variant="outlined" sx={{ borderRadius: 2 }}>
+            <ButtonBase onClick={() => setOpen(isOpen ? null : id)} aria-expanded={isOpen} aria-controls={`pg-${id}`}
+              sx={{ display: "flex", width: "100%", textAlign: "left", px: 1.5, py: 1.25, gap: 1, minHeight: 56, justifyContent: "flex-start" }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography sx={{ fontWeight: 700 }}>{g.away} at {g.home}{g.division ? <Typography component="span" variant="caption" color="text.secondary"> · division</Typography> : null}</Typography>
+                <Typography variant="caption" color="text.secondary">{g.kickoff}</Typography>
+              </Box>
+              <Stack direction="row" sx={{ gap: 0.5, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: "55%" }}>
+                {fav(g) && <Chip size="small" variant="outlined" label={fav(g)} />}
+                {g.close && <Chip size="small" color="warning" variant="outlined" label="Close" />}
+                {g.lean && <Chip size="small" color="secondary" variant="outlined" label={`Lean ${g.lean}`} />}
+              </Stack>
+              <Icon d={P.expand} sx={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .2s", color: "text.secondary" }} />
+            </ButtonBase>
+            {isOpen && (
+              <Box id={`pg-${id}`} sx={{ px: 1.5, pb: 1.5, display: "grid", gap: 0.75 }}>
+                <Typography variant="caption" color="text.secondary">{g.stadium}</Typography>
+                {[["Line", g.line], ["Call", g.call], ["Context", g.context], ["Lineup", g.lineup], ["Anytime TD read", g.td]].filter(([, v]) => v).map(([k, v]) => (
+                  <Typography key={k} variant="body2"><b>{k}:</b> {v}</Typography>
+                ))}
+              </Box>
+            )}
+          </Card>
+        );
+      })}
+    </Stack>
   );
 }
