@@ -36,3 +36,13 @@ A candidate can be labelled Value Play only when all hold: at least 2,000 graded
 - The page blocks changes after kickoff (Eastern Time). The shared store has no server clock, so the authoritative lock is the **kickoff snapshot**: after kickoff the refresh (or an admin) freezes every submitted pick for that game. Settlement counts only picks that match the snapshot; anything else is Needs review.
 - Win: the player is credited with a touchdown in that game. Void: the player took no snap (house rule). Loss: played, no touchdown. Needs review: participation not yet published, or not in the snapshot.
 - The price and its timestamp at submission are saved with the pick. Picks without a live or fresh price can still be submitted and carry a warning.
+
+## Matchup adjustments (`matchup.py`) — shown, not yet adopted
+- **Position factor:** touchdowns a defence has allowed to RBs, WRs, TEs and QBs, split into rushing and receiving, per game against the league rate, shrunk toward average with 16 games of prior weight.
+- **Coverage factor:** the defence's charted coverage players' receiving TDs per target (PFR), shrunk with 600 targets of prior weight.
+- Each player's expected touchdowns are split into rushing and receiving parts, multiplied by the factors, then scaled so the team total still equals the betting-implied total.
+- **Walk-forward result (weeks 4–10, 1,899 player-games):** log loss 0.4521 usage only; 0.4524 with position factors; 0.4532 with position and coverage. With lighter shrinkage (4 games / 120 targets) both were significantly worse; heavier shrinkage converges to usage only. No setting beat usage alone.
+- **Rule:** headline probabilities switch to a matchup variant only when the 90% bootstrap interval (resampling games) of its log-loss gain is above zero. The check reruns on every refresh. Until then the app shows the matchup boost as "untested".
+
+## Defender leaderboard (`defenders.json`)
+Season sums of PFR defensive charting per defender: targets, completions, yards, receiving TDs allowed, interceptions, missed tackles. Rates are shown only with 25+ targets.

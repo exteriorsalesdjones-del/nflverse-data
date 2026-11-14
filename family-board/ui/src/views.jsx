@@ -51,6 +51,7 @@ export function WeekView() {
         <Typography variant="body2">{gate.ok ? "Model meets the validation bar." : "No Value Plays: " + gate.reasons.join(" ")}</Typography>
         <Typography variant="body2" color="text.secondary">Missing: {s.missing.join("; ")}.</Typography>
       </Alert>
+      <Matchups />
       <Slates />
       <Section title={`Week ${s.week} games`}>
         {s.games.map((g) => {
@@ -104,6 +105,11 @@ function TeamCol({ g, t, locked }) {
                 {pr ? <Num>{pr.book} anytime TD {am(pr.american)} ({pct(e.implied)}) · edge {e.edgePts.toFixed(1)} pts · EV {e.evPerDollar >= 0 ? "+" : ""}{e.evPerDollar.toFixed(2)}/$1{fresh ? "" : " · stale"}</Num>
                   : <Box component="span" sx={{ color: "text.secondary" }}>No live price</Box>}
               </Typography>
+              {c.p_matchup != null && Math.abs(c.matchup_pct) >= 3 && (
+                <Typography variant="body2" sx={{ color: c.matchup_pct > 0 ? "success.main" : "error.main" }}>
+                  <b>Matchup {c.matchup_pct > 0 ? "+" : ""}{c.matchup_pct}%</b> → {pct(c.p_matchup)} <Box component="span" sx={{ color: "text.secondary" }}>(untested) · {c.matchup_why}</Box>
+                </Typography>
+              )}
               <Typography variant="body2"><b>Why:</b> {c.reason} <b>Risk:</b> {c.risk}</Typography>
             </Box>
             <Button size="small" variant={picked ? "outlined" : "contained"} onClick={() => addPick(c)}
@@ -112,6 +118,40 @@ function TeamCol({ g, t, locked }) {
         );
       })}
     </Box>
+  );
+}
+function Matchups() {
+  const S = useStore(); const v = S.validation; const mv = v.variants || {};
+  const open = S.slate.games.filter((g) => !FB.isLocked(g, Date.now()));
+  const cands = open.flatMap((g) => g.teams.flatMap((t) => t.candidates)).filter((c) => c.quality !== "unavailable" && c.p_matchup != null && c.p >= 0.08);
+  const up = cands.slice().sort((a, b) => b.matchup_pct - a.matchup_pct).slice(0, 8);
+  const down = cands.slice().sort((a, b) => a.matchup_pct - b.matchup_pct).slice(0, 5);
+  const gain = (k) => mv[k] && mv[k].ll_gain_ci90 ? `${(mv[k].ll_gain * 1000).toFixed(1)} (90% range ${(mv[k].ll_gain_ci90[0] * 1000).toFixed(1)} to ${(mv[k].ll_gain_ci90[1] * 1000).toFixed(1)})` : "—";
+  const Row = ({ c }) => (
+    <TableRow><TableCell>{c.full_name || c.player} <Typography component="span" variant="caption" color="text.secondary">{c.team} {c.pos}</Typography></TableCell>
+      <TableCell><Num>{pct(c.p)}</Num></TableCell><TableCell><Num>{pct(c.p_matchup)}</Num></TableCell>
+      <TableCell><Num style={{ color: c.matchup_pct > 0 ? "var(--fb-up)" : "var(--fb-down)" }}>{c.matchup_pct > 0 ? "+" : ""}{c.matchup_pct}%</Num></TableCell>
+      <TableCell sx={{ minWidth: 220 }}><Typography variant="caption">{c.matchup_why}</Typography></TableCell></TableRow>
+  );
+  const T = ({ rows }) => (
+    <TableContainer><Table size="small">
+      <TableHead><TableRow>{["Player", "Usage model", "With matchup", "Change", "Why"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
+      <TableBody>{rows.map((c) => <Row key={c.gsis_id} c={c} />)}</TableBody>
+    </Table></TableContainer>
+  );
+  return (
+    <Section title="Matchup boosts">
+      <Typography variant="body2" color="text.secondary">
+        How each opponent has allowed touchdowns this season, by position group, run or catch, and its charted coverage, moves touchdown chances between players on the same team. The team's total still comes from the betting line. Players with at least an 8% usage-model chance in open games.
+      </Typography>
+      <Alert severity={v.chosen === "baseline" ? "info" : "success"} variant="outlined">
+        {v.chosen === "baseline"
+          ? `Untested: in the week-by-week check (weeks ${v.weeks.join("–")}, ${v.n} player-games), matchup adjustments have not yet improved accuracy over usage alone. Log-loss gain ×1000: position matchup ${gain("matchup_pos")}, plus coverage ${gain("matchup_pos_cov")}. Headline probabilities and fair odds stay on the usage model; this is rechecked every refresh.`
+          : `The matchup model beat usage alone in the week-by-week check, so headline probabilities now include it (${v.chosen}).`}
+      </Alert>
+      <Typography variant="subtitle2">Biggest boosts</Typography><T rows={up} />
+      <Typography variant="subtitle2">Biggest cuts</Typography><T rows={down} />
+    </Section>
   );
 }
 function Slates() {
@@ -164,6 +204,7 @@ export function TouchdownsView({ f, setF }) {
     <Stack spacing={2}>
       <Coverage />
       <WeekGlance f={f} setF={setF} />
+      <Leaderboard />
       <Defenders rows={rows} open={setPlay} />
       <Section title={`Play log · ${rows.length} touchdowns`} action={<Button variant="outlined" onClick={async () => setCsvText(await exportCsv(rows))}>Export CSV</Button>}>
         <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
@@ -266,6 +307,32 @@ function WeekGlance({ f, setF }) {
           </TableBody>
         </Table>
       </TableContainer>
+    </Section>
+  );
+}
+function Leaderboard() {
+  const S = useStore(); const d = S.defenders; const [sort, setSort] = useState("td"); const [team, setTeam] = useState("");
+  if (!d) return null;
+  const rated = d.rows.filter((r) => r.td_per100 != null && (!team || r.team === team));
+  const key = { td: (r) => -r.td || r.targets, rate: (r) => -r.td_per100, cmp: (r) => -r.cmp_pct, ypt: (r) => -r.yds_per_tgt }[sort];
+  const rows = rated.slice().sort((a, b) => key(a) - key(b)).slice(0, 25);
+  const teams = [...new Set(d.rows.map((r) => r.team))].sort();
+  return (
+    <Section title="Defender leaderboard · receiving TDs allowed">
+      <Typography variant="body2" color="text.secondary">Season totals from {d.source}, through week {d.through_week}. Each defender is credited by the charter, not by assignment data. Rates appear only with {d.min_targets}+ targets; at that size one touchdown moves the per-100 rate by up to 4 points.</Typography>
+      <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
+        <TextField select size="small" label="Sort by" value={sort} onChange={(e) => setSort(e.target.value)} sx={{ minWidth: 200 }}>
+          <MenuItem value="td">TDs allowed</MenuItem><MenuItem value="rate">TDs per 100 targets</MenuItem><MenuItem value="cmp">Completion % allowed</MenuItem><MenuItem value="ypt">Yards per target</MenuItem>
+        </TextField>
+        <TextField select size="small" label="Team" value={team} onChange={(e) => setTeam(e.target.value)} sx={{ minWidth: 120 }}>
+          <MenuItem value="">All</MenuItem>{teams.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+        </TextField>
+      </Stack>
+      <TableContainer><Table size="small">
+        <TableHead><TableRow>{["Defender", "Team", "Games", "Targets", "TDs", "TD/100 tgt", "Cmp %", "Yds/tgt", "INT"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
+        <TableBody>{rows.map((r) => <TableRow key={r.pfr_id}><TableCell>{r.name}</TableCell><TableCell>{r.team}</TableCell>
+          {[r.games, r.targets, r.td, r.td_per100, r.cmp_pct, r.yds_per_tgt, r.ints].map((x, i) => <TableCell key={i}><Num>{x}</Num></TableCell>)}</TableRow>)}</TableBody>
+      </Table></TableContainer>
     </Section>
   );
 }

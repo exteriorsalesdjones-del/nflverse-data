@@ -31,6 +31,7 @@ export async function loadData() {
     const names = ["meta", "games", "touchdowns", "weekly", "slate", "validation", "played", "reconciliation"];
     const [meta, games, tds, weekly, slate, validation, played, recon] = await Promise.all(names.map((n) => loadJson(n + ".json")));
     Object.assign(S, { meta, games, tds, weekly, slate, validation, played, recon });
+    S.defenders = await loadJson("defenders.json").catch(() => null);
     S.gameById = Object.fromEntries(games.map((g) => [g.game_id, g]));
   } catch (e) {
     S.loadError = String(e);

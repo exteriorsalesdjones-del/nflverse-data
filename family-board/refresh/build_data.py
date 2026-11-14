@@ -38,6 +38,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import matchup as MU
+
 SEASON = 2026
 MODEL_VERSION = "baseline-usage-v0.1"
 CACHE = Path(os.environ.get("FB_CACHE", Path(__file__).resolve().parents[1] / ".data" / "cache"))
@@ -349,13 +351,18 @@ def player_lambdas(o_hist, rates, team, team_off_td, recent_games=None):
     if recent_games:
         gids = gids[-recent_games:]
         t = t[t.game_id.isin(gids)]
-    per = t.groupby(["pid"]).agg(name=("name", "last"), xtd=("xtd", "sum"), opp=("cell", "size"),
+    t["xtd_rush"] = np.where(t.kind == "carry", t.xtd, 0.0)
+    t["xtd_rec"] = np.where(t.kind == "target", t.xtd, 0.0)
+    per = t.groupby(["pid"]).agg(name=("name", "last"), xtd=("xtd", "sum"), xtd_rush=("xtd_rush", "sum"),
+                                 xtd_rec=("xtd_rec", "sum"), opp=("cell", "size"),
                                  i10=("zone", lambda z: int((z == "i10").sum())), games=("game_id", "nunique"))
     tot = per.xtd.sum()
     if tot <= 0:
         return pd.DataFrame()
     per["share"] = per.xtd / tot
     per["lam"] = team_off_td * per.share
+    per["lam_rush"] = team_off_td * per.xtd_rush / tot
+    per["lam_rec"] = team_off_td * per.xtd_rec / tot
     per["p"] = 1 - np.exp(-per["lam"])
     per["team_games"] = len(gids)
     return per.reset_index()
@@ -369,9 +376,20 @@ def off_td_per_point(pbp, games) -> float:
     return len(off) / pts if pts else 0.11
 
 
-def validate(pbp, games, snaps, players) -> dict:
-    """Walk-forward: for week w use only weeks < w. Score players who took an offensive snap."""
+def _metrics(p, y):
+    eps = 1e-6
+    p = np.clip(np.asarray(p, float), eps, 1 - eps); y = np.asarray(y, float)
+    return float(((p - y) ** 2).mean()), float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
+
+
+VARIANTS = {"baseline": None, "matchup_pos": False, "matchup_pos_cov": True}
+
+
+def validate(pbp, games, snaps, players, pfr) -> dict:
+    """Walk-forward: for week w use only weeks < w. Score players who took an offensive snap.
+    Scores the baseline and each matchup variant on the same player-games."""
     o = opportunity_table(pbp)
+    pos = players.dropna(subset=["gsis_id"]).drop_duplicates("gsis_id").set_index("gsis_id")["position"]
     pmap = players.dropna(subset=["pfr_id"]).drop_duplicates("pfr_id").set_index("pfr_id")["gsis_id"]
     snaps = snaps.assign(gsis=snaps.pfr_player_id.map(pmap))
     played = snaps[snaps.offense_snaps.fillna(0) > 0].groupby("game_id").gsis.apply(set).to_dict()
@@ -383,39 +401,57 @@ def validate(pbp, games, snaps, players) -> dict:
         rates = fit_rates(hist)
         hist_pbp = pbp[pbp.week < w]
         ratio = off_td_per_point(hist_pbp, games[games.week < w])
+        pf = MU.pos_factors(hist_pbp, pos)
+        cf = MU.cov_factors(pfr[pfr.week < w])
         for g in games[(games.week == w) & games.result.notna()].itertuples():
             ip = implied_points(g)
             if ip is None:
                 continue
-            for team, pts in ((g.away_team, ip[0]), (g.home_team, ip[1])):
+            for team, opp, pts in ((g.away_team, g.home_team, ip[0]), (g.home_team, g.away_team, ip[1])):
                 lam = player_lambdas(hist, rates, team, pts * ratio)
                 if lam.empty:
                     continue
+                a1 = MU.adjust(lam, opp, pos, pf, cf, False, pts * ratio)
+                a2 = MU.adjust(lam, opp, pos, pf, cf, True, pts * ratio)
                 on = played.get(g.game_id, set())
-                for r in lam.itertuples():
+                for r, p1, p2 in zip(lam.itertuples(), a1.p_adj, a2.p_adj):
                     if r.pid not in on:
                         continue  # inactive or no offensive snap: a pick would be void
-                    rows.append((w, r.p, int(r.pid in scorers.get(g.game_id, set()))))
+                    rows.append((w, g.game_id, r.p, p1, p2, int(r.pid in scorers.get(g.game_id, set()))))
     if not rows:
         return {"n": 0}
-    v = pd.DataFrame(rows, columns=["week", "p", "y"])
-    eps = 1e-6
+    v = pd.DataFrame(rows, columns=["week", "game_id", "baseline", "matchup_pos", "matchup_pos_cov", "y"])
     base = v.y.mean()
-    brier = float(((v.p - v.y) ** 2).mean())
-    ll = float(-(v.y * np.log(v.p.clip(eps)) + (1 - v.y) * np.log((1 - v.p).clip(eps))).mean())
-    brier0 = float(((base - v.y) ** 2).mean())
-    ll0 = float(-(v.y * np.log(base) + (1 - v.y) * np.log(1 - base)).mean())
-    v["bin"] = pd.cut(v.p, [0, .05, .1, .2, .3, .4, .5, 1], include_lowest=True)
-    cal = [{"bin": str(b), "n": int(len(x)), "pred": float(x.p.mean()), "actual": float(x.y.mean())}
-           for b, x in v.groupby("bin", observed=True)]
+    brier0, ll0 = _metrics(np.full(len(v), base), v.y)
+    variants = {}
+    rng = np.random.default_rng(7)
+    gids = v.game_id.unique()
+    for name in VARIANTS:
+        b, l = _metrics(v[name], v.y)
+        bins = pd.cut(v[name], [0, .05, .1, .2, .3, .4, .5, 1], include_lowest=True)
+        cal = [{"bin": str(k), "n": int(len(x)), "pred": float(x[name].mean()), "actual": float(x.y.mean())}
+               for k, x in v.groupby(bins, observed=True)]
+        entry = {"brier": b, "log_loss": l, "calibration": cal}
+        if name != "baseline":
+            # paired bootstrap over games: log-loss improvement vs baseline (positive = better)
+            per_game = v.assign(d=[_metrics([pb], [y])[1] - _metrics([pm], [y])[1] for pb, pm, y in zip(v.baseline, v[name], v.y)]).groupby("game_id").d.sum()
+            boots = [per_game.sample(len(per_game), replace=True, random_state=int(rng.integers(1e9))).sum() / len(v) for _ in range(400)]
+            entry["ll_gain"] = float(per_game.sum() / len(v))
+            entry["ll_gain_ci90"] = [float(np.percentile(boots, 5)), float(np.percentile(boots, 95))]
+        variants[name] = entry
+    best = min(variants, key=lambda k: variants[k]["log_loss"])
+    adopt = best != "baseline" and variants[best]["ll_gain_ci90"][0] > 0
+    chosen = best if adopt else "baseline"
+    c = variants[chosen]
     return {"model_version": MODEL_VERSION, "weeks": [4, int(v.week.max())], "n": int(len(v)),
-            "base_rate": float(base), "brier": brier, "brier_constant": brier0,
-            "log_loss": ll, "log_loss_constant": ll0, "calibration": cal,
+            "base_rate": float(base), "brier": c["brier"], "brier_constant": brier0,
+            "log_loss": c["log_loss"], "log_loss_constant": ll0, "calibration": c["calibration"],
+            "variants": variants, "chosen": chosen, "best_by_log_loss": best,
             "status": "research",
-            "note": "Each week is predicted from earlier weeks only, using closing spread and total. Scored on players who took an offensive snap (an inactive player's pick is void). Compared with a constant base-rate forecast. No sportsbook prices are included, so no closing-line value yet."}
+            "note": "Each week is predicted from earlier weeks only, using closing spread and total and matchup factors built from earlier games. Scored on players who took an offensive snap (an inactive player's pick is void). A matchup variant is adopted only when the 90% bootstrap interval of its log-loss gain over the baseline is above zero. No sportsbook prices are included, so no closing-line value yet."}
 
 
-def build_slate(pbp, games, injuries, players, games_out):
+def build_slate(pbp, games, injuries, players, games_out, pfr, validation):
     up = [g for g in games_out if g["status"] in ("upcoming", "in_progress", "postponed_or_pending")]
     if not up:
         return {"week": None, "games": []}
@@ -432,6 +468,9 @@ def build_slate(pbp, games, injuries, players, games_out):
     td = td.assign(pos=td.td_player_id.map(pos))
     allowed = td.groupby(["defteam", "pos"]).size().unstack(fill_value=0)
     def_games = pbp.groupby("defteam").game_id.nunique()
+    pf = MU.pos_factors(pbp, pos)
+    cf = MU.cov_factors(pfr)
+    chosen = validation.get("chosen", "baseline")
     out_games = []
     gdf = games.set_index("game_id")
     for g in [x for x in games_out if x["week"] == week]:
@@ -448,6 +487,12 @@ def build_slate(pbp, games, injuries, players, games_out):
                 entry["expected_off_tds"] = round(float(pts * ratio), 2)
                 lam = player_lambdas(o, rates, team, pts * ratio)
                 lam = lam[lam.pid.isin(set(players.gsis_id))] if not lam.empty else lam
+                if not lam.empty:
+                    adj = MU.adjust(lam, opp, pos, pf, cf, True, pts * ratio)
+                    lam = lam.assign(p_mu=adj.p_adj.values, f_rush=adj.f_rush, f_rec=adj.f_rec, f_cov=adj.f_cov)
+                    if chosen != "baseline":
+                        lam = lam.assign(p=lam.p_mu)
+                entry["opp_cov_factor"] = round(float(cf.get(opp, 1.0)), 3)
                 cands = []
                 for r in (lam.sort_values("p", ascending=False).head(14).itertuples() if not lam.empty else []):
                     ir = inj_map.get(r.pid)
@@ -461,7 +506,18 @@ def build_slate(pbp, games, injuries, players, games_out):
                     elif status == "Questionable":
                         notes.append("questionable on the injury report")
                     p = float(r.p)
+                    mu = float(r.p_mu)
+                    grp = MU.GROUP.get(pos.get(r.pid), "OTHER")
+                    parts = []
+                    if r.lam_rush > 0.01 and abs(r.f_rush - 1) >= 0.03:
+                        parts.append(f"{opp} allows {'more' if r.f_rush > 1 else 'fewer'} rushing TDs to {grp}s than average (x{r.f_rush:.2f})")
+                    if r.lam_rec > 0.01 and abs(r.f_rec - 1) >= 0.03:
+                        parts.append(f"{opp} allows {'more' if r.f_rec > 1 else 'fewer'} receiving TDs to {grp}s than average (x{r.f_rec:.2f})")
+                    if r.lam_rec > 0.01 and abs(r.f_cov - 1) >= 0.03:
+                        parts.append(f"{opp}'s charted coverage allows {'more' if r.f_cov > 1 else 'fewer'} TDs per target than average (x{r.f_cov:.2f})")
                     cands.append({
+                        "p_matchup": round(mu, 4), "matchup_pct": round((mu / p - 1) * 100, 1) if p > 0 else None,
+                        "matchup_why": "; ".join(parts) or f"{opp} is close to league average against this role.",
                         "player": r.name, "full_name": nz(full.get(r.pid)), "gsis_id": r.pid, "pos": nz(pos.get(r.pid)), "team": team, "game_id": g["game_id"],
                         "p": round(p, 4), "fair_american": american(p),
                         "lambda": round(float(r.lam), 3),
@@ -474,6 +530,7 @@ def build_slate(pbp, games, injuries, players, games_out):
             teams.append(entry)
         out_games.append({**g, "teams": teams})
     return {"week": week, "model_version": MODEL_VERSION, "status": "research", "td_per_point": round(ratio, 4),
+            "headline_model": chosen,
             "games": out_games,
             "missing": ["sportsbook prices (PropLine key not configured; manual import available to admins)",
                         "weather forecasts (no permitted source connected)",
@@ -494,8 +551,8 @@ def main() -> int:
     games_out = build_games(games, pbp)
     tds, recon = build_touchdowns(pbp, games, pfr, players)
     weekly = build_weekly(games_out, tds, recon)
-    validation = validate(pbp, games, snaps, players)
-    slate = build_slate(pbp, games, injuries, players, games_out)
+    validation = validate(pbp, games, snaps, players, pfr)
+    slate = build_slate(pbp, games, injuries, players, games_out, pfr, validation)
     finals = [g for g in games_out if g["status"] == "final"]
     meta = {
         "season": SEASON, "refreshed_at": now_iso(),
@@ -519,6 +576,8 @@ def main() -> int:
     s = s[(s[["offense_snaps", "defense_snaps", "st_snaps"]].fillna(0).sum(axis=1) > 0) & s.gsis.notna()]
     played = {gid: sorted(set(x)) for gid, x in s.groupby("game_id").gsis}
     write_json("played.json", played)
+    write_json("defenders.json", {"through_week": int(pfr.week.max()), "min_targets": 25, "source": PFR_SOURCE,
+                                  "rows": MU.defender_board(pfr)})
     bad = [k for k, v in recon.items() if not v["reconciled"]]
     write_json("games.json", games_out)
     write_json("touchdowns.json", tds)
