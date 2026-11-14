@@ -1,0 +1,172 @@
+"""Blind pre-game reads for every 2026 game in Weeks 1-9 -> docs/PREGAME_READS_W1_9.md
+
+Strict pre-game mode. For a game in week w this script only uses information available before kickoff:
+  - the closing spread, total and moneylines (posted before kickoff), rest days, division flag, stadium type;
+  - results of games in weeks before w (2026) and the 2025 season, for form;
+  - the final pre-game injury report for week w and the week-w roster;
+  - the last depth-chart snapshot before kickoff;
+  - TD chances from model usage-v0.3c refit on 2025 + 2026 weeks < w only (refresh/model_v03.py).
+Columns that are filled in after a game (scores, result, overtime, the starting QBs nflverse records, game-day
+weather, referee, open/closed roof) are dropped as soon as the schedule is loaded and never read for week w.
+
+The "lean" compares the line with a simple margin rating (average point margin in earlier games, 2025 at quarter
+weight, shrunk toward zero by 4 pseudo-games, home field 1.5 points). It is a cross-check, not a validated edge:
+when the rating and the line disagree by less than 3 points the read says so and sides with neither.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "refresh"))
+import model_v03 as M  # noqa: E402
+from weather import STADIUMS  # noqa: E402
+
+C = ROOT / ".data" / "cache"
+PREGAME_COLS = ["game_id", "season", "game_type", "week", "gameday", "gametime", "away_team", "home_team", "away_rest", "home_rest",
+                "away_moneyline", "home_moneyline", "spread_line", "total_line", "div_game", "stadium_id", "stadium"]
+POST_COLS = ["game_id", "season", "week", "away_team", "home_team", "away_score", "home_score"]  # only ever read for EARLIER weeks
+HFA, LEAN_PTS, CLOSE_SPREAD = 1.5, 3.0, 2.5
+
+
+def sentence(t):
+    """First letter upper-case, rest untouched (team codes stay upper-case)."""
+    return (t[:1].upper() + t[1:] + ".") if t else ""
+
+
+def american(x):
+    return "n/a" if pd.isna(x) else (f"+{int(x)}" if x > 0 else str(int(x)))
+
+
+def ml_prob(a):
+    return 100 / (a + 100) if a > 0 else -a / (-a + 100)
+
+
+def form_tables(all_games, week):
+    """Team form from games played BEFORE `week` of 2026, plus the 2025 season."""
+    prior = all_games[((all_games.season == 2026) & (all_games.week < week)) | (all_games.season == 2025)].dropna(subset=["home_score"])
+    rows = []
+    for g in prior.itertuples():
+        for team, pf, pa in ((g.home_team, g.home_score, g.away_score), (g.away_team, g.away_score, g.home_score)):
+            rows.append((team, g.season, pf, pa))
+    f = pd.DataFrame(rows, columns=["team", "season", "pf", "pa"])
+    f["margin"] = f.pf - f.pa; f["w"] = np.where(f.season == 2026, 1.0, 0.25)
+    rating = f.assign(wm=f.margin * f.w).groupby("team").apply(lambda d: d.wm.sum() / (d.w.sum() + 4), include_groups=False)
+    cur = f[f.season == 2026].groupby("team").agg(gp=("pf", "size"), pf=("pf", "mean"), pa=("pa", "mean"),
+                                                  w=("margin", lambda m: int((m > 0).sum())), l=("margin", lambda m: int((m < 0).sum())),
+                                                  t=("margin", lambda m: int((m == 0).sum())))
+    last = f[f.season == 2025].groupby("team").agg(w=("margin", lambda m: int((m > 0).sum())), l=("margin", lambda m: int((m < 0).sum())))
+    return rating, cur, last
+
+
+def team_line(team, cur, last, week):
+    if week > 1 and team in cur.index:
+        c = cur.loc[team]; rec = f"{int(c.w)}-{int(c.l)}" + (f"-{int(c.t)}" if c.t else "")
+        return f"{team} {rec}, scoring {c.pf:.1f} and allowing {c.pa:.1f} per game"
+    l = last.loc[team] if team in last.index else None
+    return f"{team} (2025: {int(l.w)}-{int(l.l)})" if l is not None else team
+
+
+def main(weeks=range(1, 10), out_path=None, games_override=None):
+    players = pd.read_parquet(C / "players.parquet")
+    pos = players.dropna(subset=["gsis_id"]).drop_duplicates("gsis_id").set_index("gsis_id")
+    name = pos.display_name
+    raw = games_override if games_override is not None else pd.read_csv(C / "games.csv")
+    sched = raw[(raw.season == 2026) & (raw.game_type == "REG") & (raw.week <= 9)][PREGAME_COLS].copy()   # pregame fields only
+    history = raw[raw.season.isin([2025, 2026]) & (raw.game_type == "REG")][POST_COLS].copy()              # scores: earlier weeks only
+    inj = pd.read_parquet(C / "injuries_2026.parquet")
+    out_md = ["# 2026 Weeks 1-9: blind pre-game reads", "",
+              "Every read below uses only what was known before that game kicked off: the closing line, earlier results, the final "
+              "pre-game injury report, the pre-kickoff depth chart, and TD chances from model usage-v0.3c refit on earlier games only. "
+              "No final scores, results or later developments are used. Generated by `research/pregame_reads.py`.", "",
+              "**How to read a game.** *Favored* is the betting line's favorite. *Lean* compares the line with a simple margin rating "
+              f"(earlier point margins, 2025 at quarter weight, home field {HFA} pts); a lean is shown only when the two differ by "
+              f"{LEAN_PTS:.0f}+ points, and it is a cross-check, not a proven edge. Spreads of {CLOSE_SPREAD} or less are called close. "
+              "TD chances are the model's pre-game estimates (main reason in brackets); players listed Out or Doubtful on the "
+              "final report are excluded.", ""]
+    for w in weeks:
+        preds, _ = M.predict(w, players)
+        preds = preds.set_index("pid")
+        rating, cur, last = form_tables(history, w)
+        rep = inj[(inj.week == w)].set_index("gsis_id")
+        out_md += [f"## Week {w}", ""]
+        wk = sched[sched.week == w].sort_values(["gameday", "gametime"])
+        for g in wk.itertuples():
+            fav, dog = (g.home_team, g.away_team) if g.spread_line > 0 else (g.away_team, g.home_team)
+            sp = abs(g.spread_line); home_imp = g.total_line / 2 + g.spread_line / 2; away_imp = g.total_line - home_imp
+            kick = pd.Timestamp(f"{g.gameday} {g.gametime}").strftime("%a %b %-d, %-I:%M %p ET")
+            venue = STADIUMS.get(g.stadium_id, (None, None, "unknown"))[2]
+            title = f"### {g.away_team} at {g.home_team}" + (" (division)" if g.div_game == 1 else "")
+            line = (f"**Line:** {fav} -{sp:g}, total {g.total_line:g} -> {g.away_team} {away_imp:.1f}, {g.home_team} {home_imp:.1f} implied points. "
+                    + (f"Moneyline {g.away_team} {american(g.away_moneyline)} / {g.home_team} {american(g.home_moneyline)} "
+                       f"({ml_prob(g.home_moneyline) / (ml_prob(g.home_moneyline) + ml_prob(g.away_moneyline)):.0%} {g.home_team} after removing the margin)."
+                       if pd.notna(g.home_moneyline) and pd.notna(g.away_moneyline) else ""))
+            # lean
+            rh, ra = float(rating.get(g.home_team, 0.0)), float(rating.get(g.away_team, 0.0))
+            model_margin = rh - ra + HFA; diff = model_margin - g.spread_line
+            if sp == 0:
+                call = "**Call:** pick'em; genuinely close."
+            elif sp <= CLOSE_SPREAD:
+                call = f"**Call:** {fav} by a hair; genuinely close, a field-goal game either way."
+            else:
+                call = f"**Call:** {fav} favored by {sp:g}."
+            if abs(diff) >= LEAN_PTS:
+                side = g.home_team if diff > 0 else g.away_team
+                call += f" Margin rating has {g.home_team} {model_margin:+.1f}, so a lean toward **{side}** against the number (rating disagrees by {abs(diff):.1f})."
+            else:
+                call += f" Margin rating ({g.home_team} {model_margin:+.1f}) roughly agrees with the line: no lean."
+            ctx = [team_line(g.away_team, cur, last, w) + "; " + team_line(g.home_team, cur, last, w) + "."]
+            rest = []
+            if pd.notna(g.away_rest) and pd.notna(g.home_rest) and abs(g.away_rest - g.home_rest) >= 3:
+                rest.append(f"rest edge {g.away_team if g.away_rest > g.home_rest else g.home_team} ({int(max(g.away_rest, g.home_rest))} days vs {int(min(g.away_rest, g.home_rest))})")
+            if venue in ("dome", "retractable"):
+                rest.append("indoors" if venue == "dome" else "retractable roof")
+            if rest:
+                ctx.append(sentence("; ".join(rest)))
+            # injuries and QB
+            notes = []
+            for team in (g.away_team, g.home_team):
+                tp = preds[preds.team == team]
+                qbs = tp[(tp.pos == "QB")].sort_values("depth_rank")
+                qb1 = qbs.index[0] if len(qbs) else None
+                qstat = rep.report_status.get(qb1) if qb1 is not None and qb1 in rep.index else None
+                if qb1 is not None:
+                    notes.append(f"{team} QB1 per pre-game depth chart: {name.get(qb1, qb1)}" + (f" ({qstat})" if isinstance(qstat, str) else ""))
+                outs = rep[(rep.team == team) & rep.report_status.isin(["Out", "Doubtful"]) & rep.position.isin(["QB", "RB", "WR", "TE"])]
+                key = []
+                for pid, r in outs.iterrows():
+                    if pid in tp.index:
+                        x = tp.loc[pid]; x = x.iloc[0] if isinstance(x, pd.DataFrame) else x
+                        sh = max(float(x.carry_share or 0), float(x.target_share or 0))
+                        if sh >= 0.08 or r.position == "QB":
+                            key.append(f"{name.get(pid, pid)} {r.position} ({r.report_status}; {sh:.0%} of team {'carries' if (x.carry_share or 0) >= (x.target_share or 0) else 'targets'})")
+                    elif r.position == "QB":
+                        key.append(f"{name.get(pid, pid)} QB ({r.report_status})")
+                if key:
+                    notes.append(f"{team} missing: " + ", ".join(key))
+            # TD board
+            avail = preds[preds.team.isin([g.away_team, g.home_team]) & ~preds.inj_status.isin(["Out", "Doubtful"])]
+            top = avail.sort_values("p", ascending=False).head(4)
+            reason = {"team": "team expectation", "workload": "workload", "goal_line": "goal-line role", "depth": "depth chart", "history": "TD history"}
+            td = "; ".join(f"{name.get(pid, pid)} {r.pos} {r.team} {r.p:.0%} [{reason.get(r.main_driver, r.main_driver)}]"
+                           + (" (questionable)" if r.inj_status == "Questionable" else "") for pid, r in top.iterrows())
+            # TD-environment note from implied totals
+            env = []
+            if g.total_line >= 50: env.append("high total: more scoring chances across both rosters")
+            elif g.total_line <= 40: env.append("low total: TD chances are thin, favor goal-line roles")
+            hi = g.home_team if home_imp >= away_imp else g.away_team
+            if abs(home_imp - away_imp) >= 6: env.append(f"{hi} carries most of the expected scoring")
+            out_md += [title, f"*{kick} · {g.stadium}*", "", line, "", call, "", "**Context:** " + " ".join(ctx)]
+            if notes:
+                out_md += ["", "**Lineup notes (final pre-game report):** " + "; ".join(notes) + "."]
+            out_md += ["", "**Anytime TD read:** " + td + "." + (" " + sentence("; ".join(env)) if env else ""), ""]
+        print("week", w, "done", flush=True)
+    (Path(out_path) if out_path else ROOT / "docs" / "PREGAME_READS_W1_9.md").write_text("\n".join(out_md) + "\n")
+
+
+if __name__ == "__main__":
+    main()
