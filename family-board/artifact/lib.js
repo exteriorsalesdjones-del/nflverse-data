@@ -63,10 +63,19 @@
     var dec = americanToDecimal(american);
     return { implied: imp, edgePts: (modelP - imp) * 100, evPerDollar: modelP * (dec - 1) - (1 - modelP) };
   }
+  /* Price freshness policy (single source of truth). A price is "fresh" when it was OBSERVED (captured_at) within
+     the last PRICE_FRESH_MIN minutes. 120 minutes was chosen when the board was first built (an assumption, not a
+     product requirement): anytime-TD props move on injury and inactive news, so older prices are shown but labeled
+     stale and are not used for EV. Timestamps more than FUTURE_SLACK_MIN ahead of now are treated as invalid. */
+  var PRICE_FRESH_MIN = 120, FUTURE_SLACK_MIN = 10;
+  function observedMs(price) {
+    var t = price && price.captured_at ? Date.parse(price.captured_at) : NaN;
+    return isFinite(t) ? t : NaN;
+  }
   function priceFresh(price, nowMs, maxAgeMin) {
-    if (!price || !price.captured_at) return false;
-    var t = Date.parse(price.captured_at);
-    return isFinite(t) && nowMs - t <= (maxAgeMin || 120) * 60000;
+    var t = observedMs(price);
+    if (!isFinite(t) || t > nowMs + FUTURE_SLACK_MIN * 60000) return false;
+    return nowMs - t <= (maxAgeMin || PRICE_FRESH_MIN) * 60000;
   }
 
   /* Model gate for "Value Play". Documented in docs/METHOD.md. */
@@ -182,10 +191,22 @@
     return Math.abs(n) >= 100 ? n : NaN;
   }
   function normMarket(m) {
-    var x = String(m || "").toLowerCase().replace(/[^a-z0-9+]/g, "");
+    var raw = String(m || "").toLowerCase();
+    // full-game markets only: half, quarter, first/last TD and other period markets are not comparable
+    if (/half|quarter|\b1h\b|\b2h\b|\b[1-4]q\b|\bq[1-4]\b|first|last|1st|2nd|3rd|4th|period/.test(raw)) return null;
+    var x = raw.replace(/[^a-z0-9+]/g, "");
     if (!x || x.indexOf("any") !== -1) return "anytime_td";
     if (x.indexOf("2") !== -1 || x.indexOf("two") !== -1) return "2plus_td";
     return null; // other markets are ignored
+  }
+  /* Observation time from an upload. ISO with Z or an offset is used as is; a bare "YYYY-MM-DD HH:MM" is read as
+     Eastern time (the app's time zone), never the browser's. Anything else -> NaN. */
+  function parseObserved(s) {
+    var t = String(s || "").trim();
+    if (!t) return NaN;
+    if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(t) && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(t)) return Date.parse(t.replace(" ", "T"));
+    var m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(:\d{2})?$/.exec(t);
+    return m ? etToUtcMs(m[1] + "T" + m[2]) : NaN;
   }
   /* CSV/paste: player,team,book,market,price[,captured_at] or player,team,book,price[,captured_at].
      Returns {rows, skipped:[{line, why}]} so nothing is dropped silently. */
@@ -198,8 +219,10 @@
       if (!c[0]) return skipped.push({ line: l, why: "no player" });
       if (!market) return skipped.push({ line: l, why: "market isn't Anytime TD or 2+ TDs" });
       if (!isFinite(american)) return skipped.push({ line: l, why: "price isn't valid American odds (e.g. +180, -120, EVEN)" });
-      if (when && !isFinite(Date.parse(when))) return skipped.push({ line: l, why: "time isn't a date" });
-      rows.push({ player: c[0], team: (c[1] || "").toUpperCase(), book: c[2] || "", market: market, american: american, captured_at: when ? new Date(Date.parse(when)).toISOString() : (nowIso || new Date().toISOString()) });
+      var obs = when ? parseObserved(when) : NaN;
+      if (when && !isFinite(obs)) return skipped.push({ line: l, why: "time must be like 2026-11-15T12:30:00Z or 2026-11-15 12:30 (Eastern)" });
+      rows.push({ player: c[0], team: (c[1] || "").toUpperCase(), book: c[2] || "", market: market, american: american,
+        captured_at: when ? new Date(obs).toISOString() : (nowIso || new Date().toISOString()), time_source: when ? "provided" : "upload time" });
     });
     return { rows: rows, skipped: skipped };
   }
@@ -209,27 +232,30 @@
     if (!isFinite(t)) return "no capture time";
     if (t > nowMs + 10 * 60000) return "capture time is in the future";
     if (nowMs - t > 7 * 864e5) return "older than 7 days";
-    if (game && isLocked(game, nowMs)) return "game has started (pre-kickoff prices are kept)";
+    if (game && isLocked(game, nowMs)) return "game has started: prices can only be added before kickoff, even ones captured earlier";
     if (game && t >= etToUtcMs(game.kickoff_et)) return "captured after kickoff";
     return null;
   }
   /* Best price for one player and market across books: highest payout among fresh prices (latest per book);
      if none is fresh, the most recent price flagged stale. Returns null when there are no prices. */
   function bestPrice(rows, nowMs, maxAgeMin) {
-    if (!rows || !rows.length) return null;
+    // only rows with a valid price and a valid, not-future observation time are considered
+    var ok = (rows || []).filter(function (r) { var t = observedMs(r); return isFinite(parseAmerican(r.american)) && isFinite(t) && t <= nowMs + FUTURE_SLACK_MIN * 60000; });
+    if (!ok.length) return null;
     var perBook = {};
-    rows.forEach(function (r) { var k = r.book || "?"; if (!perBook[k] || Date.parse(r.captured_at) > Date.parse(perBook[k].captured_at)) perBook[k] = r; });
+    ok.forEach(function (r) { var k = r.book || "Unknown book"; if (!perBook[k] || observedMs(r) > observedMs(perBook[k])) perBook[k] = r; });
     var latest = Object.keys(perBook).map(function (k) { return perBook[k]; });
     var fresh = latest.filter(function (r) { return priceFresh(r, nowMs, maxAgeMin); });
     var pool = fresh.length ? fresh : latest;
-    pool.sort(fresh.length ? function (a, b) { return americanToDecimal(b.american) - americanToDecimal(a.american); }
-                           : function (a, b) { return Date.parse(b.captured_at) - Date.parse(a.captured_at); });
+    // fresh: best payout first (ties: newer observation, then book name); stale: newest observation first
+    pool.sort(fresh.length ? function (a, b) { return americanToDecimal(b.american) - americanToDecimal(a.american) || observedMs(b) - observedMs(a) || String(a.book).localeCompare(String(b.book)); }
+                           : function (a, b) { return observedMs(b) - observedMs(a) || String(a.book).localeCompare(String(b.book)); });
     var best = pool[0];
     return Object.assign({}, best, { stale: !fresh.length, books: fresh.length || latest.length,
       others: pool.slice(1).map(function (r) { return { book: r.book, american: r.american, captured_at: r.captured_at }; }) });
   }
 
-  var api = { parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

@@ -3,16 +3,19 @@
 Inputs: artifact/data/predictions.json (pregame chances kept by build_data.py, frozen at kickoff),
 artifact/data/touchdowns.json + played.json (outcomes), and optionally a directory of exported lines documents
 (ArtifactData list collection=lines/<uid>/weeks out_dir=<dir>), which gives <dir>/lines/<uid>/weeks/w<week>.json.
-Market rule: for each player-game and book, the latest anytime-TD price captured before kickoff; the market chance is
-the average implied probability across books, scaled by an overround factor fitted on earlier graded weeks only
-(0.90 before any history). Output: artifact/data/grades.json.
+Market rule: for each player-game and book, the most recent anytime-TD price OBSERVED (captured_at) in the 7 days
+before kickoff. Market chance = average across books of the raw implied probability of the posted "Yes" price.
+That includes the book's margin: only one side of the anytime market is posted, so a true no-vig probability cannot be
+computed from this data. A second figure, "scaled_heuristic", multiplies the raw value by (observed scoring rate /
+average raw implied) from EARLIER graded weeks only, and only once 100+ earlier rows exist. It is an outcome-based
+calibration, not vig removal, and is labeled as such. Output: artifact/data/grades.json.
 Usage: python grade.py [lines_export_dir]
 """
 from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -25,6 +28,23 @@ ET = ZoneInfo("America/New_York")
 def ll(p, y):
     p = np.clip(np.asarray(p, float), 1e-4, 1 - 1e-4); y = np.asarray(y, float)
     return float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
+
+
+def observed(x):
+    """captured_at as an aware UTC datetime, or None when missing or invalid."""
+    try:
+        t = datetime.fromisoformat(str(x.get("captured_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else None  # a time without a zone is ambiguous: not graded
+
+
+def american(x):
+    try:
+        a = float(x.get("american"))
+    except (TypeError, ValueError):
+        return None
+    return a if abs(a) >= 100 else None
 
 
 def implied(a):
@@ -78,29 +98,42 @@ def main(lines_dir: str | None = None) -> dict:
                 prices.setdefault(r["gsis_id"], []).append(r)
     mrows = []
     for r in rows:
-        ts = lambda x: datetime.fromisoformat(x["captured_at"].replace("Z", "+00:00"))
-        cand = [x for x in prices.get(r["pid"], []) if ts(x) < r["kick"] and (r["kick"] - ts(x)).days < 7]  # last week before kickoff
+        cand = []
+        for x in prices.get(r["pid"], []):
+            t = observed(x)
+            a = american(x)
+            if t is None or a is None:
+                continue  # invalid time or price: never graded
+            if t < r["kick"] and r["kick"] - t < timedelta(days=7):
+                cand.append((t, a, x.get("book") or "Unknown book"))
         if not cand:
             continue
         latest = {}
-        for x in cand:
-            if x["book"] not in latest or x["captured_at"] > latest[x["book"]]["captured_at"]:
-                latest[x["book"]] = x
-        mrows.append({**r, "imp": float(np.mean([implied(x["american"]) for x in latest.values()])), "books": sorted(latest)})
+        for t, a, book in cand:  # newest observation per book, compared as times (not strings)
+            if book not in latest or t > latest[book][0]:
+                latest[book] = (t, a)
+        mrows.append({**r, "imp": float(np.mean([implied(a) for t, a in latest.values()])), "books": sorted(latest)})
     if mrows:
-        weeks = sorted({r["week"] for r in mrows}); scored = []
-        for w in weeks:  # overround factor from earlier graded weeks only
+        weeks = sorted({r["week"] for r in mrows})
+        y = [r["y"] for r in mrows]
+        wk = lambda w, k: [r[k] for r in mrows if r["week"] == w]
+        out["market"] = {"n": len(mrows), "weeks": weeks,
+                         "log_loss_model": round(ll([r["p"] for r in mrows], y), 4),
+                         "log_loss_market_raw": round(ll([r["imp"] for r in mrows], y), 4),
+                         "model_better_than_raw_share_of_weeks": round(float(np.mean([ll(wk(w, "p"), wk(w, "y")) < ll(wk(w, "imp"), wk(w, "y")) for w in weeks])), 2),
+                         "note": "Raw = average implied probability of the newest pre-kickoff 'Yes' price per book (margin included; a no-vig probability cannot be computed from one-sided prices)."}
+        scaled = []
+        for w in weeks:  # outcome-based scale from EARLIER weeks only; no default factor
             prior = [r for r in mrows if r["week"] < w]
-            f = (np.mean([r["y"] for r in prior]) / np.mean([r["imp"] for r in prior])) if len(prior) >= 100 else 0.90
-            for r in mrows:
-                if r["week"] == w:
-                    scored.append({**r, "mkt": min(r["imp"] * f, 0.97)})
-        y = [r["y"] for r in scored]
-        out["market"] = {"n": len(scored), "weeks": weeks, "log_loss_model": round(ll([r["p"] for r in scored], y), 4),
-                         "log_loss_market": round(ll([r["mkt"] for r in scored], y), 4),
-                         "model_better_share_of_weeks": round(float(np.mean([ll([r["p"] for r in scored if r["week"] == w], [r["y"] for r in scored if r["week"] == w]) <
-                                                                             ll([r["mkt"] for r in scored if r["week"] == w], [r["y"] for r in scored if r["week"] == w]) for w in weeks])), 2),
-                         "note": "Latest anytime price per book captured before kickoff (uploads), averaged; overround removed with a factor from earlier weeks."}
+            if len(prior) < 100:
+                continue
+            f = float(np.mean([r["y"] for r in prior]) / np.mean([r["imp"] for r in prior]))
+            scaled += [{**r, "mkt": min(r["imp"] * f, 0.97), "f": f} for r in mrows if r["week"] == w]
+        if scaled:
+            ys = [r["y"] for r in scaled]
+            out["market"]["scaled_heuristic"] = {"n": len(scaled), "log_loss_model": round(ll([r["p"] for r in scaled], ys), 4),
+                                                 "log_loss_market_scaled": round(ll([r["mkt"] for r in scaled], ys), 4),
+                                                 "note": "Heuristic: raw implied x (scoring rate / raw implied) from earlier weeks. A calibration using outcomes, not a no-vig price."}
     (D / "grades.json").write_text(json.dumps(out, separators=(",", ":")))
     return out
 

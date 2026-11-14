@@ -76,7 +76,9 @@
   "weeks": "3-4",
   "book": "FanDuel (+12 BetMGM)",
   "log_loss_model": 0.55961,
-  "log_loss_market_devig": 0.54771
+  "log_loss_market_raw": 0.54975,
+  "log_loss_market_scaled_heuristic": 0.54771,
+  "note": "Raw = implied probability of the posted 'Yes' price (book margin included). Only one side is posted, so a true no-vig probability cannot be computed. 'Scaled heuristic' multiplies raw by an outcome-based factor fitted on the other week; it is a calibration, not vig removal. 90% interval of model minus scaled market: -0.024 to +0.003 per player-game (not computed for raw)."
  },
  "by_pos": {
   "QB": {

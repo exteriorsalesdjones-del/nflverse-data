@@ -27,8 +27,11 @@ Live model: `refresh/model_v03.py` (summary frozen in `refresh/v03_backtest.json
 - **What did not help:** opponent matchup (worse in both seasons), game script/projected plays, injuries and
   vacated touches, efficiency (YPC, catch rate over expected, aDOT, YAC), end-zone target share, recent-3-game
   role change, long-TD indicators (helped only the long-TD outcome itself).
-- **Market.** On 378 Week 3–4 player-games with FanDuel prices captured before kickoff, the de-vigged market
-  was more accurate than the model (log loss 0.548 vs 0.560; gap not significant, 90% −0.024 to +0.003).
+- **Market.** On 378 Week 3–4 player-games with FanDuel prices captured before kickoff (plus 12 BetMGM), the
+  books' raw implied chances (margin included) scored better than the model: log loss 0.550 vs 0.560.
+  Only the "Yes" side is posted, so a true no-vig probability cannot be computed. An outcome-scaled version
+  (raw × the other week's scoring rate ÷ raw implied; a calibration heuristic, *not* vig removal) scored 0.548;
+  the 90% interval of model minus that scaled market was −0.024 to +0.003 (not computed for raw).
   Correlation 0.87. **No evidence of an edge**, so "Value Play" stays off.
 - **Secondary stats.** The volume × rate formulas beat each player's average: rushing yards MAE 19.1 vs 21.2,
   receptions 1.22 vs 1.33, receiving yards 16.9 vs 18.6. For QB passing yards the formula ties the average;

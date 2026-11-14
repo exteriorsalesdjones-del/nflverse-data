@@ -93,7 +93,7 @@ function App() {
   // prices older than 2 hours for games kicking off in the next 24 hours (worth refreshing before lock)
   const soon = new Set(S.slate ? S.slate.games.filter((g) => { const k = FB.etToUtcMs(g.kickoff_et) - Date.now(); return k > 0 && k < 864e5; })
     .flatMap((g) => g.teams.flatMap((t) => t.candidates.map((c) => c.gsis_id))) : []);
-  const stale = S.slate ? allLineRows(S.slate.week).filter((r) => soon.has(r.gsis_id) && !FB.priceFresh(r, Date.now(), 120)).length : 0;
+  const stale = S.slate ? allLineRows(S.slate.week).filter((r) => soon.has(r.gsis_id) && !FB.priceFresh(r, Date.now())).length : 0;
   const tabs = TABS; const navValue = tab === "lines" ? "uploads" : tab === "picks" ? "board" : tab === "admin" ? false : tab;
   const fresh = S.meta && `Updated ${FB.fmtEt(Date.parse(S.meta.refreshed_at), { month: "short", day: "numeric" })} ET${(Date.now() - Date.parse(S.meta.refreshed_at)) / 3600e3 > 36 ? " · may be out of date" : ""}`;
   const View = { week: WeekView, parlays: ParlaysView, uploads: LinesView, lines: LinesView, defense: DefenseView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView }[tab];

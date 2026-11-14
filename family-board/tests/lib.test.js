@@ -156,3 +156,68 @@ test("uploaded prices: started games, future and old timestamps are rejected", (
   assert.match(FB.lineProblem({ captured_at: "2026-11-01T17:20:00Z" }, g, before), /7 days/);
   assert.strictEqual(FB.lineProblem({ captured_at: "2026-11-15T17:20:00Z" }, null, before), null); // unmatched rows still allowed
 });
+
+test("freshness policy: boundary at 120 minutes, future-dated and invalid times are not fresh", () => {
+  const now = Date.parse("2026-11-15T17:00:00Z");
+  assert.strictEqual(FB.PRICE_FRESH_MIN, 120);
+  assert.strictEqual(FB.priceFresh({ captured_at: "2026-11-15T15:00:00Z" }, now), true);   // exactly 120 min
+  assert.strictEqual(FB.priceFresh({ captured_at: "2026-11-15T14:59:00Z" }, now), false);  // 121 min
+  assert.strictEqual(FB.priceFresh({ captured_at: "2026-11-15T17:05:00Z" }, now), true);   // 5 min ahead: clock slack
+  assert.strictEqual(FB.priceFresh({ captured_at: "2026-11-15T17:11:00Z" }, now), false);  // 11 min ahead: invalid
+  assert.strictEqual(FB.priceFresh({ captured_at: "not a time" }, now), false);
+  assert.strictEqual(FB.priceFresh({}, now), false);
+});
+
+test("best price: worked cases (newest per book first, then best payout among fresh only)", () => {
+  const now = Date.parse("2026-11-15T17:00:00Z");
+  // FanDuel's older +300 is superseded by its newer +150; BetMGM +400 is stale; DraftKings +170 fresh -> DraftKings wins
+  const b = FB.bestPrice([
+    { book: "FanDuel", american: 300, captured_at: "2026-11-15T15:30:00Z" },
+    { book: "FanDuel", american: 150, captured_at: "2026-11-15T16:40:00Z" },
+    { book: "DraftKings", american: 170, captured_at: "2026-11-15T16:00:00Z" },
+    { book: "BetMGM", american: 400, captured_at: "2026-11-15T10:00:00Z" },
+    { book: "Caesars", american: 900, captured_at: "2026-11-15T18:30:00Z" },   // future-dated: ignored
+    { book: "BetRivers", american: 800, captured_at: "garbage" },              // invalid time: ignored
+    { book: "PointsBet", american: "abc", captured_at: "2026-11-15T16:50:00Z" } // invalid price: ignored
+  ], now);
+  assert.deepStrictEqual([b.book, b.american, b.stale, b.books], ["DraftKings", 170, false, 2]);
+  assert.deepStrictEqual(b.others.map((o) => [o.book, o.american]), [["FanDuel", 150]]);
+  // negative odds: -105 pays 1.952 per $1, -110 pays 1.909 -> -105 is better
+  assert.strictEqual(FB.bestPrice([{ book: "A", american: -110, captured_at: "2026-11-15T16:50:00Z" }, { book: "B", american: -105, captured_at: "2026-11-15T16:50:00Z" }], now).american, -105);
+  // +100 (2.00) beats -105 (1.952)
+  assert.strictEqual(FB.bestPrice([{ book: "A", american: 100, captured_at: "2026-11-15T16:50:00Z" }, { book: "B", american: -105, captured_at: "2026-11-15T16:50:00Z" }], now).book, "A");
+  // tie on price: the newer observation is shown
+  assert.strictEqual(FB.bestPrice([{ book: "A", american: 150, captured_at: "2026-11-15T16:10:00Z" }, { book: "B", american: 150, captured_at: "2026-11-15T16:40:00Z" }], now).book, "B");
+  // only stale prices: newest observation, flagged stale
+  const s = FB.bestPrice([{ book: "A", american: 400, captured_at: "2026-11-15T09:00:00Z" }, { book: "B", american: 200, captured_at: "2026-11-15T11:00:00Z" }], now);
+  assert.deepStrictEqual([s.book, s.stale], ["B", true]);
+  // nothing valid -> null (never a default price)
+  assert.strictEqual(FB.bestPrice([{ book: "A", american: 150, captured_at: "" }], now), null);
+});
+
+test("observation times: zone-less times are Eastern, not the browser's zone", () => {
+  assert.strictEqual(new Date(FB.parseObserved("2026-11-15 12:30")).toISOString(), "2026-11-15T17:30:00.000Z"); // EST = UTC-5
+  assert.strictEqual(new Date(FB.parseObserved("2026-09-13T12:30")).toISOString(), "2026-09-13T16:30:00.000Z"); // EDT = UTC-4
+  assert.strictEqual(new Date(FB.parseObserved("2026-11-15T12:30:00-05:00")).toISOString(), "2026-11-15T17:30:00.000Z");
+  assert.strictEqual(new Date(FB.parseObserved("2026-11-15T17:30:00.000Z")).toISOString(), "2026-11-15T17:30:00.000Z");
+  assert.ok(isNaN(FB.parseObserved("11/15 12:30pm")));
+  const r = FB.parseLines("A,ARI,FD,anytime,+150,2026-11-15 12:30\nB,ARI,FD,anytime,+150", "2026-11-15T17:45:00.000Z");
+  assert.deepStrictEqual(r.rows.map((x) => [x.captured_at, x.time_source]), [["2026-11-15T17:30:00.000Z", "provided"], ["2026-11-15T17:45:00.000Z", "upload time"]]);
+});
+
+test("only full-game anytime and 2+ markets are comparable", () => {
+  for (const m of ["1st Half Anytime TD", "2nd half anytime", "1Q anytime TD", "First TD Scorer", "Last TD", "1H Anytime"]) assert.strictEqual(FB.normMarket(m), null, m);
+  assert.strictEqual(FB.normMarket("Anytime TD Scorer"), "anytime_td");
+  assert.strictEqual(FB.normMarket("To Score 2+ Touchdowns"), "2plus_td");
+});
+
+test("model vs price: percentage points and EV per $1, worked by hand", () => {
+  // p = 0.50 at -150: implied 150/250 = 0.60; diff -10 pts; decimal 1 + 100/150 = 1.6667; EV = 0.5*0.6667 - 0.5 = -0.1667
+  const e = FB.edge(0.5, -150);
+  assert.ok(Math.abs(e.implied - 0.6) < 1e-12 && Math.abs(e.edgePts + 10) < 1e-9 && Math.abs(e.evPerDollar + 1 / 6) < 1e-9);
+  // p = 0.40 at +200: implied 1/3; +6.67 pts; EV = 0.4*2 - 0.6 = +0.20
+  const f = FB.edge(0.4, 200);
+  assert.ok(Math.abs(f.edgePts - 6.6667) < 1e-3 && Math.abs(f.evPerDollar - 0.2) < 1e-9);
+  assert.strictEqual(FB.edge(0.4, NaN), null);
+  assert.strictEqual(FB.edge(null, 200), null);
+});

@@ -33,9 +33,11 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
     games = json.loads(GAMES.read_text())
     started = [g for g in games if g["status"] != "upcoming" or kickoff_utc(g["kickoff_et"]) <= now]
     picks = {}
+    doc_updated = {}
     for f in Path(picks_dir, "picks").glob("*.json"):
         doc = json.loads(f.read_text())
         picks[f.stem] = (doc.get("data") or doc).get("items", {})
+        doc_updated[f.stem] = doc.get("updatedAt")  # server-written time of the member's last change to ANY pick (audit only)
     # parlays: exported the same way (ArtifactData list collection=parlays out_dir=<dir>) -> <dir>/parlays/<uid>.json
     gmap = {g["game_id"]: g for g in games}
     parlays = {}
@@ -57,12 +59,21 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
         frozen = {}
         for uid, items in picks.items():
             kick = kickoff_utc(g["kickoff_et"])
-            def before_kick(p):  # a pick timestamped after kickoff (device clock off) is left out and settles as "needs review"
+            def before_kick(p):
+                """Best-effort only. submitted_at is written by the member's device, so it is not trusted time:
+                a pick whose own timestamp is at or after kickoff is left out (it then settles as "needs review").
+                A device whose clock runs slow writes an early-looking time and is NOT caught here; the snapshot
+                itself (taken by the scheduled refresh after kickoff) is the real cut-off."""
                 t = p.get("submitted_at") or p.get("saved_at")
-                try:
-                    return t is None or datetime.fromisoformat(str(t).replace("Z", "+00:00")) <= kick
-                except ValueError:
+                if t is None:
                     return True
+                try:
+                    ts = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+                except ValueError:
+                    return False  # unreadable timestamp: not frozen, goes to review
+                if ts.tzinfo is None:
+                    return False
+                return ts < kick  # the UI locks AT kickoff, so a pick stamped exactly at kickoff is late too
             mine = {k: {"gsis_id": p["gsis_id"], "status": p["status"], "price": p.get("price")}
                     for k, p in items.items() if p.get("game_id") == gid and p.get("status") == "submitted" and before_kick(p)}
             if mine:
@@ -72,7 +83,9 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
             for pid, par in items.items():
                 if first_game(par) == gid:
                     fpar.setdefault(uid, {})[pid] = [l["gsis_id"] for l in par.get("legs", [])]
-        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen, "parlays": fpar}))
+        audit = {uid: doc_updated.get(uid) for uid in frozen if doc_updated.get(uid)}
+        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen, "parlays": fpar,
+                                                     "picks_doc_server_updated_at": audit}))
         made.append(gid)
     return made
 

@@ -148,7 +148,7 @@ export function allLineRows(week) {
 /* Best price across books (fresh = captured in the last 2 hours); stale fallback is flagged. */
 export function priceFor(c, week, market = "anytime_td") {
   const rows = allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market);
-  return FB.bestPrice(rows, Date.now(), 120);
+  return FB.bestPrice(rows, Date.now());
 }
 export function settlePick(uid, p) {
   const g = S.gameById[p.game_id];
@@ -171,10 +171,16 @@ async function savePicks(items) {
     return false;
   } finally { writing = false; }
 }
+/* What a pick or parlay leg records about the price at the moment it was made. A copy, so later uploads never change it. */
+export function priceRecord(pr, market = "anytime_td") {
+  if (!pr) return null;
+  return { american: pr.american, book: pr.book, market, captured_at: pr.captured_at, time_source: pr.time_source || null,
+    stale: !FB.priceFresh(pr, Date.now()), recorded_at: new Date().toISOString() };
+}
 function priceSnapshot(pr, stage) {
-  if (!pr) return { price: null, price_warning: `No live price at ${stage}.` };
-  return { price: { american: pr.american, book: pr.book, market: "anytime_td", captured_at: pr.captured_at },
-    price_warning: FB.priceFresh(pr, Date.now(), 120) ? null : `Price older than 2 hours at ${stage}.` };
+  if (!pr) return { price: null, price_warning: `No uploaded price at ${stage}.` };
+  const rec = priceRecord(pr);
+  return { price: rec, price_warning: rec.stale ? `Price was over ${FB.PRICE_FRESH_MIN / 60} hours old at ${stage}; it may not have been available.` : null };
 }
 export async function addPick(c) {
   const g = S.gameById[c.game_id]; const week = g.week;
@@ -197,6 +203,8 @@ export async function removePick(key) {
 export const markInactive = (c) => setOverride(c.gsis_id, c.full_name || c.player, c.team, "Inactive", "Game-day inactive");
 /* Match one of my uploaded rows that no player matched */
 export async function matchLine(row, c) {
+  const why = FB.lineProblem(row, S.gameById[c.game_id], Date.now());
+  if (why) { toast(`Can't match: ${why}.`); return; }
   const week = S.slate.week; const rows = (S.lines[S.uid] || []).map((r) => (r === row || (r.player === row.player && r.book === row.book && r.market === row.market && !r.gsis_id))
     ? { ...r, gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, matched_by_hand: true } : r);
   try { await S.db.doc(`lines/${S.uid}/weeks/w${week}`).set({ rows, updated_at: new Date().toISOString() }); toast(`Matched to ${c.full_name || c.player}.`); }
@@ -321,7 +329,10 @@ export async function uploadLines(rows, source) {
   if (!rows.length) { toast(skipped.length ? `Nothing saved. ${skipped.length} skipped: ${skipped[0].why}.` : "No usable prices found."); return false; }
   const week = S.slate.week; const key = (r) => `${r.gsis_id || r.player}|${r.book}|${r.market}`;
   const merged = Object.fromEntries((S.lines[S.uid] || []).map((r) => [key(r), r]));
-  rows.forEach((r) => { merged[key(r)] = r; });
+  // keep the newer OBSERVATION per player/book/market; an older screenshot never replaces a newer price
+  let older = 0;
+  rows.forEach((r) => { const cur = merged[key(r)]; if (cur && Date.parse(cur.captured_at) > Date.parse(r.captured_at)) { older++; return; } merged[key(r)] = r; });
+  if (older) skipped.push({ line: `${older} price(s)`, why: "a newer price from the same book was already uploaded" });
   try {
     await S.db.doc(`lines/${S.uid}`).set({ updated_at: now });
     await S.db.doc(`lines/${S.uid}/weeks/w${week}`).set({ rows: Object.values(merged).slice(-600), updated_at: now });
@@ -353,7 +364,8 @@ export async function readLinesShot(file, book) {
     const rows = await sample.json("Read this sportsbook screenshot of NFL player touchdown odds. Return a JSON array of objects {player, team, market, american} for every price visible in these markets only: Anytime Touchdown Scorer (market \"anytime\") and 2+ Touchdowns / To Score 2 or More (market \"2+\"). team is the NFL abbreviation if shown, else empty. american is a number like 180 or -120. Skip First TD, Last TD and every other market. Return only the array.", { images: [file] });
     // AI-read prices are staged for review; nothing goes live until the uploader confirms
     S.shotReview = (rows || []).map((r, i) => ({ id: i, player: String(r.player || ""), team: (r.team || "").toUpperCase(), market: normMarket(r.market) || "anytime_td",
-      american: FB.parseAmerican(r.american), book: book || "Screenshot", captured_at: new Date(file.lastModified || Date.now()).toISOString() }));
+      american: FB.parseAmerican(r.american), book: book || "Screenshot", captured_at: new Date(file.lastModified || Date.now()).toISOString(),
+      time_source: file.lastModified ? "screenshot file time" : "upload time" }));
     emit();
     toast(S.shotReview.length ? `Read ${S.shotReview.length} prices. Check them below, then confirm.` : "No anytime or 2+ TD prices found in that screenshot.");
   } catch (e) { toast(e && e.code === "not_granted" ? "Screenshot reading was declined." : "Couldn't read that screenshot. Paste the prices instead."); }
@@ -381,7 +393,7 @@ export async function saveParlay(name) {
   const id = "p" + Date.now().toString(36); const now = new Date().toISOString();
   const items = structuredClone(myParlays());
   items[id] = { id, name: name || `${legs.length}-leg parlay`, week: S.slate.week, status: "submitted", created_at: now,
-    legs: legs.map((l) => ({ ...l, price: (() => { const pr = priceFor(l, S.slate.week); return pr ? { american: pr.american, book: pr.book, captured_at: pr.captured_at } : null; })() })),
+    legs: legs.map((l) => ({ ...l, price: priceRecord(priceFor(l, S.slate.week)) })),
     model_p: FB.parlayChance(legs).p };
   try { await S.db.doc("parlays/" + S.uid).set({ items, updated_at: now }); S.draft = []; saveDraft(); toast("Parlay saved. It locks when its first game kicks off."); return true; }
   catch (e) { toast(e && e.code === "invalid_argument" ? "Your access is view-only, so parlays can't be saved." : "Couldn't save the parlay."); return false; }
