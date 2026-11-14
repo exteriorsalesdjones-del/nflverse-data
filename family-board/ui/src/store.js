@@ -156,6 +156,26 @@ export function priceFor(c, week, market = "anytime_td") {
   const rows = allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market);
   return FB.bestPrice(rows, Date.now());
 }
+/* Results dashboard rows: one per SUBMITTED pick (drafts are counted separately, parlays and backtests are not included).
+   state = the app's own settlement (settlePick); tds = qualifying TDs credited to the player in that game from the reconciled
+   touchdown log (rushing, receiving and return TDs; a QB's TD passes are credited to the receiver); null until final and loaded. */
+export function resultRows() {
+  const rows = []; let drafts = 0;
+  for (const [uid, d] of Object.entries(S.allPicks)) {
+    for (const p of Object.values(d.items || {})) {
+      if (p.status !== "submitted") { drafts++; continue; }
+      const g = S.gameById[p.game_id] || {};
+      const final = g.status === "final";
+      const r = settlePick(uid, p);
+      const tds = final && S.extrasLoaded ? S.tds.filter((t) => t.game_id === p.game_id && t.scorer_id === p.gsis_id).length : null;
+      rows.push({ season: +String(p.game_id).slice(0, 4) || (S.meta && S.meta.season), week: p.week, game_id: p.game_id, kickoff_ms: FB.etToUtcMs(g.kickoff_et),
+        matchup: g.away ? `${g.away} at ${g.home}` : p.game_id, uid, gsis_id: p.gsis_id, player: p.player, team: p.team, pos: p.pos, market: p.market || "anytime_td",
+        p: typeof p.model_p === "number" ? p.model_p : null, model_version: p.model_version || null, submitted_at: p.submitted_at || null,
+        price: p.price || null, state: r.state, why: r.why, tds, game_final: final });
+    }
+  }
+  return { rows, drafts };
+}
 export function settlePick(uid, p) {
   const g = S.gameById[p.game_id];
   const lock = S.locks[p.game_id] && S.locks[p.game_id].picks ? S.locks[p.game_id].picks[uid] || {} : undefined;

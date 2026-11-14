@@ -244,3 +244,85 @@ test("historical compatibility vs eligibility: an existing snapshot keeps a lega
   assert.strictEqual(FB.snapshotEligibility(legacy, fin).ok, false);
   assert.strictEqual(FB.settle(legacy, fin, [{ scorer_id: "00-1" }], ["00-1"], {}, later).state, "needs_review");
 });
+
+/* ---------------- Results dashboard: hand-worked fixture ----------------
+   2026 W1: A picks P1 (2 TDs, hit, p .5); B picks the same P1 (hit, p .4); A picks P2 (0 TDs, miss, p .2); A picks P3 (void)
+            plus an exact duplicate of A's P1 record (dropped, counted as duplicate)
+   2026 W2: A P4 hit (1 TD, p .3); A P5 miss (p .1); A P6 needs review
+   2026 W3: no picks (a gap, not 0%)
+   2026 W4: A P7 miss (p .6); B P8 miss (no saved probability)
+   2025 W1: A P9 hit (3 TDs, p .5)                                                                                  */
+const R = (season, week, uid, pid, state, tds, p, extra = {}) => ({ season, week, game_id: `${season}_${String(week).padStart(2, "0")}_G${pid}`, kickoff_ms: 0, uid, gsis_id: pid,
+  player: pid, team: pid === "P2" ? "BUF" : "KC", pos: pid === "P4" ? "WR" : "RB", market: "anytime_td", p, state, why: "", tds, game_final: true, ...extra });
+const FIX = [
+  R(2026, 1, "A", "P1", "win", 2, 0.5), { ...R(2026, 1, "B", "P1", "win", 2, 0.4) }, R(2026, 1, "A", "P2", "loss", 0, 0.2), R(2026, 1, "A", "P3", "void", 0, 0.3),
+  R(2026, 1, "A", "P1", "win", 2, 0.5),
+  R(2026, 2, "A", "P4", "win", 1, 0.3), R(2026, 2, "A", "P5", "loss", 0, 0.1), R(2026, 2, "A", "P6", "needs_review", null, 0.25),
+  R(2026, 4, "A", "P7", "loss", 0, 0.6), R(2026, 4, "B", "P8", "loss", 0, null),
+  R(2025, 1, "A", "P9", "win", 3, 0.5),
+];
+FIX[1].game_id = FIX[0].game_id; // B picked the same player-game as A
+
+test("dashboard summary: hits/misses only from settled picks; void, review, pending separate; duplicates dropped", () => {
+  const d = FB.dashboard(FIX, {});
+  // 10 records after dropping 1 duplicate: hits P1(A), P1(B), P4, P9 = 4; misses P2, P5, P7, P8 = 4
+  assert.deepStrictEqual([d.summary.n, d.summary.hits, d.summary.misses, d.summary.settled, d.summary.void, d.summary.review, d.summary.pending, d.summary.duplicates], [10, 4, 4, 8, 1, 1, 0, 1]);
+  assert.strictEqual(d.summary.hitRate, 0.5); assert.strictEqual(d.summary.missRate, 0.5);
+});
+
+test("dashboard weeks are season-aware, gaps stay gaps, cumulative rate uses running counts", () => {
+  const d = FB.dashboard(FIX, {});
+  assert.deepStrictEqual(d.weeks.map((w) => [w.season, w.week, w.hits, w.settled]), [[2025, 1, 1, 1], [2026, 1, 2, 3], [2026, 2, 1, 2], [2026, 4, 0, 2]]);
+  assert.ok(!d.weeks.some((w) => w.week === 3)); // no picks in week 3: absent, not 0%
+  // cumulative: 1/1, 3/4, 4/6, 4/8 -> final 0.5; the mean of weekly rates would be (1 + 2/3 + 1/2 + 0)/4 = 0.5417
+  assert.deepStrictEqual(d.cumulative.map((c) => [c.hits, c.settled]), [[1, 1], [3, 4], [4, 6], [4, 8]]);
+  assert.strictEqual(d.cumulative[3].hitRate, 0.5);
+});
+
+test("dashboard filters apply to every section consistently", () => {
+  const d = FB.dashboard(FIX, { filters: { season: 2026, pos: "RB" } });
+  const s = d.summary.settled;
+  assert.strictEqual(s, 6); // 2026 RB settled: P1(A), P1(B), P2, P5, P7, P8
+  assert.strictEqual(d.weeks.reduce((a, w) => a + w.settled, 0), s);
+  for (const k of ["member", "position", "team", "market", "probability"]) assert.strictEqual(d.categories[k].reduce((a, c) => a + c.settled, 0), s, k);
+  assert.strictEqual(d.touchdowns.selections + d.touchdowns.unknown, s);
+  assert.ok(d.rows.every((r) => r.season === 2026 && r.pos === "RB"));
+  assert.strictEqual(FB.dashboard(FIX, { filters: { weekFrom: 2, weekTo: 2, season: 2026 } }).summary.settled, 2);
+});
+
+test("touchdowns: per-selection totals repeat shared picks; unique player-game totals do not", () => {
+  const t = FB.dashboard(FIX, { filters: { season: 2026 } }).touchdowns;
+  // settled selections with known TDs: P1(A) 2, P1(B) 2, P2 0, P4 1, P5 0, P7 0, P8 0 -> 7 selections, 5 TDs
+  assert.deepStrictEqual([t.selections, t.perSelectionTotal, t.uniquePlayerGames, t.uniqueTotal], [7, 5, 6, 3]);
+  assert.deepStrictEqual(t.dist, { "0": 4, "1": 1, "2": 2, "3+": 0 });
+  assert.ok(Math.abs(t.avgPerSelection - 5 / 7) < 1e-12);
+  const u = FB.dashboard(FIX, { filters: { season: 2026 }, unit: "unique" });
+  assert.deepStrictEqual([u.summary.n, u.summary.hits, u.summary.settled], [8, 2, 6]); // P1 counted once
+});
+
+test("calibration uses only probabilities saved at pick time; worked Brier score", () => {
+  const c = FB.dashboard(FIX, { filters: { season: 2026 } }).calibration;
+  // p: .5 hit, .4 hit, .2 miss, .3 hit, .1 miss, .6 miss; P8 has none
+  assert.strictEqual(c.n, 6); assert.strictEqual(c.missing, 1); assert.strictEqual(c.observed, 3);
+  assert.ok(Math.abs(c.expected - 2.1) < 1e-12 && Math.abs(c.diff - 0.9) < 1e-12);
+  // Brier = (.25 + .36 + .04 + .49 + .01 + .36) / 6 = 1.51 / 6
+  assert.ok(Math.abs(c.brier - 1.51 / 6) < 1e-12);
+  assert.strictEqual(FB.dashboard(FIX.map((r) => ({ ...r, p: null })), {}).calibration, null);
+  assert.strictEqual(FB.dashboard(FIX.map((r) => ({ ...r, p: null })), {}).categories.probability[0].key, "Not recorded");
+});
+
+test("extremes list every tied week; week runs use the explicit expected-hits benchmark", () => {
+  const d = FB.dashboard(FIX, { filters: { season: 2026 } });
+  assert.deepStrictEqual(d.extremes.best.map((w) => w.week), [1]); assert.deepStrictEqual(d.extremes.worst.map((w) => w.week), [4]);
+  // W1: 2 hits vs expected 1.1 (above); W2: 1 vs 0.4 (above); W4 has a pick without a saved probability -> not compared
+  assert.deepStrictEqual([d.weekRuns.longestAbove, d.weekRuns.longestBelow, d.weekRuns.weeksCompared], [2, 0, 2]);
+  const tie = FB.dashboard([R(2026, 1, "A", "X", "win", 1, 0.5), R(2026, 2, "A", "Y", "win", 1, 0.5)], {});
+  assert.deepStrictEqual(tie.extremes.best.map((w) => w.week), [1, 2]);
+});
+
+test("empty and unsettled datasets never divide by zero or show 0% as a rate", () => {
+  const e = FB.dashboard([], {});
+  assert.deepStrictEqual([e.summary.n, e.summary.hitRate, e.weeks.length, e.calibration, e.touchdowns.avgPerSelection, e.extremes.best.length], [0, null, 0, null, null, 0]);
+  const p = FB.dashboard([R(2026, 10, "A", "Z", "pending", null, 0.3, { game_final: false })], {});
+  assert.deepStrictEqual([p.summary.pending, p.summary.settled, p.summary.hitRate, p.weeks[0].complete, p.weeks[0].hitRate], [1, 0, null, false, null]);
+});

@@ -10,6 +10,7 @@ import {
   addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { Icon, P } from "./icons.jsx";
+import { ResultsDashboard } from "./results.jsx";
 
 /* ---------- shared bits ---------- */
 const pct = (p) => (p == null || isNaN(p) ? "—" : (p * 100).toFixed(0) + "%");
@@ -774,13 +775,13 @@ export function BoardView({ mine: startMine }) {
   return (
     <Stack spacing={1.5}>
       <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-        <H2 sx={{ flex: 1 }}>{view === "mine" ? "My picks" : "Family board"}</H2>
+        <H2 sx={{ flex: 1 }}>{view === "mine" ? "My picks" : view === "results" ? "Results" : "Family board"}</H2>
         <ToggleButtonGroup exclusive size="small" value={view} onChange={(e, v) => v && setView(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 2, textTransform: "none" } }}>
-          <ToggleButton value="family">Family</ToggleButton><ToggleButton value="mine">Mine</ToggleButton>
+          <ToggleButton value="family">Family</ToggleButton><ToggleButton value="mine">Mine</ToggleButton><ToggleButton value="results">Results</ToggleButton>
         </ToggleButtonGroup>
       </Stack>
       <DbNote />
-      {view === "mine" ? <><MyPicks /><MyParlays /></> : <FamilyBoard />}
+      {view === "mine" ? <><MyPicks /><MyParlays /></> : view === "results" ? <ResultsDashboard /> : <FamilyBoard />}
     </Stack>
   );
 }
