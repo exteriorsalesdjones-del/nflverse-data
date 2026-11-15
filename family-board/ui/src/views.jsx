@@ -40,6 +40,13 @@ function MoveTag({ m, short }) {
     </Typography>
   );
 }
+/* "Above fair" marker: purple (green already means "better of FD/DK"). Fresh anytime prices only. */
+function AboveFair({ c, x, market }) {
+  const m = x ? FB.aboveFair(c.p, x, Date.now(), market) : null;
+  if (!m) return null;
+  return <Box component="span" title={`Model ${pct1(c.p)} vs book ${pct1(m.implied)} (margin included). Research marker: in testing, sportsbook prices predicted better than the model.`}
+    sx={{ color: "secondary.main", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>Above fair +{m.pts.toFixed(1)}</Box>;
+}
 /* Every book's latest price for one market: best in green, worst in red (labelled), each with its age and line move. */
 function BookList({ c, g, market }) {
   useStore(); const b = boardFor(c, g.week, market);
@@ -52,7 +59,7 @@ function BookList({ c, g, market }) {
           <Typography sx={{ fontWeight: 700, minWidth: 56, color: RANK_COLOR[x.rank] || "text.primary" }}><Num>{am(x.american)}</Num></Typography>
           <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }}>{x.book}{x.rank === "best" ? " · Best" : x.rank === "worst" ? " · Worst" : ""}</Typography>
           <Typography variant="caption" color="text.secondary">{ageTxt(x.age_min)}{x.fresh ? "" : " · old"}</Typography>
-          <MoveTag m={x.move} />
+          <MoveTag m={x.move} /><AboveFair c={c} x={x} market={market} />
         </Box>
       ))}
     </Box>
@@ -79,6 +86,7 @@ function FdDk({ c, g }) {
         {x ? <Num sx={{ fontWeight: 700, color: hi ? "success.main" : "text.primary" }}>{am(x.american)}</Num> : <Box component="span" sx={{ color: "text.secondary" }}>—</Box>}
         {x && !x.fresh && <Box component="span" sx={{ color: "text.secondary", fontSize: 12 }}>{ageTxt(x.age_min).replace(" ago", "")}</Box>}
         {x && x.move && <Box component="span" sx={{ fontSize: 12, color: x.move.dir === "longer" ? "success.main" : "error.main" }} title={`Opened ${am(x.move.from)}`}>{x.move.dir === "longer" ? "▲" : "▼"}</Box>}
+        <AboveFair c={c} x={x} market={S.weekMarket} />
         {hi && <Box component="span" sx={visuallyHidden}> (better price)</Box>}
         {x && x.move && <Box component="span" sx={visuallyHidden}>{` moved from ${am(x.move.from)}, ${x.move.dir === "longer" ? "pays more" : "pays less"}`}</Box>}
       </Box>
@@ -87,7 +95,7 @@ function FdDk({ c, g }) {
   return (
     <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75, mt: 0.25 }}>
       <Cell label="FD" x={fd} /><Cell label="DK" x={dk} />
-      {other && <Typography variant="caption" color="text.secondary">better at {other.book} {am(other.american)}</Typography>}
+      {other && <Typography variant="caption" color="text.secondary">better at {other.book} {am(other.american)} <AboveFair c={c} x={other} market={S.weekMarket} /></Typography>}
     </Box>
   );
 }
@@ -362,7 +370,7 @@ function PlayerSheet({ c, onClose }) {
           <BookList c={c} g={g} market={m} />
         </Box>
       ))}
-      <Typography variant="caption" color="text.secondary">Green = best price, red = worst. ▲ the price pays more than its first price this week, ▼ it pays less ("big" = 2+ points of implied chance). Value math uses only prices under 2 hours old.</Typography>
+      <Typography variant="caption" color="text.secondary">Green = best price, red = worst. ▲ the price pays more than its first price this week, ▼ it pays less ("big" = 2+ points of implied chance). Value math uses only prices under 2 hours old. <Box component="span" sx={{ color: "secondary.main", fontWeight: 700 }}>Above fair</Box> = an anytime price under 2 hours old whose implied chance is {FB.ABOVE_FAIR_PTS}+ points below the model's chance (the book pays clearly more than fair odds). It's the model's view, not a proven edge: in testing, sportsbook prices predicted better than the model.</Typography>
       <Box component="dl" sx={{ display: "grid", gridTemplateColumns: "minmax(110px, max-content) minmax(0,1fr)", gap: "6px 12px", m: 0 }}>
         {rows.map(([k, v]) => [<Typography key={k} component="dt" variant="body2" color="text.secondary">{k}</Typography>,
           <Typography key={k + "v"} component="dd" variant="body2" sx={{ m: 0 }}>{v}</Typography>])}

@@ -394,3 +394,25 @@ test("sportsbook team codes match the slate's codes (Rams LAR -> LA)", () => {
   assert.strictEqual(FB.matchOdds({ player: "Kyren Williams", team: "LAC" }, cands), null); // a different team still doesn't match
   assert.deepStrictEqual(["LAR", "JAC", "WSH", "LVR", "KC", ""].map(FB.normTeam), ["LA", "JAX", "WAS", "LV", "KC", ""]);
 });
+
+test("Above fair: fresh anytime price whose implied chance is 3+ points below the model's chance", () => {
+  const now = Date.parse("2026-11-15T16:00:00Z"); const at = (m) => new Date(now - m * 60000).toISOString();
+  // model 44% (fair +127). +150 -> implied 40.0% -> 4.0 points below: flagged
+  assert.deepStrictEqual(FB.aboveFair(0.44, { american: 150, captured_at: at(10) }, now), { pts: 4, implied: 0.4 });
+  // +135 -> implied 42.6% -> 1.4 points: better than fair but inside the threshold, not flagged
+  assert.strictEqual(FB.aboveFair(0.44, { american: 135, captured_at: at(10) }, now), null);
+  // exactly 3.0 points is flagged: model 43%, +150 (40%)
+  assert.strictEqual(FB.aboveFair(0.43, { american: 150, captured_at: at(10) }, now).pts, 3);
+  // stale price (over 2 h), 2+ TDs market, missing or invalid inputs: never flagged
+  assert.strictEqual(FB.aboveFair(0.44, { american: 200, captured_at: at(180) }, now), null);
+  assert.strictEqual(FB.aboveFair(0.2, { american: 900, captured_at: at(10), market: "2plus_td" }, now), null);
+  assert.strictEqual(FB.aboveFair(0.44, { american: 200, captured_at: at(10) }, now, "2plus_td"), null);
+  assert.strictEqual(FB.aboveFair(null, { american: 200, captured_at: at(10) }, now), null);
+  assert.strictEqual(FB.aboveFair(0.44, { american: "abc", captured_at: at(10) }, now), null);
+  // dashboard groups picks by the marker saved at pick time
+  const d = FB.dashboard([{ season: 2026, week: 10, game_id: "g", uid: "A", gsis_id: "1", market: "anytime_td", state: "win", above_fair: true, game_final: true, tds: 1 },
+    { season: 2026, week: 10, game_id: "g", uid: "A", gsis_id: "2", market: "anytime_td", state: "loss", above_fair: false, game_final: true, tds: 0 },
+    { season: 2026, week: 10, game_id: "g", uid: "A", gsis_id: "3", market: "anytime_td", state: "loss", game_final: true, tds: 0 }], {});
+  assert.deepStrictEqual(d.categories.above_fair.map((c) => [c.key, c.hits, c.misses]).sort(),
+    [["Above fair", 1, 0], ["Not above fair", 0, 1], ["Not checked (no fresh price, 2+ TDs, or older pick)", 0, 1]]);
+});

@@ -201,7 +201,7 @@ export function resultRows() {
       rows.push({ season: +String(p.game_id).slice(0, 4) || (S.meta && S.meta.season), week: p.week, game_id: p.game_id, kickoff_ms: FB.etToUtcMs(g.kickoff_et),
         matchup: g.away ? `${g.away} at ${g.home}` : p.game_id, uid, gsis_id: p.gsis_id, player: p.player, team: p.team, pos: p.pos, market: p.market || "anytime_td",
         p: typeof p.model_p === "number" ? p.model_p : null, model_version: p.model_version || null, submitted_at: p.submitted_at || null,
-        price: p.price || null, state: r.state, why: r.why, tds, game_final: final });
+        price: p.price || null, above_fair: typeof p.above_fair === "boolean" ? p.above_fair : null, state: r.state, why: r.why, tds, game_final: final });
     }
   }
   return { rows, drafts };
@@ -250,6 +250,14 @@ export async function addPick(c, market = S.weekMarket) {
   const two = market === "2plus_td"; const board = boardFor(c, week, market);
   Object.assign(pick, { key: FB.pickKey(week, c.gsis_id, market), status: "submitted", model_p: chanceFor(c, market), model_version: S.slate.model_version,
     ...(two ? { model_p_note: "2+ TD chance estimated from the anytime chance (Poisson)" } : {}),
+    // the "Above fair" marker as it stood at pick time, judged on the best FRESH anytime price (the one the marker uses):
+    // true / false when a fresh price existed, null otherwise (2+ TDs, or no price under 2 hours old)
+    ...(() => {
+      const fresh = !two && board ? board.books.find((x) => x.fresh) : null;
+      if (!fresh) return { above_fair: null };
+      const m = FB.aboveFair(c.p, fresh, Date.now());
+      return { above_fair: !!m, above_fair_price: { book: fresh.book, american: fresh.american, captured_at: fresh.captured_at, pts: m ? m.pts : null } };
+    })(),
     saved_at: now, submitted_at: now }, priceSnapshot(board && board.best, "submission", market));
   items[pick.key] = pick;
   if (await savePicks(items)) toast(`Picked ${pick.player}${two ? " for 2+ TDs" : ""}. Locks at kickoff.`, { label: "Undo", run: () => removePick(pick.key) });

@@ -6,7 +6,7 @@ import { FB, useStore, nameOf, resultRows, toast } from "./store.js";
 
 const pct1 = (x) => (x == null || isNaN(x) ? "—" : (x * 100).toFixed(1) + "%");
 const OUT = { hit: "Hit", miss: "Miss", void: "Void", pending: "Pending", review: "Needs review" };
-const CAT = { member: "Member", position: "Position", team: "Team", market: "Market", probability: "Saved probability" };
+const CAT = { member: "Member", position: "Position", team: "Team", market: "Market", probability: "Saved probability", above_fair: "Above fair at pick" };
 const MKT = { anytime_td: "Anytime TD" };
 const wkLabel = (w, multiSeason) => (multiSeason ? `${w.season} W${w.week}` : `W${w.week}`);
 

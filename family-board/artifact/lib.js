@@ -327,6 +327,17 @@
     out.sort(function (a, b) { return (b.move.big - a.move.big) || Math.abs(b.move.pts) - Math.abs(a.move.pts) || String(a.player).localeCompare(String(b.player)); });
     return out;
   }
+  /* "Above fair": a FRESH anytime-TD price whose implied chance (book margin included) is at least ABOVE_FAIR_PTS percentage
+     points below the model's chance, i.e. the book pays clearly more than the model's fair odds. A research marker only:
+     in testing the sportsbooks' own prices predicted better than the model. Returns {pts, implied} or null. */
+  var ABOVE_FAIR_PTS = 3;
+  function aboveFair(modelP, priceRow, nowMs, market) {
+    if ((market || (priceRow && priceRow.market) || "anytime_td") !== "anytime_td") return null;
+    if (!priceRow || !(modelP > 0 && modelP < 1) || !priceFresh(priceRow, nowMs)) return null;
+    var imp = americanToProb(priceRow.american); if (!isFinite(imp)) return null;
+    var pts = Math.round((modelP - imp) * 1000) / 10; // one decimal, as shown
+    return pts >= ABOVE_FAIR_PTS ? { pts: pts, implied: imp } : null;
+  }
   /* Chance of 2+ TDs from the anytime chance, treating a player's TDs as Poisson: P(1+) = p gives rate L = -ln(1-p);
      P(2+) = 1 - (1-p)(1+L). An estimate: on 2026 Weeks 1-9 (3,566 player-games) it predicted 89.9 two-TD games; 98 happened. */
   function p2plus(p) {
@@ -402,7 +413,8 @@
     function by(fn) { var m = {}; rs.forEach(function (r) { var k = fn(r); if (k == null) return; (m[k] = m[k] || []).push(r); });
       return Object.keys(m).map(function (k) { return Object.assign({ key: k }, tally(m[k])); }).sort(function (a, b) { return b.settled - a.settled || (a.key < b.key ? -1 : 1); }); }
     var categories = { member: by(function (r) { return r.uid; }), position: by(function (r) { return r.pos || "Unknown"; }), team: by(function (r) { return r.team || "Unknown"; }),
-      market: by(function (r) { return r.market; }), probability: by(function (r) { return probBand(r.p) || "Not recorded"; }) };
+      market: by(function (r) { return r.market; }), probability: by(function (r) { return probBand(r.p) || "Not recorded"; }),
+      above_fair: by(function (r) { return r.above_fair === true ? "Above fair" : r.above_fair === false ? "Not above fair" : "Not checked (no fresh price, 2+ TDs, or older pick)"; }) };
     // touchdowns (settled selections only)
     var known = settled.filter(function (r) { return r.tds != null; });
     var dist = { "0": 0, "1": 0, "2": 0, "3+": 0 };
@@ -444,7 +456,7 @@
     return { rows: rs, summary: summary, weeks: weeks, cumulative: cumulative, categories: categories, touchdowns: touchdowns, calibration: calibration, extremes: extremes, weekRuns: runs, smallN: SMALL_N };
   }
 
-  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };
