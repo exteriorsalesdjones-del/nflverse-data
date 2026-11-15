@@ -58,16 +58,37 @@ function BookList({ c, g, market }) {
     </Box>
   );
 }
-/* Week-tab row: the best price and its book (any age, age flagged), with its move since the week's first price. */
-function BestPrice({ c, g }) {
+/* Week-tab row: FanDuel and DraftKings side by side, the better payout highlighted green (a tie highlights neither).
+   Prices over 2 hours old show their age; a small arrow shows a move since the week's first price. If another book
+   beats both, a note says where; every book is listed in the player details. */
+const isFD = (b) => /^(fd|fan\s*duel)\b/i.test(String(b || "").trim());
+const isDK = (b) => /^(dk|draft\s*kings)\b/i.test(String(b || "").trim());
+function FdDk({ c, g }) {
   const S = useStore(); const b = boardFor(c, g.week, S.weekMarket);
-  if (!b) return <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>no price yet</Typography>;
+  const books = b ? b.books : []; const fd = books.find((x) => isFD(x.book)); const dk = books.find((x) => isDK(x.book));
+  const dec = (x) => FB.americanToDecimal(x.american);
+  const better = fd && dk && dec(fd) !== dec(dk) ? (dec(fd) > dec(dk) ? "FD" : "DK") : null;
+  const top = Math.max(fd ? dec(fd) : 0, dk ? dec(dk) : 0);
+  const other = books.find((x) => !isFD(x.book) && !isDK(x.book) && dec(x) > top);
+  const Cell = ({ label, x }) => {
+    const hi = better === label;
+    return (
+      <Box component="span" sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.5, px: 0.75, py: 0.125, borderRadius: 1, border: 1,
+        borderColor: hi ? "success.main" : "divider", bgcolor: hi ? "rgba(46,125,50,0.10)" : "transparent", whiteSpace: "nowrap" }}>
+        <Box component="span" sx={{ color: "text.secondary", fontSize: 12, fontWeight: 600 }}>{label}</Box>
+        {x ? <Num sx={{ fontWeight: 700, color: hi ? "success.main" : "text.primary" }}>{am(x.american)}</Num> : <Box component="span" sx={{ color: "text.secondary" }}>—</Box>}
+        {x && !x.fresh && <Box component="span" sx={{ color: "text.secondary", fontSize: 12 }}>{ageTxt(x.age_min).replace(" ago", "")}</Box>}
+        {x && x.move && <Box component="span" sx={{ fontSize: 12, color: x.move.dir === "longer" ? "success.main" : "error.main" }} title={`Opened ${am(x.move.from)}`}>{x.move.dir === "longer" ? "▲" : "▼"}</Box>}
+        {hi && <Box component="span" sx={visuallyHidden}> (better price)</Box>}
+        {x && x.move && <Box component="span" sx={visuallyHidden}>{` moved from ${am(x.move.from)}, ${x.move.dir === "longer" ? "pays more" : "pays less"}`}</Box>}
+      </Box>
+    );
+  };
   return (
-    <Typography variant="body2" sx={{ display: "inline-flex", flexWrap: "wrap", columnGap: 0.75, alignItems: "baseline" }}>
-      <Num sx={{ fontWeight: 700, color: b.n > 1 ? "success.main" : "text.primary" }}>{am(b.best.american)}</Num>
-      <Box component="span" sx={{ color: "text.secondary" }}>{b.best.book}{b.n > 1 ? ` · best of ${b.n}` : ""}{b.stale ? ` · ${ageTxt(b.best.age_min)}` : ""}</Box>
-      <MoveTag m={b.best.move} short />
-    </Typography>
+    <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75, mt: 0.25 }}>
+      <Cell label="FD" x={fd} /><Cell label="DK" x={dk} />
+      {other && <Typography variant="caption" color="text.secondary">better at {other.book} {am(other.american)}</Typography>}
+    </Box>
   );
 }
 const Num = ({ children, sx }) => <Box component="span" sx={{ fontVariantNumeric: "tabular-nums", ...sx }}>{children}</Box>;
@@ -269,7 +290,7 @@ function PlayerRow({ c, g, locked, onOpen, team }) {
           <Typography variant="body2" sx={{ fontWeight: 600 }}><Num>{pct(ch)}{two ? " est." : ""}</Num></Typography>
           <Typography variant="body2" color="text.secondary"><Num>fair {am(two ? FB.probToAmerican(ch) : c.fair_american)}</Num></Typography>
         </Stack>
-        <BestPrice c={c} g={g} />
+        <FdDk c={c} g={g} />
       </ButtonBase>
       <ParlayButton c={c} locked={locked} />
       <PickButton c={c} g={g} locked={locked} />
