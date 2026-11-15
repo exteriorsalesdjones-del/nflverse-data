@@ -25,13 +25,21 @@ Never paste the key into chat or commit it.
      `market_name[marketId]`, `handicap[marketId]`, `outcome_name[(marketId, outcomeId)]`.
      Find the anytime-TD market (and 2+ TDs) **by name** from the catalog, not by a hard-coded id: anytime TD is
      market name **"Player To Score TD (incl. overtime)"**, outcome **"Yes"** (overtime counts, as in the app's
-     grading). Several market ids can share that name (`TD_IDS` is a set). 2+ TDs: find its exact name in the catalog.
+     grading). Several market ids can share that name (`TD_IDS` is a set). Per OddsPapi's NFL player-props guide, the TD
+     scorer market can ship under more than one id on a fixture (e.g. 14388 and 144637) with outcomes named **Yes, 1+,
+     2+, 3+**: treat "Yes" and "1+" as anytime TD and **"2+" as the app's 2+ TDs market** (no separate market needed).
+     Book slugs: the guide uses `fanduel`; confirm DraftKings, BetMGM US and Caesars slugs from the bookmakers
+     endpoint (`/bookmakers`).
    - Odds per fixture: `call("odds", fixtureId=...)` → `odds["bookmakerOdds"][book_slug]["markets"][marketId]
      ["outcomes"][outcomeId]["players"][player_id]` = a price object with at least `active`. Skip books whose slug
      starts with `pinnacle+` or equals `demo` (internal test feeds), skip `suspended` books, skip inactive prices, and
      skip `player_id == "0"` (the game line). The price object carries `playerName`, `price` (**decimal odds**, confirmed by
-     the user's yardage example: 1.87 ≈ −115; convert to American) and `active`. Still unconfirmed: the timestamp field name — read one real
-     response first. Match `playerName` to gsis ids with the Uploads tab's player matcher; names come
+     the user's yardage example: 1.87 ≈ −115; convert to American) and `active`. From the docs (via web search; docs.oddspapi.io itself is blocked by this
+     environment's network settings): every price object also carries **`priceAmerican`** and `priceFractional`
+     (all three formats always returned), **`changedAt`** (ISO 8601, last change recorded by OddsPapi) and, in a live
+     example, **`bookmakerChangedAt`** (the book's own change time; the two can differ). Use `bookmakerChangedAt` as the
+     captured time when present, else `changedAt`, and record which one was used. Some books send `price` = 0 with
+     `active` = true: skip any price ≤ 1.0. Confirm all of this on one real response. Match `playerName` to gsis ids with the Uploads tab's player matcher; names come
      as **"Last, First"** ("Kupp, Cooper"), so flip them first and handle suffixes ("Jr.", "III").
    - **Duplicate books.** Many books are skins of one feed: the user's sample found 99 prop books but only 39
      independent price sets (one group of 21 sites, one of 10, one of 9). Group books whose full set of
@@ -62,6 +70,12 @@ Never paste the key into chat or commit it.
    optional "Pull now" button (fires the refresh scheduled task through the Claude Code Remote connector, admin only).
 3. Rules that stay: the refresh never writes to picks, parlays, lines, refs, odds, overrides or reviews; no database
    rule changes; push and publish only on the user's explicit "push and publish".
+
+## Sources consulted (web search, Nov 15 2026)
+- OddsPapi docs, Get odds: https://oddspapi.io/en/docs/get-odds
+- OddsPapi docs, Get markets: https://oddspapi.io/us/docs/get-markets
+- OddsPapi blog, NFL player props API: https://oddspapi.io/blog/nfl-player-props-api/
+- OddsPapi blog, JSON odds feed format: https://oddspapi.io/blog/json-odds-feed-format-parsing/
 
 ## User's reference code (v4)
 ```python
