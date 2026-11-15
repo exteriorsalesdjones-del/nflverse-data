@@ -9,6 +9,7 @@ const S = {
   meta: null, games: [], gameById: {}, tds: [], weekly: [], slate: null, validation: null, played: {}, recon: {},
   loadError: null,
   db: null, user: null, uid: null, canWrite: false, isAdmin: false, names: {},
+  live: { games: {}, hb: null, shownAt: {}, connected: false },
   allPicks: {}, odds: {}, locks: {}, reviews: {}, overrides: {}, refs: {}, extrasLoaded: false, lines: {}, parlaysAll: {}, draft: [], dbState: "connecting", downloads: null, sample: null,
   version: 0,
   weekMarket: (() => { try { return localStorage.getItem("fb_week_market") === "2plus_td" ? "2plus_td" : "anytime_td"; } catch (e) { return "anytime_td"; } })(),
@@ -133,6 +134,37 @@ export async function loadData() {
   emit();
 }
 
+/* ---------- live in-game touchdowns (provisional) ----------
+   The backend poller saves one create-only document per change in the shared "live" collection: kind "game" (a game's
+   full live state: score, clock, every touchdown with its state) or kind "heartbeat" (the last live check). Every viewer
+   listens to the same collection, so a new touchdown, a correction or an overturn reaches everyone without a reload.
+   Live touchdowns never settle a pick; settlement waits for the postgame reconciliation (reconGate). */
+export function applyLiveDocs(docs, nowMs = Date.now()) {
+  const games = {}; let hb = null; const week = S.slate && S.slate.week;
+  for (const d of docs) {
+    if (week && d.week && d.week !== week) continue;
+    if (d.kind === "heartbeat") { if (!hb || d.seq > hb.seq) hb = d; continue; }
+    if (d.kind === "game" && d.game_id && (!games[d.game_id] || d.seq > games[d.game_id].seq)) games[d.game_id] = d;
+  }
+  for (const g of Object.values(games)) for (const e of g.events || []) {
+    const k = `${g.game_id}:${e.key}:${e.state}:${e.scorer}`;
+    if (!S.live.shownAt[k]) S.live.shownAt[k] = nowMs;              // when this viewer first saw this version of the event
+  }
+  S.live = { ...S.live, games, hb, connected: true, receivedAt: nowMs };
+  emit();
+}
+function watchLive(db) {
+  db.collection("live").onSnapshot((s) => applyLiveDocs(s.docs.map((d) => d.data())),
+    () => { S.live = { ...S.live, connected: false }; emit(); setTimeout(() => watchLive(db), 3000 + Math.random() * 2000); });
+}
+/* The last successful live check (newest heartbeat or game document) and whether the feed is behind. */
+export function liveStatus(nowMs = Date.now()) {
+  const L = S.live; const times = Object.values(L.games).map((g) => Date.parse(g.checked_at)).concat(L.hb && L.hb.ok !== false ? [Date.parse(L.hb.checked_at)] : []).filter(isFinite);
+  const last = times.length ? Math.max(...times) : null;
+  const playing = S.games.filter((g) => g.status !== "final" && FB.isLocked(g, nowMs) && nowMs - FB.etToUtcMs(g.kickoff_et) < 5 * 3600e3);
+  const failing = L.hb && L.hb.ok === false && Date.parse(L.hb.checked_at) >= (last || 0);
+  return { last, playing: playing.length, delayed: playing.length > 0 && (!last || nowMs - last > 12 * 60e3 || failing), error: failing ? L.hb.error : null, active: !!last && nowMs - last < 12 * 60e3 };
+}
 export async function connect() {
   if (!window.claude || !window.claude.use) { S.dbState = "off"; emit(); return; }
   const timer = setTimeout(() => { if (S.dbState === "connecting") { S.dbState = "slow"; emit(); } }, 10000);
@@ -170,6 +202,7 @@ export async function connect() {
     });
   }, fail);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshLines(); });
+  watchLive(db);
   db.collection("parlays").onSnapshot((s) => { S.parlaysAll = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
   db.collection("refs").onSnapshot((s) => { S.refs = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
   db.collection("overrides").onSnapshot((s) => { S.overrides = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);

@@ -7,11 +7,12 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { visuallyHidden } from "@mui/utils";
 import { Icon, P } from "./icons.jsx";
 import { ResultsDashboard } from "./results.jsx";
+import { LivePanel } from "./live.jsx";
 
 /* ---------- shared bits ---------- */
 const pct = (p) => (p == null || isNaN(p) ? "—" : (p * 100).toFixed(0) + "%");
@@ -502,6 +503,7 @@ export function TouchdownsView() {
     <Stack spacing={1.5}>
       <H2>Touchdowns</H2>
       <ResultsStatus />
+      <LivePanel />
       <Box sx={{ overflowX: "auto", mx: -0.5, px: 0.5, pb: 0.5 }}>
         <ToggleButtonGroup exclusive size="small" value={String(wk)} onChange={(e, v) => { if (v) { setF({ ...f, week: v === "all" ? "all" : +v, game: "" }); setLimit(30); } }}
           sx={{ "& .MuiToggleButton-root": { minWidth: 48, minHeight: 44, px: 1.5 } }}>
@@ -543,6 +545,7 @@ function ResultsStatus() {
   const now = Date.now(); const last = Date.parse(m.refreshed_at); const ago = Math.round((now - last) / 60000);
   const inWindow = S.games.some((g) => { const k = FB.etToUtcMs(g.kickoff_et); return now >= k && now - k <= 9 * 3600e3; });
   const live = S.games.filter((g) => g.status !== "final" && FB.isLocked(g, now)).length;
+  const liveOn = liveStatus(now).active;
   const busy = !!(S.refresh && S.refresh.busy); const t = { weekday: "short", hour: "numeric", minute: "2-digit" };
   return (
     <Alert severity={inWindow && ago > 75 ? "warning" : "info"} icon={false} sx={{ borderRadius: 2 }}>
@@ -557,7 +560,9 @@ function ResultsStatus() {
       {S.refresh && S.refresh.msg && <Typography variant="body2" role="status" sx={{ mt: 0.5, fontWeight: 600 }}>{S.refresh.msg}</Typography>}
       <Typography variant="caption" sx={{ display: "block", mt: 0.5 }}>
         Source: {m.td_source || "nflverse play-by-play, published after each game ends"}.
-        {live > 0 && ` ${live} game${live > 1 ? "s are" : " is"} in progress: touchdowns appear after the game ends and the source publishes them.`}
+        {live > 0 && (liveOn
+          ? ` ${live} game${live > 1 ? "s are" : " is"} in progress: live touchdowns appear below as the live feed publishes them; final results are verified after each game.`
+          : ` ${live} game${live > 1 ? "s are" : " is"} in progress: touchdowns appear after the game ends and the source publishes them.`)}
         {inWindow && ago > 75 && " Results may be delayed: the latest check hasn't come through. These are the last successful results."}
         {" "}Picks and parlay legs settle only after a final game's touchdowns match the official score and each scorer matches the official player stats.
       </Typography>
@@ -582,7 +587,8 @@ function WeekGlance({ w, pickGame, game }) {
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
         {games.slice().sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et)).map((g) => {
           if (g.status !== "final") {
-            const started = FB.isLocked(g, Date.now());
+            const started = FB.isLocked(g, Date.now()); const lv = S.live.games[g.game_id];
+            if (started && lv) return <Chip key={g.game_id} variant="outlined" color="error" label={`${g.away} ${lv.away_score ?? "–"} · ${g.home} ${lv.home_score ?? "–"} · Live (provisional)`} sx={{ height: 40 }} />;
             return <Chip key={g.game_id} variant="outlined" label={`${g.away} at ${g.home} · ${started ? "In progress: results after the game" : kick(g)}`} sx={{ height: 40, color: "text.secondary" }} />;
           }
           const rec = S.recon[g.game_id]; const waiting = rec && rec.awaiting_source;
