@@ -1315,26 +1315,34 @@ function LineMoves({ week, market }) {
 /* =========================== WEEKLY RANKINGS (Week tab) =========================== */
 const RANK_VIEWS = [["value", "Best Value"], ["chance", "Highest TD Chance"], ["combined", "Combined"]];
 const edgeTxt = (e) => (e < 0.05 ? "+<0.1" : `+${e.toFixed(1)}`) + " pts";
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* unavailable */ } } };
+/* Price used for a ranked row: book, odds and the time of the ODDS (captured, or upload time when that's all there is), in ET. */
+function PriceUsed({ b }) {
+  const when = et(b.captured_at, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  return <>{b.book} {am(b.american)} · {b.time_source === "upload time" ? "uploaded" : "captured"} {when}</>;
+}
+const StaleTag = ({ children = "Stale odds" }) => <Box component="span" sx={{ color: "warning.main", fontWeight: 700, whiteSpace: "nowrap" }}>{children}</Box>;
 function WeeklyRankings({ onOpen }) {
-  const S = useStore(); const [view, setView] = useState("value"); const [all, setAll] = useState(false); const [, tick] = useState(0);
-  useEffect(() => { const iv = setInterval(() => tick((n) => n + 1), 60000); return () => clearInterval(iv); }, []); // drop games at kickoff
-  useEffect(() => { setAll(false); }, [view, S.weekMarket]);
+  const S = useStore(); const [all, setAll] = useState(false); const [, tick] = useState(0);
+  const [open, setOpen] = useState(() => store.get("fb_rank_open") === "1");          // collapsed on the first visit
+  const [chosen, setChosen] = useState(() => store.get("fb_rank_view"));               // null until the user picks a view
+  useEffect(() => { const iv = setInterval(() => tick((n) => n + 1), 60000); return () => clearInterval(iv); }, []); // kickoff + stale ages
   const r = weekRankings(S.weekMarket); if (!r) return null;
+  const view = RANK_VIEWS.some(([k]) => k === chosen) ? chosen : r.value.length ? "value" : "chance";
+  const pick = (v) => { if (!v) return; setChosen(v); store.set("fb_rank_view", v); setAll(false); };
+  const toggle = () => { const n = !open; setOpen(n); store.set("fb_rank_open", n ? "1" : "0"); };
   const two = S.weekMarket === "2plus_td"; const est = two ? " est." : "";
   const list = r[view]; const shown = all ? list : list.slice(0, 10);
   const mk = two ? "2+ TDs" : "Anytime TD";
   const NOTE = {
-    value: `Model ${two ? "2+ TD chance (estimate)" : "TD chance"} minus the chance implied by the best eligible ${mk} price (book margin included). Eligible = uploaded in the last 2 hours. Only players above the model's fair odds are listed.`,
+    value: `Model ${two ? "2+ TD chance (estimate)" : "TD chance"} minus the chance implied by the best ${mk} price (book margin included): the best price under 2 hours old, or the best last-known price when every price is older. Only players above the model's fair odds are listed.`,
     chance: `Every available player in games still open, by the model's ${two ? "estimated 2+ TD chance" : "TD chance"}, priced or not.`,
     combined: "Players from Best Value, ranked by the average of their value rank and their TD-chance rank within that group (lower is better). Ties: higher chance, then higher edge.",
   };
   const Row = ({ x, i }) => {
     const g = x.g; const c = x.c;
-    const line = view === "chance" ? `Model ${pct(x.chance)}${est} · fair ${am(x.fair)}`
-      : view === "value" ? `Model ${pct(x.chance)}${est} · fair ${am(x.fair)} · ${x.best.book} ${am(x.best.american)}`
-      : `Value #${x.valueRank} · Chance #${x.chanceRank} · Model ${pct(x.chance)}${est}`;
+    const rank = view === "value" ? x.valueRank : i + 1;
     const right = view === "chance" ? null : view === "value" ? edgeTxt(x.edgePts) : x.score.toFixed(1);
-    const rank = view === "combined" ? i + 1 : view === "value" ? x.valueRank : i + 1;
     return (
       <ButtonBase component="li" onClick={() => onOpen({ ...c, _g: g })} aria-label={`${x.name}, rank ${rank}. Open player details`}
         sx={{ display: "flex", width: "100%", textAlign: "left", gap: 1, py: 0.75, minHeight: 52, borderBottom: 1, borderColor: "divider", justifyContent: "flex-start", alignItems: "center" }}>
@@ -1342,31 +1350,41 @@ function WeeklyRankings({ onOpen }) {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography sx={{ fontWeight: 600, lineHeight: 1.3 }}>{x.name} <Typography component="span" variant="caption" color="text.secondary">{c.pos} · {c.team}</Typography></Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{g.away} at {g.home} · {kick(g)}</Typography>
-          <Typography variant="body2"><Num>{line}</Num>{view === "combined" && <> · Edge <Num>{edgeTxt(x.edgePts)}</Num></>}</Typography>
+          <Typography variant="body2"><Num>{view === "combined" ? `Value #${x.valueRank} · Chance #${x.chanceRank} · Model ${pct(x.chance)}${est} · Edge ${edgeTxt(x.edgePts)}` : `Model ${pct(x.chance)}${est} · fair ${am(x.fair)}`}</Num></Typography>
+          {view !== "chance" && <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}><PriceUsed b={x.best} />{x.stale && <> · <StaleTag /></>}</Typography>}
         </Box>
-        {right && <Box sx={{ textAlign: "right", flexShrink: 0 }}>
+        {right && <Box sx={{ textAlign: "right", flexShrink: 0, maxWidth: 96 }}>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.1 }}>{view === "value" ? "Edge" : "Score"}</Typography>
-          <Typography sx={{ fontWeight: 700, color: view === "value" ? "success.main" : "text.primary" }}><Num>{right}</Num></Typography>
+          <Typography sx={{ fontWeight: 700, color: view === "value" ? (x.stale ? "text.primary" : "success.main") : "text.primary" }}><Num>{right}</Num></Typography>
+          {x.stale && <Typography variant="caption" sx={{ display: "block", lineHeight: 1.15, color: "warning.main" }}>Based on stale odds</Typography>}
         </Box>}
       </ButtonBase>
     );
   };
   return (
     <Card variant="outlined" sx={{ borderRadius: 2 }}>
-      <CardContent sx={{ display: "grid", gap: 1, pb: "12px !important" }}>
-        <Typography variant="h6" component="h3">Weekly Rankings · {mk}</Typography>
-        <ToggleButtonGroup exclusive fullWidth size="small" value={view} onChange={(e, v) => v && setView(v)} aria-label="Ranking view"
-          sx={{ "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none", fontWeight: 600, px: 0.5, lineHeight: 1.15 } }}>
-          {RANK_VIEWS.map(([k, l]) => <ToggleButton key={k} value={k}>{l}</ToggleButton>)}
-        </ToggleButtonGroup>
-        <Typography variant="caption" color="text.secondary">{NOTE[view]}</Typography>
-        {!list.length ? <Empty>{view === "chance" ? "No open games with model chances." : r.valueEmpty}</Empty> : (
-          <Box component="ol" sx={{ m: 0, p: 0, listStyle: "none" }} aria-label={`${RANK_VIEWS.find((v) => v[0] === view)[1]} ranking`}>
-            {shown.map((x, i) => <Row key={x.key} x={x} i={i} />)}
-          </Box>
-        )}
-        {list.length > 10 && <Box><Button onClick={() => setAll(!all)}>{all ? "Show top 10" : `Show all ${list.length}`}</Button></Box>}
-      </CardContent>
+      <ButtonBase onClick={toggle} aria-expanded={open} aria-controls="weekly-rankings"
+        sx={{ display: "flex", width: "100%", textAlign: "left", px: 1.5, py: 1, gap: 1, minHeight: 52, justifyContent: "flex-start" }}>
+        <Typography variant="h6" component="h3" sx={{ flex: 1 }}>Weekly Rankings · {mk}</Typography>
+        {!open && r.value.length > 0 && <Typography variant="caption" color="text.secondary">{r.value.length} above fair</Typography>}
+        <Icon d={P.expand} sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s", color: "text.secondary" }} />
+      </ButtonBase>
+      {open && (
+        <CardContent id="weekly-rankings" sx={{ display: "grid", gap: 1, pt: 0, pb: "12px !important" }}>
+          <ToggleButtonGroup exclusive fullWidth size="small" value={view} onChange={(e, v) => pick(v)} aria-label="Ranking view"
+            sx={{ "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none", fontWeight: 600, px: 0.5, lineHeight: 1.15 } }}>
+            {RANK_VIEWS.map(([k, l]) => <ToggleButton key={k} value={k}>{l}</ToggleButton>)}
+          </ToggleButtonGroup>
+          <Typography variant="caption" color="text.secondary">{NOTE[view]}</Typography>
+          {view !== "chance" && r.staleNote && list.length > 0 && <Alert severity="warning" sx={{ borderRadius: 2, py: 0 }}>{r.staleNote}</Alert>}
+          {!list.length ? <Empty>{view === "chance" ? "No open games with model chances." : r.valueEmpty}</Empty> : (
+            <Box component="ol" sx={{ m: 0, p: 0, listStyle: "none" }} aria-label={`${RANK_VIEWS.find((v) => v[0] === view)[1]} ranking`}>
+              {shown.map((x, i) => <Row key={x.key} x={x} i={i} />)}
+            </Box>
+          )}
+          {list.length > 10 && <Box><Button onClick={() => setAll(!all)}>{all ? "Show top 10" : `Show all ${list.length}`}</Button></Box>}
+        </CardContent>
+      )}
     </Card>
   );
 }

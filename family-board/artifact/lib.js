@@ -340,14 +340,16 @@
   }
   /* ================= Weekly Rankings (pure; tested in tests/lib.test.js) =================
      items: one per player in a game still open, for ONE market: {key, name, chance (model probability for that market),
-     prices: [uploaded price rows for that player and market]}. A price is eligible under the app's existing rules:
-     valid American odds, not future-dated, and fresh (under PRICE_FRESH_MIN); the best eligible price is the highest
-     payout among each book's latest fresh price. Edge = chance - implied probability of that price, in points
-     (book margin included). Ranks use standard competition ranking (ties share the best rank: 1, 2, 2, 4). */
+     prices: [uploaded price rows for that player and market]}. Each book contributes its latest valid price (valid
+     American odds, not future-dated; a newer observation replaces the older one). The price used is the best payout
+     among FRESH prices (under PRICE_FRESH_MIN) when any exist; otherwise the best last-known price, flagged stale.
+     Age always comes from the price's own captured/upload time, never from when the model was refreshed.
+     Edge = chance - implied probability of that price, in points (book margin included). Ranks use standard
+     competition ranking (ties share the best rank: 1, 2, 2, 4). */
   function bestEligiblePrice(rows, nowMs) {
     var b = bookBoard(rows, nowMs); if (!b) return null;
-    for (var i = 0; i < b.books.length; i++) if (b.books[i].fresh) return b.books[i];
-    return null;
+    for (var i = 0; i < b.books.length; i++) if (b.books[i].fresh) return Object.assign({}, b.books[i], { stale: false });
+    return Object.assign({}, b.books[0], { stale: true }); // all stale: best last-known price
   }
   function competitionRanks(list, cmp) {
     var ranks = [];
@@ -362,7 +364,7 @@
     var priced = ok.map(function (it) {
       var best = bestEligiblePrice(it.prices, nowMs); if (!best) return null;
       var implied = americanToProb(best.american);
-      return Object.assign({}, it, { fair: probToAmerican(it.chance), best: best, implied: implied, edgePts: (it.chance - implied) * 100 });
+      return Object.assign({}, it, { fair: probToAmerican(it.chance), best: best, stale: best.stale, implied: implied, edgePts: (it.chance - implied) * 100 });
     }).filter(Boolean);
     var value = priced.filter(function (x) { return x.edgePts > 0; })
       .sort(function (a, b) { return b.edgePts - a.edgePts || b.chance - a.chance || byName(a, b); });
@@ -373,8 +375,10 @@
     byChance.forEach(function (x, i) { x.chanceRank = cr[i]; });
     var combined = value.map(function (x) { return Object.assign({}, x, { score: (x.valueRank + x.chanceRank) / 2 }); })
       .sort(function (a, b) { return a.score - b.score || b.chance - a.chance || b.edgePts - a.edgePts || byName(a, b); });
-    var empty = value.length ? null : priced.length ? "No players above model fair value" : "No eligible sportsbook prices available";
-    return { chance: chance, value: value, combined: combined, valueEmpty: empty, eligiblePriced: priced.length };
+    var empty = value.length ? null : priced.length ? "No players above model fair value" : "No sportsbook prices uploaded for this market";
+    var staleRows = value.filter(function (x) { return x.stale; }).length;
+    return { chance: chance, value: value, combined: combined, valueEmpty: empty, eligiblePriced: priced.length,
+      staleNote: !value.length || !staleRows ? null : staleRows === value.length ? "Showing last-known odds. All displayed prices are 2+ hours old." : "Some odds are 2+ hours old." };
   }
 
   /* Chance of 2+ TDs from the anytime chance, treating a player's TDs as Poisson: P(1+) = p gives rate L = -ln(1-p);

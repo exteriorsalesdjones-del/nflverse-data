@@ -444,17 +444,30 @@ test("Best Value: only positive edges, largest first; zero and negative excluded
   assert.ok(r.value.every((x) => x.edgePts > 0));
 });
 
-test("Best Value: stale and missing odds are not eligible; the empty message depends on the data", () => {
-  // a stale price paying more is ignored in favour of the best FRESH price
+test("Best Value: fresh first, else the best last-known (stale) price; empty messages depend on the data", () => {
+  // a stale price paying more is passed over while a FRESH price exists
   const r = FB.weeklyRankings([it("A", 0.4, [px("BetMGM", 400, 180), px("FanDuel", 160)])], RNOW);
-  assert.deepStrictEqual([r.value[0].best.book, r.value[0].best.american], ["FanDuel", 160]);
-  // only stale prices / no prices: "No eligible sportsbook prices available"
-  assert.strictEqual(FB.weeklyRankings([it("A", 0.4, [px("BetMGM", 400, 180)]), it("B", 0.3)], RNOW).valueEmpty, "No eligible sportsbook prices available");
-  assert.strictEqual(FB.weeklyRankings([it("A", 0.4)], RNOW).valueEmpty, "No eligible sportsbook prices available");
-  // fresh prices exist but none beats the model: "No players above model fair value"
+  assert.deepStrictEqual([r.value[0].best.book, r.value[0].best.american, r.value[0].stale, r.staleNote], ["FanDuel", 160, false, null]);
+  // all prices stale: the best last-known price is used, flagged stale, same edge formula
+  const s = FB.weeklyRankings([it("A", 0.4, [px("BetMGM", 400, 180), px("FanDuel", 160, 150)])], RNOW);
+  assert.deepStrictEqual([s.value[0].best.book, s.value[0].best.american, s.value[0].stale], ["BetMGM", 400, true]);
+  assert.strictEqual(s.value[0].edgePts.toFixed(1), "20.0"); // 40% - 20%
+  assert.strictEqual(s.staleNote, "Showing last-known odds. All displayed prices are 2+ hours old.");
+  // a price crossing the 2-hour mark stays and turns stale
+  const before = FB.weeklyRankings([it("A", 0.4, [px("FanDuel", 200, 119)])], RNOW); const after = FB.weeklyRankings([it("A", 0.4, [px("FanDuel", 200, 121)])], RNOW);
+  assert.deepStrictEqual([before.value.length, before.value[0].stale, after.value.length, after.value[0].stale], [1, false, 1, true]);
+  // mixed: some rows fresh, some stale
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.4, [px("FanDuel", 200)]), it("B", 0.4, [px("FanDuel", 200, 300)])], RNOW).staleNote, "Some odds are 2+ hours old.");
+  // no prices at all for this market
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.4), it("B", 0.3)], RNOW).valueEmpty, "No sportsbook prices uploaded for this market");
+  // prices exist (fresh or stale) but none beats the model
   assert.strictEqual(FB.weeklyRankings([it("A", 0.3, [px("FanDuel", 100)])], RNOW).valueEmpty, "No players above model fair value");
-  // future-dated or invalid prices are not eligible either
-  assert.strictEqual(FB.weeklyRankings([it("A", 0.4, [px("FanDuel", 200, -60), px("DraftKings", "abc")])], RNOW).valueEmpty, "No eligible sportsbook prices available");
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.3, [px("FanDuel", 100, 300)])], RNOW).valueEmpty, "No players above model fair value");
+  // future-dated or invalid prices never count
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.4, [px("FanDuel", 200, -60), px("DraftKings", "abc")])], RNOW).valueEmpty, "No sportsbook prices uploaded for this market");
+  // a newer price from the same book replaces its older one (even when the older one paid more)
+  const n = FB.weeklyRankings([it("A", 0.4, [px("FanDuel", 300, 30), px("FanDuel", 180, 5)])], RNOW);
+  assert.deepStrictEqual([n.value[0].best.american, n.value[0].stale], [180, false]);
 });
 
 test("Highest TD Chance: every valid chance, with or without prices; invalid chances left out", () => {
@@ -462,7 +475,7 @@ test("Highest TD Chance: every valid chance, with or without prices; invalid cha
   assert.deepStrictEqual(r.chance.map((x) => [x.name, x.fair]), [["A", -150], ["B", 150], ["C", 400]]);
   // no sportsbook prices at all: Highest TD Chance still fills, Best Value says so
   const none = FB.weeklyRankings([it("A", 0.6), it("B", 0.4)], RNOW);
-  assert.deepStrictEqual([none.chance.length, none.value.length, none.combined.length, none.valueEmpty], [2, 0, 0, "No eligible sportsbook prices available"]);
+  assert.deepStrictEqual([none.chance.length, none.value.length, none.combined.length, none.valueEmpty], [2, 0, 0, "No sportsbook prices uploaded for this market"]);
 });
 
 test("Combined: average of value rank and chance rank within the Best Value group; ties by chance, then edge", () => {

@@ -197,7 +197,8 @@ export function weekRankings(market = S.weekMarket, nowMs = Date.now()) {
     if (FB.isLocked(g, nowMs)) continue;
     for (const t of g.teams) for (const c0 of t.candidates) {
       const c = effCand(c0); if (c.quality === "unavailable") continue;
-      items.push({ key: c.gsis_id, name: c.full_name || c.player, chance: chanceFor(c, market), prices: byPid[c.gsis_id] || [], c, g });
+      const prices = (byPid[c.gsis_id] || []).filter((r) => !r.game_id || r.game_id === g.game_id); // tied to this game
+      items.push({ key: c.gsis_id, name: c.full_name || c.player, chance: chanceFor(c, market), prices, c, g });
     }
   }
   return FB.weeklyRankings(items, nowMs);
