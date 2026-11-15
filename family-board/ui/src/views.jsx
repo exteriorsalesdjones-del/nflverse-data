@@ -401,7 +401,7 @@ export function TouchdownsView() {
       {rows.slice(0, limit).map((t) => <PlayCard key={t.key} t={t} onOpen={() => setPlay(t)} />)}
       {rows.length > limit && <Button variant="outlined" size="large" onClick={() => setLimit(limit + 50)}>Show more ({rows.length - limit} left)</Button>}
       {rows.length === 0 && <Empty>No touchdowns match these filters.</Empty>}
-      <Fold title="Pre-game reads, weeks 1-9" summary="Each game as it looked before kickoff (results not shown)"><PregameReads /></Fold>
+      <Fold title="Pre-game reads, weeks 1-10" summary="Each game as it looked before kickoff (results not shown)"><PregameReads /></Fold>
       <Fold title="Defender leaderboard" summary="Receiving TDs allowed, from Pro Football Reference charting"><Leaderboard /></Fold>
       <Fold title="Defender credits on these plays" summary="Only where charting points to one defender"><Defenders rows={rows} open={setPlay} /></Fold>
       <Fold title="About this data" summary="Checks against official scores, and attribution coverage by week"><Coverage /></Fold>
@@ -1119,11 +1119,12 @@ function ShotReview() {
 
 /* =========================== BLIND PRE-GAME READS =========================== */
 function PregameReads() {
-  const S = useStore(); const [w, setW] = useState("1"); const [open, setOpen] = useState(null);
+  const S = useStore(); const [pick, setW] = useState(null); const [open, setOpen] = useState(null);
   useEffect(() => { ensurePregame(); }, []);
   if (S.pregame === undefined) return <LinearProgress aria-label="Loading pre-game reads" />;
   if (!S.pregame) return <Typography variant="body2" color="text.secondary">The pre-game reads couldn't be loaded. Try again after the next refresh.</Typography>;
   const weeks = Object.keys(S.pregame.weeks).sort((a, b) => a - b);
+  const w = pick && S.pregame.weeks[pick] ? pick : weeks[weeks.length - 1];  // opens on the latest week
   const games = S.pregame.weeks[w] || [];
   const fav = (g) => { const m = /^(\S+) (-[\d.]+)/.exec(g.line || ""); return m ? `${m[1]} ${m[2].replace("-", "−")}` : null; };
   return (
