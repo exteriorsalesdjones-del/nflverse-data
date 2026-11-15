@@ -185,13 +185,17 @@
 
   /* Match an imported odds row to a slate candidate by normalized name and team. */
   function normName(s) { return String(s || "").toLowerCase().replace(/\b(jr|sr|ii|iii|iv)\b\.?/g, "").replace(/[^a-z]/g, ""); }
+  /* Sportsbook / screenshot team codes -> the nflverse codes the slate uses (books write the Rams as "LAR", nflverse "LA"). */
+  var TEAM_ALIAS = { LAR: "LA", STL: "LA", JAC: "JAX", WSH: "WAS", LVR: "LV", OAK: "LV", SD: "LAC", KAN: "KC", GNB: "GB", NWE: "NE",
+    NOR: "NO", SFO: "SF", TAM: "TB", ARZ: "ARI", BLT: "BAL", CLV: "CLE", HST: "HOU" };
+  function normTeam(t) { var u = String(t || "").trim().toUpperCase(); return TEAM_ALIAS[u] || u; }
   function matchOdds(row, candidates) {
     var n = normName(row.player);
     var hits = candidates.filter(function (c) {
       var full = normName(c.full_name || c.player), abbr = normName(c.player);
       return full === n || abbr === n || (c.player && n.length > 3 && full.endsWith(n.slice(1)) && n[0] === abbr[0]);
     });
-    if (row.team) hits = hits.filter(function (c) { return c.team === row.team; });
+    if (row.team) { var tm = normTeam(row.team); hits = hits.filter(function (c) { return normTeam(c.team) === tm; }); }
     return hits.length === 1 ? hits[0] : null;
   }
 
@@ -443,6 +447,6 @@
   var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
-    normName: normName, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };
+    normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };
   if (typeof module !== "undefined") module.exports = api; else root.FB = api;
 })(this);

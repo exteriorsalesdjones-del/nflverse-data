@@ -158,8 +158,22 @@ export const slateCands = () => (S.slate ? S.slate.games.flatMap((g) => g.teams.
 export const myItems = () => (S.allPicks[S.uid] && S.allPicks[S.uid].items) || {};
 const liveOddsRows = (week) => { const d = S.odds["w" + week]; return d && d.status === "live" ? (d.rows || []).map((r) => ({ ...r, uploaded_by: d.reviewed_by || d.imported_by })) : []; };
 /* Every live price row for the slate week: admin imports plus everyone's uploads. */
+/* A row saved without a player match (e.g. a screenshot that wrote the Rams as "LAR" before team codes were translated)
+   is matched again when read, using the current rules. Nothing is written back; a row only matches a game it was
+   captured before the kickoff of. */
+let rematchCache = { key: null, map: new Map() };
+function rematch(r) {
+  if (r.gsis_id || !S.slate) return r;
+  if (rematchCache.key !== S.slate) rematchCache = { key: S.slate, map: new Map() };
+  const k = `${r.player}|${r.team}`; let m = rematchCache.map.get(k);
+  if (m === undefined) { m = FB.matchOdds(r, slateCands()) || null; rematchCache.map.set(k, m); }
+  if (!m) return r;
+  const g = S.gameById[m.game_id]; const t = Date.parse(r.captured_at);
+  if (!g || !isFinite(t) || t >= FB.etToUtcMs(g.kickoff_et)) return r;
+  return { ...r, gsis_id: m.gsis_id, game_id: m.game_id, team: m.team, player: m.full_name || m.player, matched_on_read: true };
+}
 export function allLineRows(week) {
-  const up = S.slate && week === S.slate.week ? Object.entries(S.lines).flatMap(([uid, rows]) => rows.map((r) => ({ ...r, uploaded_by: uid }))) : [];
+  const up = S.slate && week === S.slate.week ? Object.entries(S.lines).flatMap(([uid, rows]) => rows.map((r) => rematch({ ...r, uploaded_by: uid }))) : [];
   return liveOddsRows(week).concat(up);
 }
 /* Best price across books (fresh = captured in the last 2 hours); stale fallback is flagged. */
@@ -373,7 +387,7 @@ export async function uploadLines(rows, source) {
   rows = rows.filter((r) => { const ok = r.player && r.market && isFinite(r.american) && Math.abs(r.american) >= 100; if (!ok) skipped.push({ line: `${r.player || "?"} ${r.american}`, why: "missing player, market or valid price" }); return ok; });
   if (!rows.length) { S.lastSkipped = skipped; emit(); toast(skipped.length ? `Nothing saved: ${skipped.length} row(s) skipped (see list).` : "No usable prices found. Each needs a player and a price like +180."); return false; }
   const cands = slateCands(); const now = new Date().toISOString();
-  rows = rows.map((r) => { const m = FB.matchOdds(r, cands); return { ...r, gsis_id: m ? m.gsis_id : null, game_id: m ? m.game_id : null, team: r.team || (m ? m.team : ""), player: m ? (m.full_name || m.player) : r.player, source, uploaded_at: now }; });
+  rows = rows.map((r) => { const m = FB.matchOdds(r, cands); return { ...r, gsis_id: m ? m.gsis_id : null, game_id: m ? m.game_id : null, team: m ? m.team : FB.normTeam(r.team), player: m ? (m.full_name || m.player) : r.player, source, uploaded_at: now }; });
   rows = rows.filter((r) => { const why = FB.lineProblem(r, r.game_id ? S.gameById[r.game_id] : null, Date.now()); if (why) skipped.push({ line: `${r.player} ${r.book} ${r.american}`, why }); return !why; });
   if (!rows.length) { toast(skipped.length ? `Nothing saved. ${skipped.length} skipped: ${skipped[0].why}.` : "No usable prices found."); return false; }
   const week = S.slate.week; const key = (r) => `${r.gsis_id || r.player}|${r.book}|${r.market}`;

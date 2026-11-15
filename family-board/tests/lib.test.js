@@ -383,3 +383,14 @@ test("2+ TDs: Poisson estimate from the anytime chance, and settlement needs two
   // a 2+ pick and an anytime pick on the same player have different keys
   assert.notStrictEqual(FB.pickKey(10, "00-1", "2plus_td"), FB.pickKey(10, "00-1"));
 });
+
+test("sportsbook team codes match the slate's codes (Rams LAR -> LA)", () => {
+  const cands = [{ gsis_id: "00-0037254", player: "K.Williams", full_name: "Kyren Williams", team: "LA" },
+    { gsis_id: "00-1", player: "J.Williams", full_name: "Javonte Williams", team: "DAL" }, { gsis_id: "00-2", player: "T.McBride", full_name: "Trey McBride", team: "ARI" }];
+  assert.strictEqual(FB.matchOdds({ player: "Kyren Williams", team: "LAR" }, cands).gsis_id, "00-0037254");
+  assert.strictEqual(FB.matchOdds({ player: "Kyren Williams", team: "LA" }, cands).gsis_id, "00-0037254");
+  assert.strictEqual(FB.matchOdds({ player: "Kyren Williams", team: "lar " }, cands).gsis_id, "00-0037254");
+  assert.strictEqual(FB.matchOdds({ player: "Trey McBride", team: "ARZ" }, cands).gsis_id, "00-2");
+  assert.strictEqual(FB.matchOdds({ player: "Kyren Williams", team: "LAC" }, cands), null); // a different team still doesn't match
+  assert.deepStrictEqual(["LAR", "JAC", "WSH", "LVR", "KC", ""].map(FB.normTeam), ["LA", "JAX", "WAS", "LV", "KC", ""]);
+});
