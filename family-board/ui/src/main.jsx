@@ -103,7 +103,7 @@ function App() {
       <CssBaseline />
       <AppBar position="static" elevation={0}>
         <Toolbar sx={{ minHeight: 52, px: "max(16px, env(safe-area-inset-left, 0px))", gap: 1 }}>
-          <Typography component="h1" sx={{ fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 700, fontSize: 22, textTransform: "uppercase", letterSpacing: "0.02em", flex: 1 }} noWrap>Anytime TD Family Board</Typography>
+          <Typography component="h1" sx={{ fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 700, fontSize: 22, textTransform: "uppercase", letterSpacing: "0.02em", flex: 1 }} noWrap>NFL Anytime TD Research</Typography>
           <Typography variant="caption" sx={{ opacity: 0.85, display: { xs: "none", sm: "block" } }}>{fresh}</Typography>
           {S.isAdmin && <Button color="inherit" startIcon={<Icon d={P.admin} />} onClick={() => { location.hash = "admin"; }} sx={{ minHeight: 44 }}>Admin</Button>}
         </Toolbar>

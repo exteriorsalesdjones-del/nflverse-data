@@ -1,4 +1,4 @@
-# Anytime TD Family Board
+# NFL Anytime TD Research (formerly Anytime TD Family Board)
 
 A private Claude artifact for a family group: research the NFL slate, save anytime-TD picks, track results,
 and browse every 2026 touchdown with evidence-based defender responsibility.
