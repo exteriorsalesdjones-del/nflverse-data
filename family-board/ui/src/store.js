@@ -91,19 +91,21 @@ export async function connect() {
   db.collection("locks").onSnapshot((s) => { S.locks = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
   // shared lines: one marker doc per uploader, their rows for each week in a subcollection
   // A week is stored in up to LINE_PARTS documents (w10, w10_p2, ...) because one document holds at most 256 KB.
-  const lineSubs = {}; const parts = {};
+  // A listener can be ended by the platform (e.g. while a phone is in another app); a fresh subscription is the only
+  // recovery, so each part re-subscribes after an error. Prices are also re-read whenever the page becomes visible again.
+  const lineSubs = {}; linePartsByUid = {};
+  const setPart = (uid, i, rows) => { linePartsByUid[uid][i] = rows; S.lines[uid] = dedupeLines(linePartsByUid[uid].flat()); S.linesLoadedAt = Date.now(); emit(); };
+  const watchPart = (uid, i) => db.doc(`lines/${uid}/weeks/${linePartId(S.slate.week, i)}`).onSnapshot(
+    (w) => setPart(uid, i, w.exists ? (w.data().rows || []) : []),
+    () => setTimeout(() => watchPart(uid, i), 3000 + Math.random() * 2000));
   db.collection("lines").onSnapshot((s) => {
     s.docs.forEach((d) => {
       if (lineSubs[d.id] || !S.slate) return;
-      lineSubs[d.id] = true; parts[d.id] = [];
-      for (let i = 0; i < LINE_PARTS; i++) {
-        db.doc(`lines/${d.id}/weeks/${linePartId(S.slate.week, i)}`).onSnapshot((w) => {
-          parts[d.id][i] = w.exists ? (w.data().rows || []) : [];
-          S.lines[d.id] = dedupeLines(parts[d.id].flat()); emit();
-        }, () => {});
-      }
+      lineSubs[d.id] = true; linePartsByUid[d.id] = [];
+      for (let i = 0; i < LINE_PARTS; i++) watchPart(d.id, i);
     });
   }, fail);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshLines(); });
   db.collection("parlays").onSnapshot((s) => { S.parlaysAll = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
   db.collection("refs").onSnapshot((s) => { S.refs = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
   db.collection("overrides").onSnapshot((s) => { S.overrides = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
@@ -412,6 +414,19 @@ export const normMarket = FB.normMarket;
 /* rows plus .skipped [{line, why}] so the upload message can say what was left out */
 export function parseLinesCsv(text) { const r = FB.parseLines(text); const rows = r.rows; rows.skipped = r.skipped; return rows; }
 /* ---------- saved prices: split across documents ---------- */
+let linePartsByUid = {};
+/* Re-read every uploader's price documents once (on returning to the page, or the Refresh odds button). */
+export async function refreshLines() {
+  if (!S.db || !S.slate) return false;
+  try {
+    await Promise.all(Object.keys(linePartsByUid).map(async (uid) => {
+      const docs = await Promise.all(Array.from({ length: LINE_PARTS }, (_, i) => S.db.doc(`lines/${uid}/weeks/${linePartId(S.slate.week, i)}`).get()));
+      linePartsByUid[uid] = docs.map((w) => (w.exists ? (w.data().rows || []) : []));
+      S.lines[uid] = dedupeLines(linePartsByUid[uid].flat());
+    }));
+    S.linesLoadedAt = Date.now(); emit(); return true;
+  } catch (e) { return false; }
+}
 export const LINE_PARTS = 6, LINE_PART_ROWS = 400, LINE_MAX_ROWS = LINE_PARTS * LINE_PART_ROWS; // 400 rows ≈ 160 KB per document
 export const linePartId = (week, i) => (i === 0 ? `w${week}` : `w${week}_p${i + 1}`);
 const lineKey = (r) => `${r.gsis_id || r.player}|${r.book}|${r.market}`;
@@ -438,6 +453,9 @@ async function saveLineRows(uid, rows) {
     const had = i === 0 || ((S.lines[uid] || []).length > i * LINE_PART_ROWS) || chunk.length;
     if (had) await S.db.doc(`lines/${uid}/weeks/${linePartId(week, i)}`).set({ rows: chunk, part: i + 1, updated_at: now });
   }
+  // what was just saved is shown at once, even if the live listener is slow or has stopped
+  linePartsByUid[uid] = Array.from({ length: LINE_PARTS }, (_, i) => all.slice(i * LINE_PART_ROWS, (i + 1) * LINE_PART_ROWS));
+  S.lines[uid] = all; S.linesLoadedAt = Date.now(); emit();
   return dropped;
 }
 export async function uploadLines(rows, source) {

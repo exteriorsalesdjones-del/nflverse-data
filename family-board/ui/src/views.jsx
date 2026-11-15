@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { visuallyHidden } from "@mui/utils";
 import { Icon, P } from "./icons.jsx";
@@ -1322,6 +1322,19 @@ function PriceUsed({ b }) {
   return <>{b.book} {am(b.american)} · {b.time_source === "upload time" ? "uploaded" : "captured"} {when}</>;
 }
 const StaleTag = ({ children = "Stale odds" }) => <Box component="span" sx={{ color: "warning.main", fontWeight: 700, whiteSpace: "nowrap" }}>{children}</Box>;
+/* Newest sportsbook price time loaded for this market (the odds' own time, never the model's "Updated" time). */
+function OddsThrough({ market }) {
+  const S = useStore(); const [busy, setBusy] = useState(false);
+  const ts = allRows(S.slate.week).filter((r) => (r.market || "anytime_td") === market).map((r) => Date.parse(r.captured_at)).filter((t) => isFinite(t));
+  const newest = ts.length ? new Date(Math.max(...ts)).toISOString() : null;
+  return (
+    <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
+      <Typography variant="caption" color="text.secondary">{newest ? `Odds through ${et(newest, { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "No odds uploaded yet for this market"}</Typography>
+      <Button size="small" disabled={busy || !S.db} onClick={async () => { setBusy(true); const ok = await refreshLines(); setBusy(false); toast(ok ? "Odds refreshed." : "Couldn't refresh the odds. Try again in a moment."); }}
+        sx={{ minHeight: 36, flexShrink: 0 }}>{busy ? "Refreshing…" : "Refresh odds"}</Button>
+    </Stack>
+  );
+}
 function WeeklyRankings({ onOpen }) {
   const S = useStore(); const [all, setAll] = useState(false); const [, tick] = useState(0);
   const [open, setOpen] = useState(() => store.get("fb_rank_open") === "1");          // collapsed on the first visit
@@ -1377,6 +1390,7 @@ function WeeklyRankings({ onOpen }) {
       </ButtonBase>
       {open && (
         <CardContent id="weekly-rankings" sx={{ display: "grid", gap: 1, pt: 0, pb: "12px !important" }}>
+          <OddsThrough market={S.weekMarket} />
           <ToggleButtonGroup exclusive fullWidth size="small" value={view} onChange={(e, v) => pick(v)} aria-label="Ranking view"
             sx={{ "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none", fontWeight: 600, px: 0.5, lineHeight: 1.15 } }}>
             {RANK_VIEWS.map(([k, l]) => <ToggleButton key={k} value={k}>{l}</ToggleButton>)}
