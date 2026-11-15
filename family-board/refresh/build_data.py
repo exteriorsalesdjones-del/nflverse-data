@@ -800,7 +800,10 @@ def save_predictions(slate: dict, games_out: list) -> int:
     """Keep each player's latest pregame chance per game; games that have kicked off are frozen."""
     path = OUT / "predictions.json"
     preds = json.loads(path.read_text()) if path.exists() else {}
-    locked = {g["game_id"] for g in games_out if g["status"] != "upcoming"}
+    # frozen from kickoff (Eastern time), not only once final: a game in progress must keep its pregame record
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    locked = {g["game_id"] for g in games_out if g["status"] != "upcoming" or datetime.fromisoformat(g["kickoff_et"]) <= now}
     n = 0
     for g in slate.get("games", []):
         if g["game_id"] in locked:
