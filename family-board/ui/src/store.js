@@ -11,7 +11,12 @@ const S = {
   db: null, user: null, uid: null, canWrite: false, isAdmin: false, names: {},
   allPicks: {}, odds: {}, locks: {}, reviews: {}, overrides: {}, refs: {}, extrasLoaded: false, lines: {}, parlaysAll: {}, draft: [], dbState: "connecting", downloads: null, sample: null,
   version: 0,
+  weekMarket: (() => { try { return localStorage.getItem("fb_week_market") === "2plus_td" ? "2plus_td" : "anytime_td"; } catch (e) { return "anytime_td"; } })(),
 };
+/* Week tab: Anytime TD or 2+ TDs. Remembered on this device only. */
+export function setWeekMarket(m) { S.weekMarket = m === "2plus_td" ? "2plus_td" : "anytime_td"; try { localStorage.setItem("fb_week_market", S.weekMarket); } catch (e) { /* storage unavailable */ } emit(); }
+/* Chance shown for a market: the model's anytime chance, or the labeled Poisson estimate for 2+ TDs. */
+export const chanceFor = (c, market = S.weekMarket) => (market === "2plus_td" ? FB.p2plus(c.p) : c.p);
 const subs = new Set();
 function emit() { S.version++; subs.forEach((f) => f()); }
 export function useStore() {
@@ -162,6 +167,11 @@ export function priceFor(c, week, market = "anytime_td") {
   const rows = allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market);
   return FB.bestPrice(rows, Date.now());
 }
+/* Every book's latest price for a player and market (best payout first, ages shown), and this week's line moves. */
+export function boardFor(c, week, market = "anytime_td") {
+  return FB.bookBoard(allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market), Date.now());
+}
+export function weekMoves(week) { return FB.lineMoves(allLineRows(week), Date.now()); }
 /* Results dashboard rows: one per SUBMITTED pick (drafts are counted separately, parlays and backtests are not included).
    state = the app's own settlement (settlePick); tds = qualifying TDs credited to the player in that game from the reconciled
    touchdown log (rushing, receiving and return TDs; a QB's TD passes are credited to the receiver); null until final and loaded. */
@@ -211,22 +221,24 @@ export function priceRecord(pr, market = "anytime_td") {
   return { american: pr.american, book: pr.book, market, captured_at: pr.captured_at, time_source: pr.time_source || null,
     stale: !FB.priceFresh(pr, Date.now()), recorded_at: new Date().toISOString() };
 }
-function priceSnapshot(pr, stage) {
+function priceSnapshot(pr, stage, market = "anytime_td") {
   if (!pr) return { price: null, price_warning: `No uploaded price at ${stage}.` };
-  const rec = priceRecord(pr);
+  const rec = priceRecord(pr, market);
   return { price: rec, price_warning: rec.stale ? `Price was over ${FB.PRICE_FRESH_MIN / 60} hours old at ${stage}; it may not have been available.` : null };
 }
-export async function addPick(c) {
+export async function addPick(c, market = S.weekMarket) {
   const g = S.gameById[c.game_id]; const week = g.week;
   const items = structuredClone(myItems());
-  const pick = { week, game_id: c.game_id, gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, market: "anytime_td" };
+  const pick = { week, game_id: c.game_id, gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, market };
   const errs = FB.validatePick(items, pick, g, Date.now());
   if (errs.length) { toast(errs[0]); return; }
   const now = new Date().toISOString();
-  Object.assign(pick, { key: FB.pickKey(week, c.gsis_id), status: "submitted", model_p: c.p, model_version: S.slate.model_version,
-    saved_at: now, submitted_at: now }, priceSnapshot(priceFor(c, week), "submission"));
+  const two = market === "2plus_td"; const board = boardFor(c, week, market);
+  Object.assign(pick, { key: FB.pickKey(week, c.gsis_id, market), status: "submitted", model_p: chanceFor(c, market), model_version: S.slate.model_version,
+    ...(two ? { model_p_note: "2+ TD chance estimated from the anytime chance (Poisson)" } : {}),
+    saved_at: now, submitted_at: now }, priceSnapshot(board && board.best, "submission", market));
   items[pick.key] = pick;
-  if (await savePicks(items)) toast(`Picked ${pick.player}. Locks at kickoff.`, { label: "Undo", run: () => removePick(pick.key) });
+  if (await savePicks(items)) toast(`Picked ${pick.player}${two ? " for 2+ TDs" : ""}. Locks at kickoff.`, { label: "Undo", run: () => removePick(pick.key) });
 }
 export async function removePick(key) {
   const items = structuredClone(myItems()); const p = items[key]; if (!p) return;
@@ -368,7 +380,17 @@ export async function uploadLines(rows, source) {
   const merged = Object.fromEntries((S.lines[S.uid] || []).map((r) => [key(r), r]));
   // keep the newer OBSERVATION per player/book/market; an older screenshot never replaces a newer price
   let older = 0;
-  rows.forEach((r) => { const cur = merged[key(r)]; if (cur && Date.parse(cur.captured_at) > Date.parse(r.captured_at)) { older++; return; } merged[key(r)] = r; });
+  rows.forEach((r) => {
+    const cur = merged[key(r)];
+    if (cur && Date.parse(cur.captured_at) > Date.parse(r.captured_at)) {
+      older++; // an older screenshot never replaces a newer price, but it can be an earlier opening price
+      const openMs = Date.parse(cur.open_captured_at || cur.captured_at);
+      if (Date.parse(r.captured_at) < openMs) merged[key(r)] = { ...cur, open_american: r.american, open_captured_at: r.captured_at };
+      return;
+    }
+    // keep the first price seen from this book this week, so line moves can be shown after it is replaced
+    merged[key(r)] = cur ? { ...r, open_american: cur.open_american ?? cur.american, open_captured_at: cur.open_captured_at || cur.captured_at } : r;
+  });
   if (older) skipped.push({ line: `${older} price(s)`, why: "a newer price from the same book was already uploaded" });
   try {
     await S.db.doc(`lines/${S.uid}`).set({ updated_at: now });

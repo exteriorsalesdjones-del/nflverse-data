@@ -106,11 +106,12 @@
       }
     }
     if (game.status !== "final") return { state: "pending", why: started ? "Game in progress." : "Game not started." };
-    var scored = (tds || []).some(function (t) { return t.scorer_id === pick.gsis_id; });
-    if (scored) return { state: "win", why: "Scored a touchdown." };
+    var need = pick.market === "2plus_td" ? 2 : 1;
+    var count = (tds || []).filter(function (t) { return t.scorer_id === pick.gsis_id; }).length;
+    if (count >= need) return { state: "win", why: need === 2 ? "Scored " + count + " touchdowns." : "Scored a touchdown." };
     if (!played) return { state: "needs_review", why: "Participation not published yet." };
     if (played.indexOf(pick.gsis_id) === -1) return { state: "void", why: "Did not play (house rule: void)." };
-    return { state: "loss", why: "Played, no touchdown." };
+    return { state: "loss", why: need === 2 && count === 1 ? "Played, one touchdown (2+ needed)." : "Played, no touchdown." };
   }
 
   /* Eligibility of a submitted pick for a NEW kickoff snapshot. submitted_at is written by the member's device, so this
@@ -268,6 +269,67 @@
       others: pool.slice(1).map(function (r) { return { book: r.book, american: r.american, captured_at: r.captured_at }; }) });
   }
 
+  /* ================= Book comparison and line moves (pure; tested in tests/lib.test.js) =================
+     rows: price rows for ONE player and ONE market, from any member's uploads. A row may carry open_american /
+     open_captured_at: the first price its uploader saw from that book this week (kept when a newer price replaced it). */
+  var BIG_MOVE_PTS = 2; // a move of 2+ percentage points of implied chance is flagged as big
+  function validRows(rows, nowMs) {
+    return (rows || []).filter(function (r) { var t = observedMs(r); return isFinite(parseAmerican(r.american)) && isFinite(t) && t <= nowMs + FUTURE_SLACK_MIN * 60000; });
+  }
+  function bookOpen(rows, book) {
+    // earliest observation of this book's price across every uploader (open_* when present, else the row itself)
+    var best = null;
+    rows.forEach(function (r) {
+      if ((r.book || "Unknown book") !== book) return;
+      var oa = r.open_american != null ? r.open_american : r.american, ot = r.open_captured_at || r.captured_at, ms = parseObserved(ot);
+      if (!isFinite(parseAmerican(oa)) || !isFinite(ms)) return;
+      if (!best || ms < best.ms) best = { american: parseAmerican(oa), captured_at: ot, ms: ms };
+    });
+    return best;
+  }
+  function moveOf(open, cur) {
+    if (!open || open.american === cur.american) return null;
+    var pts = (americanToProb(cur.american) - americanToProb(open.american)) * 100;
+    return { from: open.american, from_at: open.captured_at, to: cur.american, pts: pts,
+      dir: americanToDecimal(cur.american) > americanToDecimal(open.american) ? "longer" : "shorter", big: Math.abs(pts) >= BIG_MOVE_PTS };
+  }
+  /* Every book's latest price, best payout first. best/worst are set only when 2+ books differ in price. Age is shown,
+     never used to drop a book; `fresh` (under PRICE_FRESH_MIN) is what value/EV math may use. */
+  function bookBoard(rows, nowMs, maxAgeMin) {
+    var ok = validRows(rows, nowMs); if (!ok.length) return null;
+    var perBook = {};
+    ok.forEach(function (r) { var k = r.book || "Unknown book"; if (!perBook[k] || observedMs(r) > observedMs(perBook[k])) perBook[k] = r; });
+    var books = Object.keys(perBook).map(function (k) {
+      var r = perBook[k], am = parseAmerican(r.american);
+      return Object.assign({}, r, { book: k, american: am, age_min: Math.max(0, Math.round((nowMs - observedMs(r)) / 60000)),
+        fresh: priceFresh(r, nowMs, maxAgeMin), move: moveOf(bookOpen(ok, k), { american: am }) });
+    });
+    books.sort(function (a, b) { return americanToDecimal(b.american) - americanToDecimal(a.american) || observedMs(b) - observedMs(a) || String(a.book).localeCompare(String(b.book)); });
+    var spread = books.length > 1 && books[0].american !== books[books.length - 1].american;
+    books.forEach(function (b, i) { b.rank = !spread ? "only" : americanToDecimal(b.american) === americanToDecimal(books[0].american) ? "best" : americanToDecimal(b.american) === americanToDecimal(books[books.length - 1].american) ? "worst" : "mid"; });
+    return { best: books[0], books: books, n: books.length, stale: !books[0].fresh };
+  }
+  /* Every price change this week across players, books and markets: one entry per player/book/market whose latest price
+     differs from the first price seen. Big moves first, then by size. */
+  function lineMoves(rows, nowMs) {
+    var ok = validRows(rows, nowMs), groups = {};
+    ok.forEach(function (r) { if (!r.gsis_id) return; var k = [r.gsis_id, r.market || "anytime_td"].join("|"); (groups[k] = groups[k] || []).push(r); });
+    var out = [];
+    Object.keys(groups).forEach(function (k) {
+      var b = bookBoard(groups[k], nowMs); if (!b) return;
+      b.books.forEach(function (x) { if (x.move) out.push({ gsis_id: x.gsis_id, player: x.player, team: x.team, game_id: x.game_id, market: x.market || "anytime_td",
+        book: x.book, captured_at: x.captured_at, move: x.move }); });
+    });
+    out.sort(function (a, b) { return (b.move.big - a.move.big) || Math.abs(b.move.pts) - Math.abs(a.move.pts) || String(a.player).localeCompare(String(b.player)); });
+    return out;
+  }
+  /* Chance of 2+ TDs from the anytime chance, treating a player's TDs as Poisson: P(1+) = p gives rate L = -ln(1-p);
+     P(2+) = 1 - (1-p)(1+L). An estimate: on 2026 Weeks 1-9 (3,566 player-games) it predicted 89.9 two-TD games; 98 happened. */
+  function p2plus(p) {
+    p = Number(p); if (!isFinite(p) || p <= 0) return 0; if (p >= 0.999) return 0.99;
+    var L = -Math.log(1 - p); return Math.max(0, 1 - (1 - p) * (1 + L));
+  }
+
   /* ================= Results dashboard (pure; tested in tests/lib.test.js) =================
      A row is one submitted pick: {season, week, game_id, kickoff_ms, uid, gsis_id, player, team, pos, market,
      p (probability saved at pick time, or null), state ("win"|"loss"|"void"|"pending"|"needs_review"), why,
@@ -378,7 +440,7 @@
     return { rows: rs, summary: summary, weeks: weeks, cumulative: cumulative, categories: categories, touchdowns: touchdowns, calibration: calibration, extremes: extremes, weekRuns: runs, smallN: SMALL_N };
   }
 
-  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

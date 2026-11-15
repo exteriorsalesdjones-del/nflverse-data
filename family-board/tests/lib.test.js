@@ -326,3 +326,60 @@ test("empty and unsettled datasets never divide by zero or show 0% as a rate", (
   const p = FB.dashboard([R(2026, 10, "A", "Z", "pending", null, 0.3, { game_final: false })], {});
   assert.deepStrictEqual([p.summary.pending, p.summary.settled, p.summary.hitRate, p.weeks[0].complete, p.weeks[0].hitRate], [1, 0, null, false, null]);
 });
+
+/* ---------- book comparison, line moves, 2+ TDs ---------- */
+const NOW = Date.parse("2026-11-15T16:00:00Z");
+const row = (book, american, minAgo, extra = {}) => ({ gsis_id: "00-0039898", player: "Jahmyr Gibbs", team: "DET", game_id: "2026_10_NE_DET", market: "anytime_td",
+  book, american, captured_at: new Date(NOW - minAgo * 60000).toISOString(), time_source: "provided", ...extra });
+
+test("bookBoard: best payout first with its book; best/worst only when books differ; age shown, never dropped", () => {
+  // the user's example: FanDuel -245, DraftKings -220 -> DraftKings is the better line
+  const b = FB.bookBoard([row("FanDuel", -245, 30), row("DraftKings", -220, 300)], NOW);
+  assert.deepStrictEqual([b.best.book, b.best.american, b.n], ["DraftKings", -220, 2]);
+  assert.deepStrictEqual(b.books.map((x) => [x.book, x.rank]), [["DraftKings", "best"], ["FanDuel", "worst"]]);
+  assert.deepStrictEqual([b.best.age_min, b.best.fresh, b.books[1].fresh, b.stale], [300, false, true, true]); // 5 h old still counts, flagged not fresh
+  // one book, or every book on the same price: no best/worst colours
+  assert.strictEqual(FB.bookBoard([row("FanDuel", 150, 10)], NOW).best.rank, "only");
+  assert.deepStrictEqual(FB.bookBoard([row("FanDuel", 150, 10), row("BetMGM", 150, 5)], NOW).books.map((x) => x.rank), ["only", "only"]);
+  // a book's newest observation wins; invalid prices, unreadable or future times are ignored
+  const c = FB.bookBoard([row("FanDuel", 120, 90), row("FanDuel", 140, 20), row("BetMGM", "abc", 5), row("Caesars", 300, -60)], NOW);
+  assert.deepStrictEqual(c.books.map((x) => [x.book, x.american]), [["FanDuel", 140]]);
+  assert.strictEqual(FB.bookBoard([], NOW), null);
+});
+
+test("line moves are measured from the first price of the week, across uploaders", () => {
+  // member A saw FanDuel open +200 (kept as open_*), now +160; member B's older upload had +210 -> the opening is +210 (earliest)
+  const a = row("FanDuel", 160, 10, { open_american: 200, open_captured_at: new Date(NOW - 600 * 60000).toISOString() });
+  const b2 = row("FanDuel", 210, 900);
+  const m = FB.bookBoard([a, b2], NOW).best.move;
+  assert.deepStrictEqual([m.from, m.to, m.dir, m.big], [210, 160, "shorter", true]);
+  // implied 100/310 = 32.26% -> 100/260 = 38.46%: +6.2 points
+  assert.ok(Math.abs(m.pts - 6.2) < 0.05, m.pts);
+  // a small lengthening (-245 -> -240) is a move but not big; same price both times is no move
+  const s = FB.bookBoard([row("FanDuel", -240, 5, { open_american: -245, open_captured_at: new Date(NOW - 400 * 60000).toISOString() })], NOW).best.move;
+  assert.deepStrictEqual([s.dir, s.big], ["longer", false]);
+  assert.strictEqual(FB.bookBoard([row("FanDuel", 150, 5, { open_american: 150, open_captured_at: new Date(NOW - 400 * 60000).toISOString() })], NOW).best.move, null);
+  // lineMoves lists every changed book, big moves first; unmatched rows (no gsis_id) are left out
+  const list = FB.lineMoves([a, b2, row("DraftKings", -240, 5, { open_american: -245, open_captured_at: new Date(NOW - 400 * 60000).toISOString() }),
+    { ...row("BetMGM", 300, 5, { open_american: 400, open_captured_at: new Date(NOW - 400 * 60000).toISOString() }), gsis_id: null }], NOW);
+  assert.deepStrictEqual(list.map((x) => [x.book, x.move.big]), [["FanDuel", true], ["DraftKings", false]]);
+});
+
+test("2+ TDs: Poisson estimate from the anytime chance, and settlement needs two TDs", () => {
+  // p = 0.5: L = ln 2 = 0.6931; P(2+) = 1 - 0.5 x 1.6931 = 0.1534
+  assert.ok(Math.abs(FB.p2plus(0.5) - 0.1534) < 1e-4);
+  assert.ok(Math.abs(FB.p2plus(0.3) - 0.0503) < 1e-4);
+  assert.deepStrictEqual([FB.p2plus(0), FB.p2plus(-1), FB.p2plus(NaN)], [0, 0, 0]);
+  assert.ok(FB.p2plus(0.999) < 1);
+  const g = { ...game, status: "final", kickoff_et: "2026-11-15T13:00" }; const later = Date.parse("2026-11-16T12:00:00Z");
+  const pk = { key: "w10_2plus_td_00-1", gsis_id: "00-1", status: "submitted", market: "2plus_td" };
+  const lock = { [pk.key]: { gsis_id: "00-1", status: "submitted" } };
+  const td = (n) => Array.from({ length: n }, () => ({ scorer_id: "00-1" }));
+  assert.deepStrictEqual(FB.settle(pk, g, td(2), ["00-1"], lock, later), { state: "win", why: "Scored 2 touchdowns." });
+  assert.deepStrictEqual(FB.settle(pk, g, td(1), ["00-1"], lock, later), { state: "loss", why: "Played, one touchdown (2+ needed)." });
+  // anytime picks unchanged: one TD wins
+  const any = { ...pk, key: "w10_anytime_td_00-1", market: "anytime_td" };
+  assert.strictEqual(FB.settle(any, g, td(1), ["00-1"], { [any.key]: lock[pk.key] }, later).state, "win");
+  // a 2+ pick and an anytime pick on the same player have different keys
+  assert.notStrictEqual(FB.pickKey(10, "00-1", "2plus_td"), FB.pickKey(10, "00-1"));
+});

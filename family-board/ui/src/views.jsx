@@ -7,8 +7,9 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
+import { visuallyHidden } from "@mui/utils";
 import { Icon, P } from "./icons.jsx";
 import { ResultsDashboard } from "./results.jsx";
 
@@ -26,6 +27,49 @@ const STATUS_COLOR = { verified_individual: "success", probable_individual: "pri
 const TYPE = { passing: "Passing", rushing: "Rushing", interception_return: "Interception return", fumble_return: "Fumble return", fumble_recovery: "Fumble recovery", kickoff_return: "Kickoff return", punt_return: "Punt return", blocked_punt_return: "Blocked punt return", blocked_kick_return: "Blocked kick return", other_return: "Other return", other: "Other" };
 const RESULT = { win: ["Won", "success"], loss: ["Lost", "error"], void: ["Void", "default"], pending: ["Pending", "warning"], needs_review: ["Review", "secondary"], draft: ["Draft", "default"] };
 
+const ageTxt = (m) => (m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`);
+const RANK_COLOR = { best: "success.main", worst: "error.main" };
+/* A line move since the first price of the week: green = pays more now, red = pays less. Text says so too (not colour only). */
+function MoveTag({ m, short }) {
+  if (!m) return null; const up = m.dir === "longer";
+  return (
+    <Typography component="span" variant="caption" sx={{ color: up ? "success.main" : "error.main", fontWeight: m.big ? 700 : 500, whiteSpace: "nowrap" }}
+      title={`Opened ${am(m.from)}, now ${am(m.to)}: ${up ? "pays more" : "pays less"}${m.big ? " (big move)" : ""}`}>
+      {up ? "▲" : "▼"} {short ? `from ${am(m.from)}` : `${am(m.from)} → ${am(m.to)}`}{m.big ? " big" : ""}
+      <Box component="span" sx={visuallyHidden}>{up ? " pays more" : " pays less"}</Box>
+    </Typography>
+  );
+}
+/* Every book's latest price for one market: best in green, worst in red (labelled), each with its age and line move. */
+function BookList({ c, g, market }) {
+  useStore(); const b = boardFor(c, g.week, market);
+  if (!b) return <Typography variant="body2" color="text.secondary">No {MARKETS[market]} prices uploaded yet (Uploads tab).</Typography>;
+  return (
+    <Box component="ul" sx={{ m: 0, p: 0, listStyle: "none", display: "grid", gap: 0.5 }} aria-label={`${MARKETS[market]} prices by sportsbook`}>
+      {b.books.map((x) => (
+        <Box component="li" key={x.book} sx={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 1, px: 1, py: 0.5, borderRadius: 1, border: 1,
+          borderColor: RANK_COLOR[x.rank] || "divider", borderLeftWidth: RANK_COLOR[x.rank] ? 4 : 1 }}>
+          <Typography sx={{ fontWeight: 700, minWidth: 56, color: RANK_COLOR[x.rank] || "text.primary" }}><Num>{am(x.american)}</Num></Typography>
+          <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }}>{x.book}{x.rank === "best" ? " · Best" : x.rank === "worst" ? " · Worst" : ""}</Typography>
+          <Typography variant="caption" color="text.secondary">{ageTxt(x.age_min)}{x.fresh ? "" : " · old"}</Typography>
+          <MoveTag m={x.move} />
+        </Box>
+      ))}
+    </Box>
+  );
+}
+/* Week-tab row: the best price and its book (any age, age flagged), with its move since the week's first price. */
+function BestPrice({ c, g }) {
+  const S = useStore(); const b = boardFor(c, g.week, S.weekMarket);
+  if (!b) return <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>no price yet</Typography>;
+  return (
+    <Typography variant="body2" sx={{ display: "inline-flex", flexWrap: "wrap", columnGap: 0.75, alignItems: "baseline" }}>
+      <Num sx={{ fontWeight: 700, color: b.n > 1 ? "success.main" : "text.primary" }}>{am(b.best.american)}</Num>
+      <Box component="span" sx={{ color: "text.secondary" }}>{b.best.book}{b.n > 1 ? ` · best of ${b.n}` : ""}{b.stale ? ` · ${ageTxt(b.best.age_min)}` : ""}</Box>
+      <MoveTag m={b.best.move} short />
+    </Typography>
+  );
+}
 const Num = ({ children, sx }) => <Box component="span" sx={{ fontVariantNumeric: "tabular-nums", ...sx }}>{children}</Box>;
 const Result = ({ r }) => <Chip size="small" variant="outlined" color={RESULT[r.state][1]} label={RESULT[r.state][0]} title={r.why} />;
 const StatusChip = ({ s }) => <Chip size="small" variant="outlined" color={STATUS_COLOR[s]} label={STATUS[s]} />;
@@ -75,7 +119,11 @@ export function WeekView() {
           <H2>Week {s.week}</H2>
           <Button size="large" startIcon={<Icon d={P.info} />} onClick={() => setHow(true)}>How this works</Button>
         </Stack>
-        <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · research odds, no sportsbook prices yet</Typography>
+        <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · sportsbook prices come from family uploads</Typography>
+        <ToggleButtonGroup exclusive fullWidth size="small" value={S.weekMarket} onChange={(e, v) => v && setWeekMarket(v)} aria-label="Market" sx={{ mt: 1, "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none", fontWeight: 600 } }}>
+          <ToggleButton value="anytime_td">Anytime TD</ToggleButton><ToggleButton value="2plus_td">2+ TDs</ToggleButton>
+        </ToggleButtonGroup>
+        {S.weekMarket === "2plus_td" && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>2+ TD chances are estimates from each player's anytime chance (checked on 2026 weeks 1–9: 90 two-TD games predicted, 98 happened). Picks you make here are 2+ TD picks.</Typography>}
       </Box>
       {open.length === 0 && <Empty>Every game this week has kicked off. The next slate appears after the Tuesday refresh.</Empty>}
       {S.uid && open.length > 0 && !Object.values(myItems()).some((p) => p.week === s.week && p.status === "submitted") && (
@@ -184,13 +232,13 @@ function OppAllowed({ t }) {
 }
 
 function PickButton({ c, g, locked, size = "medium" }) {
-  const S = useStore(); const key = FB.pickKey(g.week, c.gsis_id); const picked = !!myItems()[key];
+  const S = useStore(); const mk = S.weekMarket; const key = FB.pickKey(g.week, c.gsis_id, mk); const picked = !!myItems()[key]; const two = mk === "2plus_td";
   const disabled = locked || !S.uid || S.dbState === "off" || c.quality === "unavailable";
   return (
     <Button variant={picked ? "outlined" : "contained"} size={size} disabled={disabled && !picked}
-      onClick={(e) => { e.stopPropagation(); picked ? (!locked && removePick(key)) : addPick(c); }}
-      sx={{ minWidth: 88, minHeight: 44, flexShrink: 0 }} aria-label={picked ? `Remove ${c.full_name || c.player}` : `Pick ${c.full_name || c.player}`}>
-      {picked ? "Picked ✓" : "Pick"}
+      onClick={(e) => { e.stopPropagation(); picked ? (!locked && removePick(key)) : addPick(c, mk); }}
+      sx={{ minWidth: 88, minHeight: 44, flexShrink: 0 }} aria-label={picked ? `Remove ${c.full_name || c.player}${two ? " 2+ TDs" : ""}` : `Pick ${c.full_name || c.player}${two ? " for 2+ TDs" : ""}`}>
+      {picked ? (two ? "2+ ✓" : "Picked ✓") : two ? "Pick 2+" : "Pick"}
     </Button>
   );
 }
@@ -205,7 +253,7 @@ function ParlayButton({ c, locked }) {
   );
 }
 function PlayerRow({ c, g, locked, onOpen, team }) {
-  const mu = c.p_matchup != null && Math.abs(c.matchup_pct) >= 8 ? c.matchup_pct : null;
+  const S = useStore(); const two = S.weekMarket === "2plus_td"; const ch = chanceFor(c);
   return (
     <Stack direction="row" sx={{ alignItems: "center", gap: 1, py: 0.75 }}>
       <ButtonBase onClick={() => onOpen({ ...c, _g: g })} sx={{ flex: 1, minWidth: 0, justifyContent: "flex-start", textAlign: "left", borderRadius: 1, minHeight: 44, display: "block" }}>
@@ -217,10 +265,11 @@ function PlayerRow({ c, g, locked, onOpen, team }) {
           {c.role_change && <Chip size="small" color={c.role_change.dir === "up" ? "success" : "default"} variant="outlined" label={c.role_change.dir === "up" ? "Role ↑" : "Role ↓"} sx={{ height: 20 }} />}
         </Stack>
         <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-          <LinearProgress variant="determinate" value={Math.min(100, c.p * 100)} sx={{ flex: 1, maxWidth: 160, height: 6, borderRadius: 3 }} aria-hidden />
-          <Typography variant="body2" sx={{ fontWeight: 600 }}><Num>{pct(c.p)}</Num></Typography>
-          <Typography variant="body2" color="text.secondary"><Num>fair {am(c.fair_american)}</Num></Typography>
+          <LinearProgress variant="determinate" value={Math.min(100, ch * 100 * (two ? 2 : 1))} sx={{ flex: 1, maxWidth: 160, height: 6, borderRadius: 3 }} aria-hidden />
+          <Typography variant="body2" sx={{ fontWeight: 600 }}><Num>{pct(ch)}{two ? " est." : ""}</Num></Typography>
+          <Typography variant="body2" color="text.secondary"><Num>fair {am(two ? FB.probToAmerican(ch) : c.fair_american)}</Num></Typography>
         </Stack>
+        <BestPrice c={c} g={g} />
       </ButtonBase>
       <ParlayButton c={c} locked={locked} />
       <PickButton c={c} g={g} locked={locked} />
@@ -233,11 +282,11 @@ function PlayerSheet({ c, onClose }) {
   const g = c._g; const locked = FB.isLocked(g, Date.now());
   const pr = priceFor(c, g.week); const e = pr ? FB.edge(c.p, pr.american) : null;
   const rows = [["Chance to score", pct1(c.p)], ["Fair odds", am(c.fair_american)],
-    ["Anytime TD price", pr ? `${pr.stale ? "Latest (stale)" : pr.books > 1 ? `Best of ${pr.books} books` : "Best"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)} · ${timeBasis(pr.time_source)}${pr.others.length ? ` · also ${pr.others.map((o) => `${o.book} ${am(o.american)}`).join(", ")}` : ""}` : "Not uploaded yet (Uploads tab)"],
+    ["2+ TD chance", `${pct1(FB.p2plus(c.p))} (estimate from the anytime chance) · fair ${am(FB.probToAmerican(FB.p2plus(c.p)))}`],
+    ["Value check price", pr ? `${pr.stale ? "Latest (over 2 h old)" : "Best fresh"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)} · ${timeBasis(pr.time_source)}` : "No anytime price uploaded yet (Uploads tab)"],
     ...(e ? [["Model vs price", pr.stale
       ? `Price is over ${FB.PRICE_FRESH_MIN / 60} hours old and may no longer be available, so no EV is shown.`
       : `Model ${pct1(c.p)} vs implied ${pct1(e.implied)} (book margin included): ${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} percentage points. Conditional EV ${e.evPerDollar >= 0 ? "+" : "-"}$${Math.abs(e.evPerDollar).toFixed(2)} per $1 staked, only if the model's chance is right and this price is still available (its time is unverified). Unproven: in testing (weeks 3-4) sportsbook prices predicted better than the model.`]] : []),
-    ["2+ TDs price", (() => { const p2 = priceFor(c, g.week, "2plus_td"); return p2 ? `${p2.stale ? "Latest (stale)" : "Best"}: ${p2.book} ${am(p2.american)} · ${et(p2.captured_at, { hour: "numeric", minute: "2-digit" })}` : "Not uploaded"; })()],
     ["Usage", `${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10 · ${c.games} games`],
     ...(c.team_games_2026 != null ? [
       ...(["RB", "QB"].includes(c.pos) || c.i5_carries ? [["Carries inside the 5", c.team_i5_carries ? `${c.i5_carries} of ${c.team}'s ${c.team_i5_carries} (${Math.round(100 * c.i5_carries / c.team_i5_carries)}%) · ${c.team_games_2026} games` : `None yet (${c.team} has no carries inside the 5 in 2026)`]] : []),
@@ -256,6 +305,13 @@ function PlayerSheet({ c, onClose }) {
       <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {kick(g)}</Typography>
       {windHit(c, g) && <Alert severity="warning" sx={{ borderRadius: 2 }}>Wind {Math.round(g.weather.wind_mph)} mph forecast. Most of {c.full_name || c.player}'s touchdown chances come from catches, and passing is harder in strong wind.</Alert>}
       {c.injury && <Alert severity={c.quality === "unavailable" ? "error" : "warning"} sx={{ borderRadius: 2 }}>{c.injury}{c.override ? ` (set by an admin${c.override.note ? `: ${c.override.note}` : ""})` : " on the injury report"}</Alert>}
+      {["anytime_td", "2plus_td"].map((m) => (
+        <Box key={m} sx={{ display: "grid", gap: 0.5 }}>
+          <Typography variant="subtitle2" component="h3">{MARKETS[m]} prices by sportsbook</Typography>
+          <BookList c={c} g={g} market={m} />
+        </Box>
+      ))}
+      <Typography variant="caption" color="text.secondary">Green = best price, red = worst. ▲ the price pays more than its first price this week, ▼ it pays less ("big" = 2+ points of implied chance). Value math uses only prices under 2 hours old.</Typography>
       <Box component="dl" sx={{ display: "grid", gridTemplateColumns: "minmax(110px, max-content) minmax(0,1fr)", gap: "6px 12px", m: 0 }}>
         {rows.map(([k, v]) => [<Typography key={k} component="dt" variant="body2" color="text.secondary">{k}</Typography>,
           <Typography key={k + "v"} component="dd" variant="body2" sx={{ m: 0 }}>{v}</Typography>])}
@@ -621,7 +677,7 @@ function MyPicks() {
                 return (
                   <Card key={p.key} variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 }, display: "grid", gap: 0.5 }}>
                     <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-                      <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>{p.player} <Typography component="span" variant="caption" color="text.secondary">{p.pos} {p.team}</Typography></Typography>
+                      <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>{p.player} <Typography component="span" variant="caption" color="text.secondary">{p.pos} {p.team}{p.market === "2plus_td" ? " · 2+ TDs" : ""}</Typography></Typography>
                       <Result r={r} />
                     </Stack>
                     <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {g.kickoff_et ? kick(g) : ""}</Typography>
@@ -701,7 +757,7 @@ function FamilyBoard() {
                     const g = S.gameById[p.game_id] || {};
                     return (
                       <Stack key={p.key} direction="row" sx={{ alignItems: "center", gap: 1, py: 0.5 }}>
-                        <Box sx={{ flex: 1, minWidth: 0 }}><Typography noWrap>{p.player} <Typography component="span" variant="caption" color="text.secondary">{p.team}</Typography></Typography>
+                        <Box sx={{ flex: 1, minWidth: 0 }}><Typography noWrap>{p.player} <Typography component="span" variant="caption" color="text.secondary">{p.team}{p.market === "2plus_td" ? " · 2+ TDs" : ""}</Typography></Typography>
                           <Typography variant="caption" color="text.secondary">{g.away} at {g.home}{p.model_p ? ` · model ${pct(p.model_p)}` : ""}{p.price ? ` · ${p.price.book} ${am(p.price.american)}${p.price.stale || p.price_warning ? " (stale)" : ""}, price time unverified` : ""}</Typography></Box>
                         <Result r={r} />
                       </Stack>
@@ -935,6 +991,7 @@ export function LinesView() {
           {Object.entries(MARKETS).map(([k, l]) => <ToggleButton key={k} value={k}>{l}</ToggleButton>)}
         </ToggleButtonGroup>
       </Stack>
+      <LineMoves week={week} market={market} />
       {!list.length && <Empty>No {MARKETS[market]} prices yet this week. Upload a sportsbook screenshot above.</Empty>}
       {list.map((r) => {
         const c = byId[r.gsis_id]; const imp = FB.americanToProb(r.american); const e = c && market === "anytime_td" ? FB.edge(c.p, r.american) : null;
@@ -1168,5 +1225,29 @@ function PregameReads() {
         );
       })}
     </Stack>
+  );
+}
+
+/* =========================== LINE MOVES (Uploads tab) =========================== */
+function LineMoves({ week, market }) {
+  useStore(); const [all, setAll] = useState(false);
+  const moves = weekMoves(week).filter((m) => m.market === market);
+  if (!moves.length) return <Typography variant="body2" color="text.secondary">Line moves: none yet. A move shows when a book's price for a player changes from the first price uploaded this week.</Typography>;
+  const big = moves.filter((m) => m.move.big).length; const shown = all ? moves : moves.slice(0, 8);
+  return (
+    <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 0.75 }}>
+      <Typography variant="h6" component="h3">Line moves · {moves.length}{big ? ` (${big} big)` : ""}</Typography>
+      <Typography variant="caption" color="text.secondary">Since the first price uploaded this week for each book. ▲ green = pays more now, ▼ red = pays less. Big = 2+ points of implied chance.</Typography>
+      <Box component="ul" sx={{ m: 0, p: 0, listStyle: "none", display: "grid", gap: 0.5 }}>
+        {shown.map((m) => (
+          <Box component="li" key={`${m.gsis_id}|${m.book}`} sx={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 1, py: 0.5, borderBottom: 1, borderColor: "divider" }}>
+            <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 140 }}>{m.player} <Typography component="span" variant="caption" color="text.secondary">{m.team} · {m.book}</Typography></Typography>
+            <MoveTag m={m.move} />
+            <Typography variant="caption" color="text.secondary"><Num>{m.move.pts > 0 ? "+" : ""}{m.move.pts.toFixed(1)} pts</Num> · {et(m.captured_at, { weekday: "short", hour: "numeric", minute: "2-digit" })}</Typography>
+          </Box>
+        ))}
+      </Box>
+      {moves.length > 8 && <Box><Button onClick={() => setAll(!all)}>{all ? "Show fewer" : `Show all ${moves.length}`}</Button></Box>}
+    </CardContent></Card>
   );
 }
