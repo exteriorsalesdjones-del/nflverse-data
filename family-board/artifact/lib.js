@@ -54,7 +54,7 @@
   function americanToDecimal(a) { a = Number(a); return a > 0 ? 1 + a / 100 : 1 + 100 / -a; }
   function probToAmerican(p) {
     if (!(p > 0 && p < 1)) return null;
-    return p >= 0.5 ? Math.round(-100 * p / (1 - p)) : Math.round(100 * (1 - p) / p);
+    return p > 0.5 ? Math.round(-100 * p / (1 - p)) : Math.round(100 * (1 - p) / p); // exactly 50% = +100 (even money)
   }
   /* Edge in percentage points and EV per $1 at the posted price; null when inputs are missing. */
   function edge(modelP, american) {
@@ -338,6 +338,45 @@
     var pts = Math.round((modelP - imp) * 1000) / 10; // one decimal, as shown
     return pts >= ABOVE_FAIR_PTS ? { pts: pts, implied: imp } : null;
   }
+  /* ================= Weekly Rankings (pure; tested in tests/lib.test.js) =================
+     items: one per player in a game still open, for ONE market: {key, name, chance (model probability for that market),
+     prices: [uploaded price rows for that player and market]}. A price is eligible under the app's existing rules:
+     valid American odds, not future-dated, and fresh (under PRICE_FRESH_MIN); the best eligible price is the highest
+     payout among each book's latest fresh price. Edge = chance - implied probability of that price, in points
+     (book margin included). Ranks use standard competition ranking (ties share the best rank: 1, 2, 2, 4). */
+  function bestEligiblePrice(rows, nowMs) {
+    var b = bookBoard(rows, nowMs); if (!b) return null;
+    for (var i = 0; i < b.books.length; i++) if (b.books[i].fresh) return b.books[i];
+    return null;
+  }
+  function competitionRanks(list, cmp) {
+    var ranks = [];
+    list.forEach(function (x, i) { ranks[i] = i > 0 && cmp(list[i - 1], x) === 0 ? ranks[i - 1] : i + 1; });
+    return ranks;
+  }
+  function weeklyRankings(items, nowMs) {
+    var ok = (items || []).filter(function (it) { return typeof it.chance === "number" && it.chance > 0 && it.chance < 1; });
+    var byName = function (a, b) { return String(a.name).localeCompare(String(b.name)); };
+    var chance = ok.map(function (it) { return Object.assign({}, it, { fair: probToAmerican(it.chance) }); })
+      .sort(function (a, b) { return b.chance - a.chance || byName(a, b); });
+    var priced = ok.map(function (it) {
+      var best = bestEligiblePrice(it.prices, nowMs); if (!best) return null;
+      var implied = americanToProb(best.american);
+      return Object.assign({}, it, { fair: probToAmerican(it.chance), best: best, implied: implied, edgePts: (it.chance - implied) * 100 });
+    }).filter(Boolean);
+    var value = priced.filter(function (x) { return x.edgePts > 0; })
+      .sort(function (a, b) { return b.edgePts - a.edgePts || b.chance - a.chance || byName(a, b); });
+    var vr = competitionRanks(value, function (a, b) { return a.edgePts === b.edgePts ? 0 : 1; });
+    value.forEach(function (x, i) { x.valueRank = vr[i]; });
+    var byChance = value.slice().sort(function (a, b) { return b.chance - a.chance || byName(a, b); });
+    var cr = competitionRanks(byChance, function (a, b) { return a.chance === b.chance ? 0 : 1; });
+    byChance.forEach(function (x, i) { x.chanceRank = cr[i]; });
+    var combined = value.map(function (x) { return Object.assign({}, x, { score: (x.valueRank + x.chanceRank) / 2 }); })
+      .sort(function (a, b) { return a.score - b.score || b.chance - a.chance || b.edgePts - a.edgePts || byName(a, b); });
+    var empty = value.length ? null : priced.length ? "No players above model fair value" : "No eligible sportsbook prices available";
+    return { chance: chance, value: value, combined: combined, valueEmpty: empty, eligiblePriced: priced.length };
+  }
+
   /* Chance of 2+ TDs from the anytime chance, treating a player's TDs as Poisson: P(1+) = p gives rate L = -ln(1-p);
      P(2+) = 1 - (1-p)(1+L). An estimate: on 2026 Weeks 1-9 (3,566 player-games) it predicted 89.9 two-TD games; 98 happened. */
   function p2plus(p) {
@@ -456,7 +495,7 @@
     return { rows: rs, summary: summary, weeks: weeks, cumulative: cumulative, categories: categories, touchdowns: touchdowns, calibration: calibration, extremes: extremes, weekRuns: runs, smallN: SMALL_N };
   }
 
-  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

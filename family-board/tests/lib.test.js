@@ -416,3 +416,71 @@ test("Above fair: fresh anytime price whose implied chance is 3+ points below th
   assert.deepStrictEqual(d.categories.above_fair.map((c) => [c.key, c.hits, c.misses]).sort(),
     [["Above fair", 1, 0], ["Not above fair", 0, 1], ["Not checked (no fresh price, 2+ TDs, or older pick)", 0, 1]]);
 });
+
+/* ---------- Weekly Rankings ---------- */
+const RNOW = Date.parse("2026-11-15T16:00:00Z"); const rat = (m) => new Date(RNOW - m * 60000).toISOString();
+const px = (book, american, minAgo = 10) => ({ book, american, captured_at: rat(minAgo) });
+const it = (name, chance, prices = []) => ({ key: name, name, chance, prices });
+
+test("Best Value: the worked example (50% vs +120 = +4.5 points) and fair odds +100", () => {
+  const r = FB.weeklyRankings([it("A", 0.5, [px("FanDuel", 120)])], RNOW);
+  assert.strictEqual(r.value.length, 1);
+  assert.strictEqual(r.value[0].fair, 100);                            // 50% -> +100
+  assert.ok(Math.abs(r.value[0].implied - 100 / 220) < 1e-9);          // +120 -> 45.45%
+  assert.strictEqual(r.value[0].edgePts.toFixed(1), "4.5");
+  assert.strictEqual(FB.probToAmerican(0.5), 100);
+});
+
+test("Best Value: only positive edges, largest first; zero and negative excluded; best fresh book used", () => {
+  const r = FB.weeklyRankings([
+    it("Pos big", 0.40, [px("FanDuel", 200), px("DraftKings", 230)]),   // best fresh = DK +230 -> 30.3% -> +9.7
+    it("Pos small", 0.40, [px("FanDuel", 140)]),                        // 41.7% -> -1.7: negative, excluded
+    it("Zero", 0.5, [px("FanDuel", 100)]),                              // exactly 50% -> 0.0: excluded
+    it("Neg", 0.30, [px("FanDuel", 100)]),                              // -20: excluded
+    it("Small pos", 0.45, [px("FanDuel", 125)]),                        // 44.4% -> +0.6
+  ], RNOW);
+  assert.deepStrictEqual(r.value.map((x) => x.name), ["Pos big", "Small pos"]);
+  assert.deepStrictEqual([r.value[0].best.book, r.value[0].best.american], ["DraftKings", 230]);
+  assert.ok(r.value.every((x) => x.edgePts > 0));
+});
+
+test("Best Value: stale and missing odds are not eligible; the empty message depends on the data", () => {
+  // a stale price paying more is ignored in favour of the best FRESH price
+  const r = FB.weeklyRankings([it("A", 0.4, [px("BetMGM", 400, 180), px("FanDuel", 160)])], RNOW);
+  assert.deepStrictEqual([r.value[0].best.book, r.value[0].best.american], ["FanDuel", 160]);
+  // only stale prices / no prices: "No eligible sportsbook prices available"
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.4, [px("BetMGM", 400, 180)]), it("B", 0.3)], RNOW).valueEmpty, "No eligible sportsbook prices available");
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.4)], RNOW).valueEmpty, "No eligible sportsbook prices available");
+  // fresh prices exist but none beats the model: "No players above model fair value"
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.3, [px("FanDuel", 100)])], RNOW).valueEmpty, "No players above model fair value");
+  // future-dated or invalid prices are not eligible either
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.4, [px("FanDuel", 200, -60), px("DraftKings", "abc")])], RNOW).valueEmpty, "No eligible sportsbook prices available");
+});
+
+test("Highest TD Chance: every valid chance, with or without prices; invalid chances left out", () => {
+  const r = FB.weeklyRankings([it("C", 0.2), it("A", 0.6, [px("FanDuel", -200)]), it("B", 0.4), it("Bad", null), it("Zero", 0), it("One", 1)], RNOW);
+  assert.deepStrictEqual(r.chance.map((x) => [x.name, x.fair]), [["A", -150], ["B", 150], ["C", 400]]);
+  // no sportsbook prices at all: Highest TD Chance still fills, Best Value says so
+  const none = FB.weeklyRankings([it("A", 0.6), it("B", 0.4)], RNOW);
+  assert.deepStrictEqual([none.chance.length, none.value.length, none.combined.length, none.valueEmpty], [2, 0, 0, "No eligible sportsbook prices available"]);
+});
+
+test("Combined: average of value rank and chance rank within the Best Value group; ties by chance, then edge", () => {
+  // value order (edge): V1 +10, V2 +8, V3 +6, V4 +4; chance order: V4 .60, V3 .50, V2 .40, V1 .30
+  const r = FB.weeklyRankings([
+    it("V1", 0.30, [px("FanDuel", Math.round(100 / 0.20 - 100))]),   // implied 20% -> +10
+    it("V2", 0.40, [px("FanDuel", Math.round(100 / 0.32 - 100))]),   // ~32% -> ~+8
+    it("V3", 0.50, [px("FanDuel", Math.round(100 / 0.44 - 100))]),   // ~44% -> ~+6
+    it("V4", 0.60, [px("FanDuel", -127)]),                          // 55.9% -> ~+4.1
+  ], RNOW);
+  const c = Object.fromEntries(r.combined.map((x) => [x.name, [x.valueRank, x.chanceRank, x.score]]));
+  assert.deepStrictEqual(c, { V1: [1, 4, 2.5], V2: [2, 3, 2.5], V3: [3, 2, 2.5], V4: [4, 1, 2.5] });
+  // all tied at 2.5 -> higher model chance first
+  assert.deepStrictEqual(r.combined.map((x) => x.name), ["V4", "V3", "V2", "V1"]);
+  // the spec's example: #2 in value and #6 in chance -> 4.0
+  assert.strictEqual((2 + 6) / 2, 4.0);
+  // equal chance AND equal score -> higher value edge first; equal edges share a value rank (1, 1, 3)
+  const t = FB.weeklyRankings([it("E1", 0.4, [px("FanDuel", 200)]), it("E2", 0.4, [px("DraftKings", 200)]), it("E3", 0.35, [px("FanDuel", 200)])], RNOW);
+  assert.deepStrictEqual(t.value.map((x) => [x.name, x.valueRank]), [["E1", 1], ["E2", 1], ["E3", 3]]);
+  assert.deepStrictEqual(t.combined.map((x) => [x.name, x.valueRank, x.chanceRank, x.score]), [["E1", 1, 1, 1], ["E2", 1, 1, 1], ["E3", 3, 3, 3]]);
+});

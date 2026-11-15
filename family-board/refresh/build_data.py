@@ -757,7 +757,7 @@ def save_predictions(slate: dict, games_out: list) -> int:
 def american(p: float):
     if p <= 0 or p >= 1:
         return None
-    return int(round(-100 * p / (1 - p))) if p >= 0.5 else int(round(100 * (1 - p) / p))
+    return int(round(-100 * p / (1 - p))) if p > 0.5 else int(round(100 * (1 - p) / p))  # exactly 50% = +100 (even money)
 
 
 # ---------------------------------------------------------------- main

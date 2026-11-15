@@ -186,6 +186,22 @@ export function priceFor(c, week, market = "anytime_td") {
   const rows = allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market);
   return FB.bestPrice(rows, Date.now());
 }
+/* Weekly Rankings for the selected market: every available player in games still open (Out/inactive players are left
+   out, as on the matchup list), with that market's model chance and that player's uploaded prices. */
+export function weekRankings(market = S.weekMarket, nowMs = Date.now()) {
+  if (!S.slate) return null;
+  const byPid = {};
+  allLineRows(S.slate.week).forEach((r) => { if (r.gsis_id && (r.market || "anytime_td") === market) (byPid[r.gsis_id] = byPid[r.gsis_id] || []).push(r); });
+  const items = [];
+  for (const g of S.slate.games) {
+    if (FB.isLocked(g, nowMs)) continue;
+    for (const t of g.teams) for (const c0 of t.candidates) {
+      const c = effCand(c0); if (c.quality === "unavailable") continue;
+      items.push({ key: c.gsis_id, name: c.full_name || c.player, chance: chanceFor(c, market), prices: byPid[c.gsis_id] || [], c, g });
+    }
+  }
+  return FB.weeklyRankings(items, nowMs);
+}
 /* Every book's latest price for a player and market (best payout first, ages shown), and this week's line moves. */
 export function boardFor(c, week, market = "anytime_td") {
   return FB.bookBoard(allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market), Date.now());
