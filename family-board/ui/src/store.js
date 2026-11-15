@@ -580,13 +580,23 @@ const draftKey = "fb_parlay_draft";
 try { S.draft = JSON.parse(localStorage.getItem(draftKey) || "[]"); } catch (e) { S.draft = []; }
 const saveDraft = () => { try { localStorage.setItem(draftKey, JSON.stringify(S.draft)); } catch (e) {} emit(); };
 export const myParlays = () => (S.parlaysAll[S.uid] && S.parlaysAll[S.uid].items) || {};
-export function addLeg(c) {
-  if (S.draft.some((l) => l.gsis_id === c.gsis_id)) { toast(`${c.full_name || c.player} is already in your parlay.`); return; }
-  S.draft = S.draft.concat([{ gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, game_id: c.game_id, p: c.p, p_matchup: c.p_matchup ?? null, matchup_pct: c.matchup_pct ?? null }]);
-  saveDraft(); toast(`Added ${c.full_name || c.player} to your parlay (${S.draft.length} leg${S.draft.length > 1 ? "s" : ""}).`);
+/* A leg records its market (Anytime TD or 2+ TDs). One leg per player (the builder's rule); a game that has kicked off
+   can't be added. A 2+ TDs leg's chance is the labelled estimate from the anytime chance. Returns true when added. */
+export function addLeg(c, market = "anytime_td", msg = null) {
+  const name = c.full_name || c.player; const g = S.gameById[c.game_id];
+  if (g && FB.isLocked(g, Date.now())) { toast(`${name}'s game has kicked off. It can't be added.`); return false; }
+  const cur = S.draft.find((l) => l.gsis_id === c.gsis_id);
+  if (cur) { const m = cur.market || "anytime_td"; toast(m === market ? `${name} is already in your parlay.` : `${name} is already in your parlay as ${MARKETS[m]}. Remove that leg first.`); return false; }
+  const two = market === "2plus_td";
+  S.draft = S.draft.concat([{ gsis_id: c.gsis_id, player: name, team: c.team, pos: c.pos, game_id: c.game_id, market, p: two ? FB.p2plus(c.p) : c.p, p_anytime: c.p,
+    p_matchup: two ? null : (c.p_matchup ?? null), matchup_pct: two ? null : (c.matchup_pct ?? null) }]);
+  saveDraft(); toast(msg || `Added ${name} to your parlay (${S.draft.length} leg${S.draft.length > 1 ? "s" : ""}).`);
+  return true;
 }
-export const inDraft = (gsis) => S.draft.some((l) => l.gsis_id === gsis);
-export function toggleLeg(c) { if (inDraft(c.gsis_id)) { removeLeg(c.gsis_id); toast(`Removed ${c.full_name || c.player} from your parlay.`); } else addLeg(c); }
+export const inDraft = (gsis, market) => S.draft.some((l) => l.gsis_id === gsis && (!market || (l.market || "anytime_td") === market));
+export function toggleLeg(c, market = "anytime_td", msg = null) {
+  if (inDraft(c.gsis_id, market)) { removeLeg(c.gsis_id); toast(`Removed ${c.full_name || c.player} from your parlay.`); } else addLeg(c, market, msg);
+}
 export function removeLeg(gsis) { S.draft = S.draft.filter((l) => l.gsis_id !== gsis); saveDraft(); }
 export function setDraft(legs) { S.draft = legs.map((c) => ({ gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, game_id: c.game_id, p: c.p, p_matchup: c.p_matchup ?? null, matchup_pct: c.matchup_pct ?? null })); saveDraft(); }
 export async function saveParlay(name) {
@@ -597,7 +607,7 @@ export async function saveParlay(name) {
   const id = "p" + Date.now().toString(36); const now = new Date().toISOString();
   const items = structuredClone(myParlays());
   items[id] = { id, name: name || `${legs.length}-leg parlay`, week: S.slate.week, status: "submitted", created_at: now,
-    legs: legs.map((l) => ({ ...l, price: priceRecord(priceFor(l, S.slate.week)) })),
+    legs: legs.map((l) => ({ ...l, market: l.market || "anytime_td", price: priceRecord(priceFor(l, S.slate.week, l.market || "anytime_td"), l.market || "anytime_td") })),
     model_p: FB.parlayChance(legs).p };
   try { await S.db.doc("parlays/" + S.uid).set({ items, updated_at: now }); S.draft = []; saveDraft(); toast("Parlay saved. It locks when its first game kicks off."); return true; }
   catch (e) { toast(e && e.code === "invalid_argument" ? "Your access is view-only, so parlays can't be saved." : "Couldn't save the parlay."); return false; }
@@ -611,7 +621,7 @@ export async function deleteParlay(id) {
 export function settleParlayFor(uid, par) {
   const legStates = par.legs.map((l) => {
     const g = S.gameById[l.game_id];
-    return FB.settle({ key: "leg", gsis_id: l.gsis_id, status: "submitted" }, g, S.tds.filter((t) => t.game_id === l.game_id), S.played[l.game_id], { leg: { gsis_id: l.gsis_id, status: "submitted" } }, Date.now()).state;
+    return FB.settle({ key: "leg", gsis_id: l.gsis_id, status: "submitted", market: l.market || "anytime_td" }, g, S.tds.filter((t) => t.game_id === l.game_id), S.played[l.game_id], { leg: { gsis_id: l.gsis_id, status: "submitted" } }, Date.now()).state;
   });
   const res = FB.settleParlay(legStates);
   if (FB.parlayLocked(par.legs, S.gameById, Date.now())) {

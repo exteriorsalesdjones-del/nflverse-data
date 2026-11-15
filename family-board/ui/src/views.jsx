@@ -300,11 +300,11 @@ function PickButton({ c, g, locked, size = "medium" }) {
     </Button>
   );
 }
-function ParlayButton({ c, locked }) {
-  useStore(); const on = inDraft(c.gsis_id);
+function ParlayButton({ c, locked, size, msg }) {
+  const S = useStore(); const mk = S.weekMarket; const on = inDraft(c.gsis_id, mk);
   return (
     <Button variant={on ? "contained" : "outlined"} color="secondary" disabled={(locked || c.quality === "unavailable") && !on}
-      onClick={(e) => { e.stopPropagation(); toggleLeg({ ...c, game_id: c.game_id }); }}
+      onClick={(e) => { e.stopPropagation(); toggleLeg({ ...c, game_id: c.game_id }, mk, msg); }}
       sx={{ minWidth: 0, minHeight: 44, px: 1, flexShrink: 0, fontSize: 13, lineHeight: 1.1 }} aria-label={on ? `Remove ${c.full_name || c.player} from parlay` : `Add ${c.full_name || c.player} to parlay`}>
       {on ? "✓ Parlay" : "+ Parlay"}
     </Button>
@@ -360,7 +360,7 @@ function PlayerSheet({ c, onClose }) {
   return (
     <Sheet open onClose={onClose} title={`${c.full_name || c.player} · ${c.pos || ""} ${c.team}`}
       actions={<>{S.isAdmin && !locked && c.injury !== "Inactive" && <Button size="large" color="error" onClick={() => markInactive(c)}>Mark inactive</Button>}
-        {!locked && c.quality !== "unavailable" && <Button size="large" variant="outlined" onClick={() => addLeg({ ...c, game_id: g.game_id })}>Add to parlay</Button>}<PickButton c={c} g={g} locked={locked} size="large" /></>}>
+        {!locked && c.quality !== "unavailable" && <Button size="large" variant="outlined" onClick={() => addLeg({ ...c, game_id: g.game_id }, S.weekMarket)}>Add to parlay{S.weekMarket === "2plus_td" ? " (2+)" : ""}</Button>}<PickButton c={c} g={g} locked={locked} size="large" /></>}>
       <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {kick(g)}</Typography>
       {windHit(c, g) && <Alert severity="warning" sx={{ borderRadius: 2 }}>Wind {Math.round(g.weather.wind_mph)} mph forecast. Most of {c.full_name || c.player}'s touchdown chances come from catches, and passing is harder in strong wind.</Alert>}
       {c.injury && <Alert severity={c.quality === "unavailable" ? "error" : "warning"} sx={{ borderRadius: 2 }}>{c.injury}{c.override ? ` (set by an admin${c.override.note ? `: ${c.override.note}` : ""})` : " on the injury report"}</Alert>}
@@ -914,7 +914,7 @@ function ParlayCard({ uid, par, r, onDelete }) {
         const st = r.legStates ? r.legStates[i] : "pending"; const g = S.gameById[l.game_id] || {};
         return (
           <Stack key={l.gsis_id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
-            <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>{l.player} <Typography component="span" variant="caption" color="text.secondary">{l.team} · {g.away} at {g.home}</Typography></Typography>
+            <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>{l.player} <Typography component="span" variant="caption" color="text.secondary">{l.team} · {g.away} at {g.home}{l.market === "2plus_td" ? " · 2+ TDs" : ""}</Typography></Typography>
             <Chip size="small" variant="outlined" color={RESULT[st] ? RESULT[st][1] : "default"} label={RESULT[st] ? RESULT[st][0] : st} />
           </Stack>
         );
@@ -957,7 +957,7 @@ export function ParlaysView() {
         {legs.map((l) => { const g = S.gameById[l.game_id] || {}; return (
           <Stack key={l.gsis_id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
             <Box sx={{ flex: 1, minWidth: 0 }}><Typography sx={{ fontWeight: 600 }} noWrap>{l.player} <Typography component="span" variant="caption" color="text.secondary">{l.pos} {l.team}</Typography></Typography>
-              <Typography variant="caption" color="text.secondary">{g.away} at {g.home} · {pct(l.p)}{l.p_matchup != null && l.matchup_pct >= 8 ? ` → ${pct(l.p_matchup)} matchup` : ""}{FB.isLocked(g, now) ? " · started" : ""}</Typography>
+              <Typography variant="caption" color="text.secondary">{g.away} at {g.home} · {l.market === "2plus_td" ? <b>2+ TDs</b> : "Anytime TD"} · {pct(l.p)}{l.market === "2plus_td" ? " est." : ""}{l.p_matchup != null && l.matchup_pct >= 8 ? ` → ${pct(l.p_matchup)} matchup` : ""}{FB.isLocked(g, now) ? " · started" : ""}</Typography>
               {isWindy(g) && <Chip size="small" color="warning" variant="outlined" label={`Wind ${Math.round(g.weather.wind_mph)} mph`} sx={{ height: 20, ml: 0.5 }} />}</Box>
             <Button onClick={() => removeLeg(l.gsis_id)} sx={{ minHeight: 44 }}>Remove</Button>
           </Stack>); })}
@@ -1340,25 +1340,31 @@ function WeeklyRankings({ onOpen }) {
     combined: "Players from Best Value, ranked by the average of their value rank and their TD-chance rank within that group (lower is better). Ties: higher chance, then higher edge.",
   };
   const Row = ({ x, i }) => {
-    const g = x.g; const c = x.c;
+    const g = x.g; const c = x.c; const locked = FB.isLocked(g, Date.now());
     const rank = view === "value" ? x.valueRank : i + 1;
     const right = view === "chance" ? null : view === "value" ? edgeTxt(x.edgePts) : x.score.toFixed(1);
     return (
-      <ButtonBase component="li" onClick={() => onOpen({ ...c, _g: g })} aria-label={`${x.name}, rank ${rank}. Open player details`}
-        sx={{ display: "flex", width: "100%", textAlign: "left", gap: 1, py: 0.75, minHeight: 52, borderBottom: 1, borderColor: "divider", justifyContent: "flex-start", alignItems: "center" }}>
-        <Typography sx={{ fontWeight: 700, minWidth: 28, color: "text.secondary" }}><Num>{rank}</Num></Typography>
+      <Box component="li" sx={{ display: "flex", gap: 1, py: 0.75, borderBottom: 1, borderColor: "divider", alignItems: "flex-start" }}>
+        <Typography sx={{ fontWeight: 700, minWidth: 28, pt: 0.25, color: "text.secondary" }}><Num>{rank}</Num></Typography>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 600, lineHeight: 1.3 }}>{x.name} <Typography component="span" variant="caption" color="text.secondary">{c.pos} · {c.team}</Typography></Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{g.away} at {g.home} · {kick(g)}</Typography>
-          <Typography variant="body2"><Num>{view === "combined" ? `Value #${x.valueRank} · Chance #${x.chanceRank} · Model ${pct(x.chance)}${est} · Edge ${edgeTxt(x.edgePts)}` : `Model ${pct(x.chance)}${est} · fair ${am(x.fair)}`}</Num></Typography>
-          {view !== "chance" && <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}><PriceUsed b={x.best} />{x.stale && <> · <StaleTag /></>}</Typography>}
+          <ButtonBase onClick={() => onOpen({ ...c, _g: g })} aria-label={`${x.name}, rank ${rank}. Open player details`}
+            sx={{ display: "block", width: "100%", textAlign: "left", borderRadius: 1, minHeight: 44 }}>
+            <Typography sx={{ fontWeight: 600, lineHeight: 1.3 }}>{x.name} <Typography component="span" variant="caption" color="text.secondary">{c.pos} · {c.team}</Typography></Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{g.away} at {g.home} · {kick(g)}</Typography>
+            <Typography variant="body2"><Num>{view === "combined" ? `Value #${x.valueRank} · Chance #${x.chanceRank} · Model ${pct(x.chance)}${est} · Edge ${edgeTxt(x.edgePts)}` : `Model ${pct(x.chance)}${est} · fair ${am(x.fair)}`}</Num></Typography>
+            {view !== "chance" && <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}><PriceUsed b={x.best} />{x.stale && <> · <StaleTag /></>}</Typography>}
+          </ButtonBase>
+          <Stack direction="row" sx={{ gap: 1, mt: 0.5 }}>
+            <ParlayButton c={c} locked={locked} msg="Added to parlay." />
+            <PickButton c={c} g={g} locked={locked} />
+          </Stack>
         </Box>
-        {right && <Box sx={{ textAlign: "right", flexShrink: 0, maxWidth: 96 }}>
+        {right && <Box sx={{ textAlign: "right", flexShrink: 0, maxWidth: 96, pt: 0.25 }}>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.1 }}>{view === "value" ? "Edge" : "Score"}</Typography>
           <Typography sx={{ fontWeight: 700, color: view === "value" ? (x.stale ? "text.primary" : "success.main") : "text.primary" }}><Num>{right}</Num></Typography>
           {x.stale && <Typography variant="caption" sx={{ display: "block", lineHeight: 1.15, color: "warning.main" }}>Based on stale odds</Typography>}
         </Box>}
-      </ButtonBase>
+      </Box>
     );
   };
   return (
