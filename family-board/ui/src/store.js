@@ -90,13 +90,18 @@ export async function connect() {
   db.collection("odds").onSnapshot((s) => { S.odds = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
   db.collection("locks").onSnapshot((s) => { S.locks = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
   // shared lines: one marker doc per uploader, their rows for each week in a subcollection
-  const lineSubs = {};
+  // A week is stored in up to LINE_PARTS documents (w10, w10_p2, ...) because one document holds at most 256 KB.
+  const lineSubs = {}; const parts = {};
   db.collection("lines").onSnapshot((s) => {
     s.docs.forEach((d) => {
       if (lineSubs[d.id] || !S.slate) return;
-      lineSubs[d.id] = db.doc(`lines/${d.id}/weeks/w${S.slate.week}`).onSnapshot((w) => {
-        S.lines[d.id] = w.exists ? (w.data().rows || []) : []; emit();
-      }, () => {});
+      lineSubs[d.id] = true; parts[d.id] = [];
+      for (let i = 0; i < LINE_PARTS; i++) {
+        db.doc(`lines/${d.id}/weeks/${linePartId(S.slate.week, i)}`).onSnapshot((w) => {
+          parts[d.id][i] = w.exists ? (w.data().rows || []) : [];
+          S.lines[d.id] = dedupeLines(parts[d.id].flat()); emit();
+        }, () => {});
+      }
     });
   }, fail);
   db.collection("parlays").onSnapshot((s) => { S.parlaysAll = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
@@ -275,7 +280,7 @@ export async function matchLine(row, c) {
   if (why) { toast(`Can't match: ${why}.`); return; }
   const week = S.slate.week; const rows = (S.lines[S.uid] || []).map((r) => (r === row || (r.player === row.player && r.book === row.book && r.market === row.market && !r.gsis_id))
     ? { ...r, gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, matched_by_hand: true } : r);
-  try { await S.db.doc(`lines/${S.uid}/weeks/w${week}`).set({ rows, updated_at: new Date().toISOString() }); toast(`Matched to ${c.full_name || c.player}.`); }
+  try { await saveLineRows(S.uid, rows); toast(`Matched to ${c.full_name || c.player}.`); }
   catch (e) { toast("Couldn't save the match."); }
 }
 export async function setOverride(gsis, name, team, status, note) {
@@ -389,6 +394,35 @@ export const MARKETS = { anytime_td: "Anytime TD", "2plus_td": "2+ TDs" };
 export const normMarket = FB.normMarket;
 /* rows plus .skipped [{line, why}] so the upload message can say what was left out */
 export function parseLinesCsv(text) { const r = FB.parseLines(text); const rows = r.rows; rows.skipped = r.skipped; return rows; }
+/* ---------- saved prices: split across documents ---------- */
+export const LINE_PARTS = 6, LINE_PART_ROWS = 400, LINE_MAX_ROWS = LINE_PARTS * LINE_PART_ROWS; // 400 rows ≈ 160 KB per document
+export const linePartId = (week, i) => (i === 0 ? `w${week}` : `w${week}_p${i + 1}`);
+const lineKey = (r) => `${r.gsis_id || r.player}|${r.book}|${r.market}`;
+function dedupeLines(rows) {
+  const m = new Map();
+  rows.forEach((r) => { const k = lineKey(r); const cur = m.get(k); if (!cur || Date.parse(r.captured_at) > Date.parse(cur.captured_at)) m.set(k, r); });
+  return [...m.values()];
+}
+/* Write one uploader's week across the part documents. Over the limit, prices for games that have started go first
+   (oldest first), then unmatched rows; prices for games still to come are never dropped: the save is refused instead. */
+async function saveLineRows(uid, rows) {
+  const week = S.slate.week; let all = dedupeLines(rows); let dropped = 0;
+  if (all.length > LINE_MAX_ROWS) {
+    const started = (r) => r.game_id && S.gameById[r.game_id] && FB.isLocked(S.gameById[r.game_id], Date.now());
+    const rank = (r) => (started(r) ? 0 : !r.gsis_id ? 1 : 2);
+    const order = all.map((r, i) => [rank(r), Date.parse(r.captured_at) || 0, i]).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+    const need = all.length - LINE_MAX_ROWS; const removable = order.filter((o) => o[0] < 2).slice(0, need).map((o) => o[2]);
+    if (removable.length < need) throw Object.assign(new Error("too_many"), { code: "too_many" });
+    const gone = new Set(removable); all = all.filter((_, i) => !gone.has(i)); dropped = gone.size;
+  }
+  const now = new Date().toISOString();
+  for (let i = 0; i < LINE_PARTS; i++) {
+    const chunk = all.slice(i * LINE_PART_ROWS, (i + 1) * LINE_PART_ROWS);
+    const had = i === 0 || ((S.lines[uid] || []).length > i * LINE_PART_ROWS) || chunk.length;
+    if (had) await S.db.doc(`lines/${uid}/weeks/${linePartId(week, i)}`).set({ rows: chunk, part: i + 1, updated_at: now });
+  }
+  return dropped;
+}
 export async function uploadLines(rows, source) {
   if (!S.uid || !S.db) { toast("Sign in to Claude to upload lines."); return false; }
   const skipped = [...(rows.skipped || [])];
@@ -416,16 +450,17 @@ export async function uploadLines(rows, source) {
   if (older) skipped.push({ line: `${older} price(s)`, why: "a newer price from the same book was already uploaded" });
   try {
     await S.db.doc(`lines/${S.uid}`).set({ updated_at: now });
-    await S.db.doc(`lines/${S.uid}/weeks/w${week}`).set({ rows: Object.values(merged).slice(-600), updated_at: now });
+    const dropped = await saveLineRows(S.uid, Object.values(merged));
+    if (dropped) skipped.push({ line: `${dropped} older price(s)`, why: "removed to make room: games already started or unmatched rows" });
     const un = rows.filter((r) => !r.gsis_id).length;
     S.lastSkipped = skipped; emit();
     toast(`Added ${rows.length} price${rows.length > 1 ? "s" : ""}${un ? ` (${un} couldn't be matched to a player)` : ""}${skipped.length ? `; skipped ${skipped.length} (see list)` : ""}. Live for everyone now.`);
     return true;
-  } catch (e) { toast(e && e.code === "invalid_argument" ? "Your access is view-only, so lines can't be saved." : "Couldn't save the lines."); return false; }
+  } catch (e) { toast(e && e.code === "too_many" ? `Not saved: over ${LINE_MAX_ROWS.toLocaleString()} prices this week for games that haven't started. Remove some on the Uploads tab first.` : e && e.code === "invalid_argument" ? "Your access is view-only, so lines can't be saved." : "Couldn't save the lines."); return false; }
 }
 export async function deleteLines(uid, filter) {
   const week = S.slate.week; const rows = (S.lines[uid] || []).filter((r) => !filter(r));
-  try { await S.db.doc(`lines/${uid}/weeks/w${week}`).set({ rows, updated_at: new Date().toISOString() }); toast("Removed."); }
+  try { await saveLineRows(uid, rows); toast("Removed."); }
   catch (e) { toast("Couldn't remove those lines."); }
 }
 export function setShotReview(rows) { S.shotReview = rows; emit(); }
