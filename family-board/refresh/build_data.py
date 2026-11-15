@@ -776,6 +776,13 @@ def main() -> int:
                            "log_loss": b["log_loss"], "log_loss_constant": b["log_loss_constant"], "calibration": b["calibration"],
                            "weeks": [1, 9]})
     slate = build_slate(pbp, games, injuries, players, games_out, pfr, validation)
+    # Last Game Usage on every candidate (selection by snap counts; stats verified against play-by-play). A failure
+    # leaves the field off and the page shows "Unavailable"; it never blocks the rest of the refresh.
+    try:
+        import last_game
+        print("last_game:", last_game.annotate(slate, last_game.Sources.from_cache(CACHE)))
+    except Exception as e:
+        print("last_game FAILED, cards will show Unavailable:", e, file=sys.stderr)
     finals = [g for g in games_out if g["status"] == "final"]
     meta = {
         "season": SEASON, "refreshed_at": now_iso(),
@@ -787,7 +794,8 @@ def main() -> int:
             {"name": "nflverse schedules", "fields": "games, kickoffs, official final scores, closing spread/total"},
             {"name": "PFR defensive charting (nflverse pfr_advstats)", "fields": "receiving TDs allowed per defender per game", "through_week": int(pfr.week.max())},
             {"name": "nflverse injuries 2026", "fields": "weekly practice and game status", "through_week": int(injuries.week.max()) if len(injuries) else None},
-            {"name": "nflverse snap counts 2026", "fields": "who played (validation only)", "through_week": int(snaps.week.max()) if len(snaps) else None},
+            {"name": "nflverse weekly player stats 2026", "fields": "Last Game Usage: targets, rushing attempts, pass attempts (each checked against play-by-play)"},
+            {"name": "nflverse snap counts 2026", "fields": "who played (settling picks, Last Game Usage)", "through_week": int(snaps.week.max()) if len(snaps) else None},
             {"name": "National Weather Service hourly forecast (US) and Open-Meteo (international, fallback)", "fields": "kickoff wind, temperature, rain chance; outdoor 15+ mph flagged", "through_week": slate.get("week") if slate.get("weather_fetched_at") else None},
         ],
         "not_connected": ["NFL.com official game books (blocked from this refresh environment; reconciliation uses official final scores instead)",

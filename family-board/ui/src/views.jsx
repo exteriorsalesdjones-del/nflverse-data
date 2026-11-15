@@ -91,6 +91,34 @@ function FdDk({ c, g }) {
     </Box>
   );
 }
+/* Last Game Usage (slate.json candidates[].last_game, built by refresh/last_game.py). Verified 0 shows "0"; a stat
+   that couldn't be verified shows "Unavailable"; QB handoffs are always unavailable in the current sources. */
+const LG_LABEL = { targets: ["target", "targets"], rush_att: ["rushing attempt", "rushing attempts"], pass_att: ["pass attempt", "pass attempts"] };
+const LG_FIELDS = { WR: ["targets"], TE: ["targets"], RB: ["rush_att", "targets"], FB: ["rush_att", "targets"], QB: ["pass_att", "handoffs"] };
+export function lastGameText(c) {
+  const lg = c && c.last_game;
+  if (!lg) return { head: "Last Game", stats: "Unavailable", why: "Not in this data refresh yet." };
+  if (lg.status === "none") return { head: "Last Game", stats: "No prior game played", why: lg.why };
+  if (lg.status !== "ok") return { head: "Last Game", stats: "Unavailable", why: lg.why };
+  const head = `Last Game · Week ${lg.week} ${lg.home ? "vs" : "at"} ${lg.opp_name || lg.opp}`;
+  const stats = (LG_FIELDS[c.pos] || ["targets"]).map((k) => {
+    if (k === "handoffs") return "Handoffs unavailable";
+    const v = lg[k]; const [one, many] = LG_LABEL[k];
+    return v == null ? `${many[0].toUpperCase() + many.slice(1)}: Unavailable` : `${v} ${v === 1 ? one : many}`;
+  }).join(" · ");
+  return { head, stats, why: c.pos === "QB" ? lg.handoffs_note : null };
+}
+function LastGame({ c, full }) {
+  const t = lastGameText(c);
+  if (!full) return <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.35 }}>{t.head}: <Box component="span" sx={{ color: "text.primary" }}>{t.stats}</Box></Typography>;
+  return (
+    <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, px: 1.25, py: 0.75 }}>
+      <Typography variant="subtitle2" component="h3">{t.head}</Typography>
+      <Typography variant="body2">{t.stats}</Typography>
+      {t.why && <Typography variant="caption" color="text.secondary">{t.why}</Typography>}
+    </Box>
+  );
+}
 const Num = ({ children, sx }) => <Box component="span" sx={{ fontVariantNumeric: "tabular-nums", ...sx }}>{children}</Box>;
 const Result = ({ r }) => <Chip size="small" variant="outlined" color={RESULT[r.state][1]} label={RESULT[r.state][0]} title={r.why} />;
 const StatusChip = ({ s }) => <Chip size="small" variant="outlined" color={STATUS_COLOR[s]} label={STATUS[s]} />;
@@ -291,6 +319,7 @@ function PlayerRow({ c, g, locked, onOpen, team }) {
           <Typography variant="body2" color="text.secondary"><Num>fair {am(two ? FB.probToAmerican(ch) : c.fair_american)}</Num></Typography>
         </Stack>
         <FdDk c={c} g={g} />
+        <LastGame c={c} />
       </ButtonBase>
       <ParlayButton c={c} locked={locked} />
       <PickButton c={c} g={g} locked={locked} />
@@ -326,6 +355,7 @@ function PlayerSheet({ c, onClose }) {
       <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {kick(g)}</Typography>
       {windHit(c, g) && <Alert severity="warning" sx={{ borderRadius: 2 }}>Wind {Math.round(g.weather.wind_mph)} mph forecast. Most of {c.full_name || c.player}'s touchdown chances come from catches, and passing is harder in strong wind.</Alert>}
       {c.injury && <Alert severity={c.quality === "unavailable" ? "error" : "warning"} sx={{ borderRadius: 2 }}>{c.injury}{c.override ? ` (set by an admin${c.override.note ? `: ${c.override.note}` : ""})` : " on the injury report"}</Alert>}
+      <LastGame c={c} full />
       {["anytime_td", "2plus_td"].map((m) => (
         <Box key={m} sx={{ display: "grid", gap: 0.5 }}>
           <Typography variant="subtitle2" component="h3">{MARKETS[m]} prices by sportsbook</Typography>
