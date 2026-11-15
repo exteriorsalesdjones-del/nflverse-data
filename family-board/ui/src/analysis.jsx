@@ -104,3 +104,23 @@ export function AnalysisView() {
     </Stack>
   );
 }
+
+/* The Analysis reports without the page heading, for the Research tab's "Backtesting and findings" section. */
+export function AnalysisReports() {
+  const S = useStore();
+  useEffect(() => { ensureAnalysis(); }, []);
+  if (S.analysis === undefined) return <LinearProgress aria-label="Loading the analysis" />;
+  if (!S.analysis) return <Alert severity="warning">The analysis couldn't be loaded. Try again after the next refresh.</Alert>;
+  const A = S.analysis;
+  return (
+    <Stack spacing={1.5}>
+      <Typography variant="body2" color="text.secondary">
+        Weeks 1–9 of 2025 and 2026 replayed as if they hadn't been played yet: every signal uses only what was known before kickoff, and results are used
+        only to grade. Every rate shows its count; ⚠ marks fewer than 15 games or picks (preliminary). The data behind these findings is in the sections above:
+        game-by-game usage, every recorded touchdown, each game's line and implied points, and the model's saved pregame chances.
+      </Typography>
+      {A.sections.filter((s) => s.title.startsWith("Summary")).map((s) => <Section key={s.title} s={s} open />)}
+      {A.sections.filter((s) => !s.title.startsWith("Summary")).map((s) => <Section key={s.title} s={s} />)}
+    </Stack>
+  );
+}

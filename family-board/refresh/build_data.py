@@ -786,6 +786,7 @@ def main() -> int:
     finals = [g for g in games_out if g["status"] == "final"]
     meta = {
         "season": SEASON, "refreshed_at": now_iso(),
+        "td_source": "nflverse play-by-play (NFL Game Statistics & Information System feed), published after each game ends; checked hourly during game windows",
         "latest_final_week": max((g["week"] for g in finals), default=None),
         "final_games": len(finals), "reconciled_games": sum(1 for v in recon.values() if v["reconciled"]),
         "touchdowns": len(tds),
@@ -815,6 +816,12 @@ def main() -> int:
     write_json("weekly.json", weekly)
     write_json("validation.json", validation)
     write_json("slate.json", slate)
+    # Research tab: per-player, per-game usage (a failure leaves the Research tab's usage section on "Unavailable")
+    try:
+        import research_data
+        write_json("usage.json", research_data.build(pbp, players))
+    except Exception as e:
+        print("usage FAILED, Research usage will show Unavailable:", e, file=sys.stderr)
     write_json("reconciliation.json", recon)
     n_pred = save_predictions(slate, games_out)
     try:

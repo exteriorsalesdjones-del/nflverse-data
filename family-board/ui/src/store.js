@@ -37,6 +37,14 @@ export function ensurePregame() {
   if (!pregamePromise) pregamePromise = loadJson("pregame_reads.json").then((d) => { S.pregame = d; emit(); }).catch(() => { S.pregame = null; emit(); });
   return pregamePromise;
 }
+/* Research tab: per-player usage (usage.json) and the season's predictions, loaded when the tab opens. */
+let researchPromise = null;
+export function ensureResearch() {
+  if (!researchPromise) researchPromise = Promise.all([loadJson("usage.json").catch(() => null), loadJson("predictions.json").catch(() => null)])
+    .then(([u, p]) => { S.usage = u; S.predictions = p; emit(); });
+  ensureExtras(); ensureAnalysis();
+  return researchPromise;
+}
 /* Analysis tab (docs/ANALYSIS_W1_10.md): loaded only when the tab is opened. undefined = not loaded, null = unavailable. */
 let analysisPromise = null;
 export function ensureAnalysis() {
@@ -230,12 +238,22 @@ export function resultRows() {
   }
   return { rows, drafts };
 }
+/* A final game settles only after its rebuilt touchdowns reconcile with the official final score (reconciliation.json).
+   Until then a result is provisional; a mismatch is held for review. Applies to picks and parlay legs. */
+function reconGate(gameId, r) {
+  const g = S.gameById[gameId]; if (!g || g.status !== "final" || !S.extrasLoaded) return r;
+  if (r.state !== "win" && r.state !== "loss" && r.state !== "void") return r;
+  const rec = S.recon[gameId];
+  if (!rec) return { state: "pending", why: "Final, waiting for the touchdown records to reconcile with the official score (provisional)." };
+  if (!rec.reconciled) return { state: "needs_review", why: "Touchdown records don't match the official final score yet; held for review." };
+  return r;
+}
 export function settlePick(uid, p) {
   const g = S.gameById[p.game_id];
   const lock = S.locks[p.game_id] && S.locks[p.game_id].picks ? S.locks[p.game_id].picks[uid] || {} : undefined;
   const r = FB.settle(p, g, S.tds.filter((t) => t.game_id === p.game_id), S.played[p.game_id], lock, Date.now());
   const held = S.locks[p.game_id] && S.locks[p.game_id].review && S.locks[p.game_id].review[uid] && S.locks[p.game_id].review[uid][p.key];
-  return held && r.state === "needs_review" ? { ...r, why: held } : r;
+  return reconGate(p.game_id, held && r.state === "needs_review" ? { ...r, why: held } : r);
 }
 
 /* ---------- writes ---------- */
@@ -639,7 +657,7 @@ export async function deleteParlay(id) {
 export function settleParlayFor(uid, par) {
   const legStates = par.legs.map((l) => {
     const g = S.gameById[l.game_id];
-    return FB.settle({ key: "leg", gsis_id: l.gsis_id, status: "submitted", market: l.market || "anytime_td" }, g, S.tds.filter((t) => t.game_id === l.game_id), S.played[l.game_id], { leg: { gsis_id: l.gsis_id, status: "submitted" } }, Date.now()).state;
+    return reconGate(l.game_id, FB.settle({ key: "leg", gsis_id: l.gsis_id, status: "submitted", market: l.market || "anytime_td" }, g, S.tds.filter((t) => t.game_id === l.game_id), S.played[l.game_id], { leg: { gsis_id: l.gsis_id, status: "submitted" } }, Date.now())).state;
   });
   const res = FB.settleParlay(legStates);
   if (FB.parlayLocked(par.legs, S.gameById, Date.now())) {

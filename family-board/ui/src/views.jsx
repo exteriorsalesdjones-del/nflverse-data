@@ -501,6 +501,7 @@ export function TouchdownsView() {
   return (
     <Stack spacing={1.5}>
       <H2>Touchdowns</H2>
+      <ResultsStatus />
       <Box sx={{ overflowX: "auto", mx: -0.5, px: 0.5, pb: 0.5 }}>
         <ToggleButtonGroup exclusive size="small" value={String(wk)} onChange={(e, v) => { if (v) { setF({ ...f, week: v === "all" ? "all" : +v, game: "" }); setLimit(30); } }}
           sx={{ "& .MuiToggleButton-root": { minWidth: 48, minHeight: 44, px: 1.5 } }}>
@@ -535,6 +536,23 @@ export function TouchdownsView() {
     </Stack>
   );
 }
+/* Last successful results check (meta.refreshed_at, the scheduled refresh's own time), the source, and a delay note
+   when a game is in a window and the last check is over 75 minutes old. A failed check never replaces these results. */
+function ResultsStatus() {
+  const S = useStore(); const m = S.meta; if (!m) return null;
+  const now = Date.now(); const last = Date.parse(m.refreshed_at); const ago = Math.round((now - last) / 60000);
+  const inWindow = S.games.some((g) => { const k = FB.etToUtcMs(g.kickoff_et); return now >= k && now - k <= 9 * 3600e3; });
+  const live = S.games.filter((g) => g.status !== "final" && FB.isLocked(g, now)).length;
+  return (
+    <Alert severity={inWindow && ago > 75 ? "warning" : "info"} sx={{ borderRadius: 2 }}>
+      <b>Last checked {et(m.refreshed_at, { weekday: "short", hour: "numeric", minute: "2-digit" })}</b> ({ago < 60 ? `${ago} min ago` : `${Math.round(ago / 60)} h ago`}).
+      {" "}Source: {m.td_source || "nflverse play-by-play, published after each game ends"}.
+      {live > 0 && ` ${live} game${live > 1 ? "s are" : " is"} in progress: touchdowns appear after the game ends and the source publishes it.`}
+      {inWindow && ago > 75 && " Results may be delayed: the latest check hasn't come through. These are the last successful results."}
+      {" "}Picks settle only after a final game's touchdowns match the official score.
+    </Alert>
+  );
+}
 function WeekGlance({ w, pickGame, game }) {
   const S = useStore();
   const tds = S.tds.filter((t) => t.week === w); const games = S.games.filter((g) => g.week === w);
@@ -549,16 +567,24 @@ function WeekGlance({ w, pickGame, game }) {
         {tiles.map(([k, v]) => <Box key={k}><Typography sx={{ fontFamily: "var(--fb-display)", fontSize: 26, fontWeight: 700, lineHeight: 1.1 }}><Num>{v}</Num></Typography><Typography variant="caption" color="text.secondary">{k}</Typography></Box>)}
       </Box>
       {repeat.length > 0 && <Typography variant="body2"><b>Multiple TDs:</b> {repeat.map((r) => `${r.name} ${r.n}`).join(" · ")}</Typography>}
-      <Typography variant="caption" color="text.secondary">Tap a game to see only its touchdowns.</Typography>
+      <Typography variant="caption" color="text.secondary">Tap a final game to see only its touchdowns.</Typography>
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
-        {finals.map((g) => <Chip key={g.game_id} clickable onClick={() => pickGame(g.game_id)} color={game === g.game_id ? "primary" : "default"} variant={game === g.game_id ? "filled" : "outlined"}
-          label={`${g.away} ${g.away_score} · ${g.home} ${g.home_score}`} sx={{ height: 40 }} />)}
+        {games.slice().sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et)).map((g) => {
+          if (g.status !== "final") {
+            const started = FB.isLocked(g, Date.now());
+            return <Chip key={g.game_id} variant="outlined" label={`${g.away} at ${g.home} · ${started ? "In progress: results after the game" : kick(g)}`} sx={{ height: 40, color: "text.secondary" }} />;
+          }
+          const rec = S.recon[g.game_id]; const held = rec && !rec.reconciled;
+          return <Chip key={g.game_id} clickable onClick={() => pickGame(g.game_id)} color={game === g.game_id ? "primary" : held ? "warning" : "default"} variant={game === g.game_id ? "filled" : "outlined"}
+            label={`${g.away} ${g.away_score} · ${g.home} ${g.home_score} · Final${held ? " · held for review" : !rec ? " · reconciling" : ""}`} sx={{ height: 40 }} />;
+        })}
       </Box>
     </CardContent></Card>
   );
 }
 function PlayCard({ t, onOpen }) {
-  const a = effAttr(t);
+  const S = useStore(); const a = effAttr(t);
+  const nGame = t.scorer_id ? S.tds.filter((x) => x.game_id === t.game_id && x.scorer_id === t.scorer_id).length : 1;
   return (
     <ButtonBase onClick={onOpen} sx={{ display: "block", textAlign: "left", border: 1, borderColor: "divider", borderRadius: 2, p: 1.5, bgcolor: "background.paper" }}>
       <Stack direction="row" sx={{ alignItems: "baseline", gap: 1 }}>
@@ -567,6 +593,7 @@ function PlayCard({ t, onOpen }) {
       </Stack>
       <Stack direction="row" sx={{ alignItems: "center", gap: 1, mt: 0.5, flexWrap: "wrap" }}>
         <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }}>{TYPE[t.type]}{t.yards != null ? `, ${t.yards} yds` : ""} vs {t.opp}{(a.defenders || []).length ? ` · on ${a.defenders.map((d) => d.name).join(", ")}` : ""}</Typography>
+        {nGame > 1 && <Chip size="small" color="secondary" label={`${nGame} TDs this game`} />}
         <StatusChip s={a.status} />
       </Stack>
     </ButtonBase>
