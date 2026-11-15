@@ -182,17 +182,74 @@ def reconcile(pbp: pd.DataFrame, td: pd.DataFrame, games: pd.DataFrame) -> dict:
         add(r.game_id, r.defteam, 2)
 
     out = {}
+    have_plays = set(pbp.game_id.unique())
     for g in games[games.result.notna()].itertuples():
         h, a = pts.get((g.game_id, g.home_team), 0), pts.get((g.game_id, g.away_team), 0)
         tds = td[td.game_id == g.game_id]
         out[g.game_id] = {
             "reconciled": bool(h == g.home_score and a == g.away_score),
+            # final on the schedule, but the play-by-play source hasn't published this game's plays yet: not a mismatch,
+            # just not checkable yet. Its picks stay pending and it does not block publishing the other games.
+            "awaiting_source": g.game_id not in have_plays,
             "official": [int(g.away_score), int(g.home_score)],
             "rebuilt": [a, h],
             "td_count": int(len(tds)),
             "td_by_team": {g.away_team: int((tds.td_team == g.away_team).sum()), g.home_team: int((tds.td_team == g.home_team).sum())},
         }
     return out
+
+
+def results_change(tds: list, games_out: list) -> dict:
+    """results_changed_at advances only when the results fingerprint differs from the previous meta.json in the output
+    folder (the scheduled job downloads the published one first); a check with no changes keeps the old time."""
+    fp = results_fingerprint(tds, games_out); prev = {}
+    try:
+        prev = json.loads((OUT / "meta.json").read_text())
+    except Exception:
+        pass
+    same = prev.get("results_fingerprint") == fp and prev.get("results_changed_at")
+    return {"results_fingerprint": fp, "results_changed_at": prev["results_changed_at"] if same else now_iso()}
+
+
+def check_scorers(tds: list, recon: dict, stats_path: Path | None = None) -> None:
+    """Second check on each final game: every player's touchdown count in the rebuilt records must equal nflverse's
+    official weekly player stats (rushing + receiving + special-teams + defensive + fumble-recovery TDs). A matching
+    final score can't catch a touchdown credited to the wrong player; this can. Adds to recon[game]:
+    scorers_verified True / False / None (official stats for that game not published yet) and scorer_mismatches."""
+    path = stats_path or (CACHE / f"stats_player_week_{SEASON}.parquet")
+    try:
+        st = pd.read_parquet(path)
+    except Exception:
+        for r in recon.values():
+            r["scorers_verified"] = None; r["scorer_mismatches"] = []
+        return
+    st = st[st.season_type == "REG"] if "season_type" in st else st
+    cols = [c for c in ("rushing_tds", "receiving_tds", "special_teams_tds", "def_tds", "fumble_recovery_tds") if c in st.columns]
+    st = st.assign(tds=st[cols].fillna(0).sum(axis=1))
+    have = set(st.game_id)
+    official = st[st.tds > 0].groupby(["game_id", "player_id"]).tds.sum().to_dict()
+    records: dict = {}
+    for t in tds:
+        if t.get("scorer_id"):
+            records[(t["game_id"], t["scorer_id"])] = records.get((t["game_id"], t["scorer_id"]), 0) + 1
+    ncol = next((c for c in ("player_display_name", "player_name") if c in st.columns), None)
+    names = dict(zip(st.player_id, st[ncol])) if ncol else {}
+    names.update({t["scorer_id"]: t.get("scorer") for t in tds if t.get("scorer_id")})
+    for gid, r in recon.items():
+        if gid not in have:
+            r["scorers_verified"] = None; r["scorer_mismatches"] = []; continue
+        pids = {p for (g, p) in official if g == gid} | {p for (g, p) in records if g == gid}
+        bad = [{"player_id": p, "player": names.get(p), "records": records.get((gid, p), 0), "official": int(official.get((gid, p), 0))}
+               for p in sorted(pids) if records.get((gid, p), 0) != int(official.get((gid, p), 0))]
+        r["scorers_verified"] = not bad; r["scorer_mismatches"] = bad
+
+
+def results_fingerprint(tds: list, games_out: list) -> str:
+    """Changes only when a touchdown, its scorer, or a final score changes."""
+    import hashlib
+    parts = sorted(f"{t['key']}|{t.get('scorer_id')}|{t.get('team')}" for t in tds)
+    parts += sorted(f"{g['game_id']}|{g.get('status')}|{g.get('away_score')}|{g.get('home_score')}" for g in games_out if g.get("status") == "final")
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
 def pfr_attribution(td: pd.DataFrame, pfr: pd.DataFrame, players: pd.DataFrame) -> dict:
@@ -766,6 +823,7 @@ def main() -> int:
     pbp, games, pfr, players, injuries, snaps = load()
     games_out = build_games(games, pbp)
     tds, recon = build_touchdowns(pbp, games, pfr, players)
+    check_scorers(tds, recon)
     weekly = build_weekly(games_out, tds, recon)
     validation = validate(pbp, games, snaps, players, pfr)
     bt = Path(__file__).with_name("v03_backtest.json")
@@ -786,7 +844,9 @@ def main() -> int:
     finals = [g for g in games_out if g["status"] == "final"]
     meta = {
         "season": SEASON, "refreshed_at": now_iso(),
+        "feed": "Postgame results",
         "td_source": "nflverse play-by-play (NFL Game Statistics & Information System feed), published after each game ends; checked hourly during game windows",
+        **results_change(tds, games_out),
         "latest_final_week": max((g["week"] for g in finals), default=None),
         "final_games": len(finals), "reconciled_games": sum(1 for v in recon.values() if v["reconciled"]),
         "touchdowns": len(tds),
@@ -810,7 +870,10 @@ def main() -> int:
     write_json("played.json", played)
     write_json("defenders.json", {"through_week": int(pfr.week.max()), "min_targets": 25, "source": PFR_SOURCE,
                                   "rows": MU.defender_board(pfr)})
-    bad = [k for k, v in recon.items() if not v["reconciled"]]
+    bad = [k for k, v in recon.items() if not v["reconciled"] and not v.get("awaiting_source")]
+    waiting = [k for k, v in recon.items() if v.get("awaiting_source")]
+    if waiting:
+        HEALTH["problems"].append(f"Final but not yet in the play-by-play source (picks stay pending): {', '.join(waiting)}.")
     write_json("games.json", games_out)
     write_json("touchdowns.json", tds)
     write_json("weekly.json", weekly)
@@ -841,7 +904,7 @@ def main() -> int:
     meta["health"] = {"model": slate.get("headline_model"), "predictions_saved": n_pred, "problems": HEALTH["problems"],
                       "ok": not any(("failed" in x and "Weekly" not in x) or "v0.2" in x for x in HEALTH["problems"])}
     write_json("meta.json", meta)  # last: its timestamp marks a complete refresh
-    print(json.dumps({"final_games": len(finals), "reconciled": meta["reconciled_games"], "unreconciled": bad,
+    print(json.dumps({"final_games": len(finals), "reconciled": meta["reconciled_games"], "unreconciled": bad, "awaiting_source": waiting,
                       "touchdowns": len(tds), "slate_week": slate["week"], "validation_n": validation.get("n")}))
     return 1 if bad else 0
 

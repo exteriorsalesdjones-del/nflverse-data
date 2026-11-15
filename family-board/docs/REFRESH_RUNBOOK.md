@@ -16,7 +16,11 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
    If there are no lines yet, run it without `FB_LINES_DIR`.
    Rebuilds `artifact/data/*.json` (including `predictions.json` and `grades.json`; publish both).
    `meta.json` → `health` lists any problem (failed download, model fallback, missing forecasts). Exit code 1 means a final game failed to
-   reconcile with the official score: do **not** publish; report the game ids it printed.
+   reconcile with the official score: do **not** publish; report the game ids it printed (`unreconciled`). A game that is final on
+   the schedule but has no plays in the play-by-play yet is listed under `awaiting_source`: it does not fail the build, its picks stay
+   pending, and the next run picks it up. Before building, copy the published `data/meta.json` into the output folder so
+   `results_changed_at` only moves when touchdowns, scorers or final scores actually change. `reconciliation.json` also carries
+   `scorers_verified` (each scorer's TD count checked against official weekly player stats; picks settle only when it is true).
    `meta.json` is written last, so a crash leaves the old data and old timestamp in place.
 3. `python3 -m pytest -q tests` is not needed; run `node --test tests/lib.test.js`
    only when `artifact/lib.js` changed.
@@ -30,6 +34,6 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
    - `python3 refresh/make_locks.py <tmp> <tmp>/out <existing ids...>`
    - For each file printed, `ArtifactData set collection=locks doc_id=<game_id> file_path=<file>`
      (create only; never overwrite an existing lock).
-6. Report: final games, reconciled games, touchdowns, new snapshots, and any failure.
+6. Report: final games, reconciled games, games awaiting the source, scorer-check mismatches, touchdowns, new snapshots, and any failure.
 
 Never write to `picks`, `parlays`, `lines`, `refs`, `odds`, `overrides` or `reviews` from the refresh. Those belong to members and admins.

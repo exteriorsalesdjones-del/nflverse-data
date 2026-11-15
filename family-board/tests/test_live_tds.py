@@ -86,5 +86,20 @@ wk = games_all[games_all.week == 9]; tdw, recw = run(pbp_all[pbp_all.game_id.isi
 okw = [gid for gid, r in recw.items() if r["reconciled"]]
 check("final reconciliation: every final Week 9 game matches its official score", len(okw) == len(recw) and len(recw) == int(wk.result.notna().sum()), f"{len(okw)}/{len(recw)} games")
 
+# 8. a game that's final on the schedule but not yet in the play-by-play (today's NE at DET at 3:05 PM): pending, not a failure
+p_missing = p[p.game_id != ids[1]]
+_, recon_m = run(p_missing, g)
+check("final but not yet in the source: marked awaiting_source (pending), the other game still reconciles",
+      recon_m[ids[1]]["awaiting_source"] and not recon_m[ids[1]]["reconciled"] and recon_m[ids[0]]["reconciled"] and not recon_m[ids[0]]["awaiting_source"],
+      f"{ids[1]} rebuilt {recon_m[ids[1]]['rebuilt']} vs official {recon_m[ids[1]]['official']}")
+
+# 9. scorer check against official player stats: a wrong scorer on one play is caught even though the score still matches
+rows_ok, rec_ok = BD.build_touchdowns(p, g, pfr, players); BD.check_scorers(rows_ok, rec_ok)
+rows_bad, rec_bad = BD.build_touchdowns(p_bad, g, pfr, players); BD.check_scorers(rows_bad, rec_bad)
+check("scorer check: correct records verify against official player stats", all(rec_ok[gid]["scorers_verified"] is True for gid in ids))
+check("scorer check: a wrongly credited TD is flagged even though the final score still reconciles",
+      rec_bad[row.game_id]["reconciled"] and rec_bad[row.game_id]["scorers_verified"] is False and len(rec_bad[row.game_id]["scorer_mismatches"]) == 2,
+      "; ".join(f"{m['player']}: records {m['records']} vs official {m['official']}" for m in rec_bad[row.game_id]["scorer_mismatches"]))
+
 print(f"\n{sum(results)} passed, {len(results) - sum(results)} failed")
 sys.exit(0 if all(results) else 1)

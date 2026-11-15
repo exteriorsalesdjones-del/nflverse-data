@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { visuallyHidden } from "@mui/utils";
 import { Icon, P } from "./icons.jsx";
@@ -536,20 +536,31 @@ export function TouchdownsView() {
     </Stack>
   );
 }
-/* Last successful results check (meta.refreshed_at, the scheduled refresh's own time), the source, and a delay note
-   when a game is in a window and the last check is over 75 minutes old. A failed check never replaces these results. */
+/* "Postgame results": the last successful source check and the last time results changed, both in ET, with a
+   Refresh results button that runs the same backend refresh as the hourly job. Current results stay on screen. */
 function ResultsStatus() {
   const S = useStore(); const m = S.meta; if (!m) return null;
   const now = Date.now(); const last = Date.parse(m.refreshed_at); const ago = Math.round((now - last) / 60000);
   const inWindow = S.games.some((g) => { const k = FB.etToUtcMs(g.kickoff_et); return now >= k && now - k <= 9 * 3600e3; });
   const live = S.games.filter((g) => g.status !== "final" && FB.isLocked(g, now)).length;
+  const busy = !!(S.refresh && S.refresh.busy); const t = { weekday: "short", hour: "numeric", minute: "2-digit" };
   return (
-    <Alert severity={inWindow && ago > 75 ? "warning" : "info"} sx={{ borderRadius: 2 }}>
-      <b>Last checked {et(m.refreshed_at, { weekday: "short", hour: "numeric", minute: "2-digit" })}</b> ({ago < 60 ? `${ago} min ago` : `${Math.round(ago / 60)} h ago`}).
-      {" "}Source: {m.td_source || "nflverse play-by-play, published after each game ends"}.
-      {live > 0 && ` ${live} game${live > 1 ? "s are" : " is"} in progress: touchdowns appear after the game ends and the source publishes it.`}
-      {inWindow && ago > 75 && " Results may be delayed: the latest check hasn't come through. These are the last successful results."}
-      {" "}Picks settle only after a final game's touchdowns match the official score.
+    <Alert severity={inWindow && ago > 75 ? "warning" : "info"} icon={false} sx={{ borderRadius: 2 }}>
+      <Typography variant="subtitle2" component="h3">{m.feed || "Postgame results"}</Typography>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 1, flexWrap: "wrap", mt: 0.25 }}>
+        <Typography variant="body2" sx={{ flex: 1, minWidth: 180 }}>
+          Last successful check: <b>{et(m.refreshed_at, t)}</b> ({ago < 1 ? "just now" : ageTxt(ago)})<br />
+          Results last changed: <b>{m.results_changed_at ? et(m.results_changed_at, t) : "Unavailable until the next check"}</b>
+        </Typography>
+        <Button variant="outlined" size="small" disabled={busy} onClick={() => manualRefresh()} sx={{ minHeight: 40, flexShrink: 0 }}>{busy ? "Checking…" : "Refresh results"}</Button>
+      </Stack>
+      {S.refresh && S.refresh.msg && <Typography variant="body2" role="status" sx={{ mt: 0.5, fontWeight: 600 }}>{S.refresh.msg}</Typography>}
+      <Typography variant="caption" sx={{ display: "block", mt: 0.5 }}>
+        Source: {m.td_source || "nflverse play-by-play, published after each game ends"}.
+        {live > 0 && ` ${live} game${live > 1 ? "s are" : " is"} in progress: touchdowns appear after the game ends and the source publishes them.`}
+        {inWindow && ago > 75 && " Results may be delayed: the latest check hasn't come through. These are the last successful results."}
+        {" "}Picks and parlay legs settle only after a final game's touchdowns match the official score and each scorer matches the official player stats.
+      </Typography>
     </Alert>
   );
 }
@@ -574,9 +585,11 @@ function WeekGlance({ w, pickGame, game }) {
             const started = FB.isLocked(g, Date.now());
             return <Chip key={g.game_id} variant="outlined" label={`${g.away} at ${g.home} · ${started ? "In progress: results after the game" : kick(g)}`} sx={{ height: 40, color: "text.secondary" }} />;
           }
-          const rec = S.recon[g.game_id]; const held = rec && !rec.reconciled;
+          const rec = S.recon[g.game_id]; const waiting = rec && rec.awaiting_source;
+          const held = rec && !waiting && (!rec.reconciled || rec.scorers_verified === false);
+          const note = waiting ? " · touchdowns not published yet" : held ? " · held for review" : !rec ? " · reconciling" : rec.scorers_verified !== true ? " · verifying scorers" : "";
           return <Chip key={g.game_id} clickable onClick={() => pickGame(g.game_id)} color={game === g.game_id ? "primary" : held ? "warning" : "default"} variant={game === g.game_id ? "filled" : "outlined"}
-            label={`${g.away} ${g.away_score} · ${g.home} ${g.home_score} · Final${held ? " · held for review" : !rec ? " · reconciling" : ""}`} sx={{ height: 40 }} />;
+            label={`${g.away} ${g.away_score} · ${g.home} ${g.home_score} · Final${note}`} sx={{ height: 40 }} />;
         })}
       </Box>
     </CardContent></Card>

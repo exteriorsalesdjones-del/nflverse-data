@@ -62,6 +62,62 @@ export function ensureExtras() {
   })();
   return extrasPromise;
 }
+/* ---------- manual "Refresh results" ----------
+   Starts the SAME scheduled refresh task the hourly job uses (touchdown refresh + final reconciliation), through the
+   built-in "Claude Code Remote" connector, then reloads the results. It works only for a viewer whose account owns that
+   task (the app owner); other viewers get a clear message. A run already in progress is reused, never doubled. */
+export const REFRESH_TASK = "trig_01LCKHqkBDfuT7usJiR3GhEJ";
+const RR = "Claude Code Remote";
+const MANUAL_NOTE = "Manual refresh requested from the app's TDs tab: skip the step 0 game-window check and run the refresh now.";
+const runDone = (st) => /SUCCEEDED|FAILED|CANCEL|SKIPPED|ERROR/.test(String(st || ""));
+async function taskState(mcp) {
+  const r = await mcp.callTool(RR, "get_trigger", { trigger_id: REFRESH_TASK }, { cache: false });
+  const t = (r.payload && r.payload.trigger) || r.payload || {}; return t.last_run || {};
+}
+export async function reloadResults() {
+  const [meta, games, tds, recon, played, weekly] = await Promise.all(["meta", "games", "touchdowns", "reconciliation", "played", "weekly"].map((n) => loadJson(n + ".json")));
+  Object.assign(S, { meta, games, tds, recon, played, weekly, extrasLoaded: true });
+  S.gameById = Object.fromEntries(games.map((g) => [g.game_id, g])); emit();
+}
+export async function manualRefresh() {
+  if (S.refresh && S.refresh.busy) return;
+  const set = (x) => { S.refresh = { ...(S.refresh || {}), ...x }; emit(); };
+  const before = S.meta ? { checked: S.meta.refreshed_at, changed: S.meta.results_changed_at } : {};
+  set({ busy: true, msg: "Checking the source for new results…" });
+  let mcp = null;
+  try { mcp = window.claude && window.claude.use ? await window.claude.use("mcp") : null; } catch (e) { mcp = null; }
+  if (!mcp) { set({ busy: false, msg: "Manual refresh isn't available in this view (it needs the app owner's Claude Code Remote connector). Results update with the hourly check." }); return; }
+  try {
+    let run = await taskState(mcp); let firedAfter;
+    if (run.status && !runDone(run.status)) {                       // a scheduled or manual run is already going: use its result
+      firedAfter = Date.parse(run.fired_at || 0) - 1000;
+      set({ msg: "Refresh already in progress. Showing its result when it finishes…" }); toast("Refresh already in progress");
+    } else {
+      firedAfter = Math.max(Date.parse(run.fired_at || 0) + 1000, Date.now() - 60000);
+      await mcp.callTool(RR, "fire_trigger", { trigger_id: REFRESH_TASK, text: MANUAL_NOTE }, { cache: false });
+    }
+    for (let i = 0; i < 45; i++) {                                   // up to ~15 minutes, every 20 s
+      await new Promise((res) => setTimeout(res, 20000));
+      run = await taskState(mcp);
+      if (run.fired_at && Date.parse(run.fired_at) >= firedAfter && runDone(run.status)) break;
+    }
+    if (!runDone(run.status)) { set({ busy: false, msg: "Still checking. The results will appear when the run finishes." }); return; }
+    if (/FAILED|ERROR|CANCEL/.test(run.status)) { set({ busy: false, msg: "Couldn't check for updates. Showing the last available results." }); toast("Couldn't check for updates. Showing the last available results."); return; }
+    await reloadResults();
+    const m = S.meta || {};
+    const msg = m.refreshed_at === before.checked ? "Couldn't check for updates. Showing the last available results."
+      : m.results_changed_at && m.results_changed_at !== before.changed ? "Results updated" : "No new results yet";
+    set({ busy: false, msg }); toast(msg);
+  } catch (e) {
+    const code = e && e.code;
+    const msg = code === "server_not_connected" || code === "not_in_manifest" || code === "tool_error"
+      ? "Manual refresh needs the app owner's account (Claude Code Remote connector). Results update with the hourly check."
+      : code === "approval_required" || code === "consent_required" ? "Allow the Claude Code Remote connector for this app to refresh results from here."
+      : code === "needs_reauth" ? "Reconnect Claude Code Remote in claude.ai Settings → Connectors to refresh from here."
+      : "Couldn't check for updates. Showing the last available results.";
+    set({ busy: false, msg }); toast(msg);
+  }
+}
 export async function loadData() {
   try {
     // what This Week needs first; the touchdown history loads right after, in the background
@@ -245,7 +301,11 @@ function reconGate(gameId, r) {
   if (r.state !== "win" && r.state !== "loss" && r.state !== "void") return r;
   const rec = S.recon[gameId];
   if (!rec) return { state: "pending", why: "Final, waiting for the touchdown records to reconcile with the official score (provisional)." };
+  if (rec.awaiting_source) return { state: "pending", why: "Final, waiting for the source to publish this game's touchdown records (provisional)." };
   if (!rec.reconciled) return { state: "needs_review", why: "Touchdown records don't match the official final score yet; held for review." };
+  // individual records: each scorer's TD count must match the official player stats (catches a TD credited to the wrong player)
+  if (rec.scorers_verified === false) return { state: "needs_review", why: "A touchdown scorer doesn't match the official player stats yet; held for review." };
+  if (rec.scorers_verified !== true) return { state: "pending", why: "Final, waiting for official player stats to verify each touchdown scorer (provisional)." };
   return r;
 }
 export function settlePick(uid, p) {
