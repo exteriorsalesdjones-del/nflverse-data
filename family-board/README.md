@@ -21,6 +21,8 @@ Nothing here places wagers or takes payments. Workbook exports and login logs ar
 | `locks/<game_id>` | admins and the refresh | kickoff snapshot of submitted picks |
 | `reviews/<game_id>~<play_id>` | admins | attribution override with change history |
 
+| `data/users/<owner>/oddspapi` | the owner only (private: nobody else can read it) | sportsbook feed API key |
+
 Refresh data never touches these paths, so a refresh cannot overwrite picks or reviews.
 
 ## Importing a legacy submission file later

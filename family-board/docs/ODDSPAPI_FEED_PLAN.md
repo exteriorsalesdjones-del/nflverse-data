@@ -1,6 +1,11 @@
 # OddsPapi sportsbook feed: plan (not built yet)
 
-Status: waiting on the key. Nothing below is built or deployed.
+Status (Nov 16 2026): BUILT, tested on simulated responses only. `refresh/odds_feed.py`, `tests/test_odds_feed.py`,
+Admin page "Sportsbook feed" (owner enters the key there; it is kept in the owner's private database path
+`data/users/<owner>/oddspapi`, not an environment variable as first planned). Feed rows show for everyone on the
+Week tab without the "Add to my prices" step. Not yet checked against a real response: fixture field names, the
+FanDuel / DraftKings book slugs, and whether the plan includes DraftKings player props (`odds_feed.py probe` prints the
+response shapes without the key or any price). The original plan follows.
 
 ## Why it works this way
 - The user's OddsPapi key is for the **v4 API** (`https://api.oddspapi.io/v4`), which only accepts the key as the

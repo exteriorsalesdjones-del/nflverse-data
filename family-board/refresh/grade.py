@@ -97,6 +97,17 @@ def main(lines_dir: str | None = None) -> dict:
                 if (r.get("market") or "anytime_td") != "anytime_td" or not r.get("gsis_id") or not r.get("captured_at"):
                     continue
                 prices.setdefault(r["gsis_id"], []).append(r)
+    # the sportsbook feed's prices (odds_feed.json: FanDuel / DraftKings, timed at each pull) grade the same way
+    try:
+        feed = []
+        for name in ("odds_feed.json", "odds_feed_history.json"):
+            if (D / name).exists():
+                feed += json.loads((D / name).read_text()).get("rows", [])
+        for r in feed:
+            if (r.get("market") or "anytime_td") == "anytime_td" and r.get("gsis_id") and r.get("captured_at"):
+                prices.setdefault(r["gsis_id"], []).append(r)
+    except (OSError, ValueError):
+        pass
     mrows = []
     for r in rows:
         cand = []

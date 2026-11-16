@@ -82,6 +82,7 @@ export async function reloadResults() {
   const [meta, games, tds, recon, played, weekly] = await Promise.all(["meta", "games", "touchdowns", "reconciliation", "played", "weekly"].map((n) => loadJson(n + ".json")));
   Object.assign(S, { meta, games, tds, recon, played, weekly, extrasLoaded: true });
   S.gameById = Object.fromEntries(games.map((g) => [g.game_id, g])); emit();
+  loadOddsFeed();
 }
 export async function manualRefresh() {
   if (S.refresh && S.refresh.busy) return;
@@ -122,6 +123,36 @@ export async function manualRefresh() {
     set({ busy: false, msg }); toast(msg);
   }
 }
+/* ---------- sportsbook feed (FanDuel / DraftKings prices pulled by the scheduled refresh) ----------
+   data/odds_feed.json is written by refresh/odds_feed.py. It is optional: a missing file means the feed isn't set up.
+   Its rows are shown beside the family's uploaded prices, for everyone, with no upload step. Re-read whenever the
+   page comes back into view and every 10 minutes, so a new pull shows without a reload. */
+export async function loadOddsFeed() {
+  try { const d = await loadJson("odds_feed.json"); if (!S.oddsFeed || S.oddsFeed.pulled_at !== d.pulled_at || S.oddsFeed.error !== d.error) { S.oddsFeed = d; emit(); } }
+  catch (e) { if (S.oddsFeed === undefined) { S.oddsFeed = null; emit(); } }
+}
+const feedRows = (week) => (S.oddsFeed && S.oddsFeed.week === week ? (S.oddsFeed.rows || []).map((r) => ({ ...r, uploaded_by: "feed" })) : []);
+/* The feed's API key. Entered by the app owner on the Admin page and kept in the owner's PRIVATE part of the database
+   (data/users/<owner>/oddspapi): no other member, editor or viewer can read it, and it is never in a published file.
+   The scheduled refresh, which runs as the owner, reads it from there. The page only ever shows the last 4 characters. */
+const feedKeyDoc = () => S.db.doc(`data/users/${S.uid}/oddspapi`);
+function watchFeedKey() {
+  if (!S.isOwner || !S.db || !S.uid) return;
+  feedKeyDoc().onSnapshot((d) => { const x = d.exists ? d.data() : null; S.feedKey = x && x.key ? { tail: String(x.key).slice(-4), saved_at: x.saved_at } : null; S.feedKeyLoaded = true; emit(); },
+    () => setTimeout(watchFeedKey, 5000));
+}
+export async function saveFeedKey(raw) {
+  const key = String(raw || "").trim();
+  if (!S.isOwner) { toast("Only the app owner can set the sportsbook feed key."); return false; }
+  if (key.length < 8 || /\s/.test(key)) { toast("That doesn't look like an API key. Paste the key exactly as OddsPapi shows it."); return false; }
+  try { await feedKeyDoc().set({ key, saved_at: new Date().toISOString() }); toast("Key saved. Prices arrive with the next scheduled check."); return true; }
+  catch (e) { toast("Couldn't save the key. Check your connection and try again."); return false; }
+}
+export async function removeFeedKey() {
+  try { await feedKeyDoc().delete(); toast("Key removed. The feed stops at the next check; prices already shown stay until they age out."); }
+  catch (e) { toast("Couldn't remove the key."); }
+}
+
 export async function loadData() {
   try {
     // what This Week needs first; the touchdown history loads right after, in the background
@@ -129,6 +160,7 @@ export async function loadData() {
     Object.assign(S, { meta, games, slate, validation });
     S.gameById = Object.fromEntries(games.map((g) => [g.game_id, g]));
     emit();
+    loadOddsFeed();
     // the touchdown history, results and grades load once a screen needs them, or after the first screen settles
     setTimeout(ensureExtras, 2500);
   } catch (e) {
@@ -176,6 +208,7 @@ export async function connect() {
   if (user) {
     S.uid = await user.id();
     S.isAdmin = (await user.canEdit()) === true;
+    S.isOwner = typeof user.isOwner === "function" && (await user.isOwner()) === true;
     S.canWrite = (await user.can("data.write")) !== false;
   }
   if (!db) { clearTimeout(timer); S.dbState = "off"; emit(); return; }
@@ -211,8 +244,9 @@ export async function connect() {
       for (let i = 0; i < LINE_PARTS; i++) watchPart(d.id, i);
     });
   });
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshLines(); });
-  watchLive(db);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { refreshLines(); loadOddsFeed(); } });
+  watchLive(db); watchFeedKey();
+  setInterval(() => { if (document.visibilityState === "visible") loadOddsFeed(); }, 600000);
   watch("parlays", (s) => { S.parlaysAll = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); });
   watch("refs", (s) => { S.refs = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); });
   watch("overrides", (s) => { S.overrides = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); });
@@ -229,7 +263,7 @@ async function resolveNames() {
   try { S.names = await S.user.profiles(ids); emit(); } catch (e) { /* names are optional */ }
 }
 
-export const nameOf = (uid) => (S.names[uid] && S.names[uid].name) || (uid === S.uid ? "You" : "Member");
+export const nameOf = (uid) => uid === "feed" ? "Sportsbook feed" : (S.names[uid] && S.names[uid].name) || (uid === S.uid ? "You" : "Member");
 export const effAttr = (t) => {
   const r = S.reviews[t.key];
   return r ? { ...t.attribution, status: r.status, defenders: r.defenders || [], missing: r.missing || t.attribution.missing, reviewed: r } : t.attribution;
@@ -293,7 +327,7 @@ function lineIndex(week) {
   const key = `${week}|${S.version}`;
   if (lineCache.key !== key) {
     const up = S.slate && week === S.slate.week ? Object.entries(S.lines).flatMap(([uid, rows]) => rows.map((r) => rematch({ ...r, uploaded_by: uid }))) : [];
-    const rows = liveOddsRows(week).concat(up); const by = new Map();
+    const rows = liveOddsRows(week).concat(feedRows(week), up); const by = new Map();
     rows.forEach((r) => { if (!r.gsis_id) return; const k = `${r.gsis_id}|${r.market || "anytime_td"}`; const a = by.get(k); if (a) a.push(r); else by.set(k, [r]); });
     lineCache = { key, rows, by };
   }

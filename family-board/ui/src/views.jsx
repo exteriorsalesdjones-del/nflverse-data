@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, saveFeedKey, removeFeedKey, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { visuallyHidden } from "@mui/utils";
 import { Icon, P } from "./icons.jsx";
@@ -17,7 +17,7 @@ import { LivePanel } from "./live.jsx";
 /* ---------- shared bits ---------- */
 const pct = (p) => (p == null || isNaN(p) ? "—" : (p * 100).toFixed(0) + "%");
 /* Every price time is reported by whoever uploaded it; none is verified against the sportsbook. */
-const timeBasis = (src) => (src === "upload time" ? "time = when it was uploaded (unverified)" : src === "screenshot file time" ? "time = screenshot file time (unverified)" : "time as reported by the uploader (unverified)");
+const timeBasis = (src) => (src === "sportsbook feed" ? "time = when the feed last checked the book" : src === "upload time" ? "time = when it was uploaded (unverified)" : src === "screenshot file time" ? "time = screenshot file time (unverified)" : "time as reported by the uploader (unverified)");
 const odds1 = (p) => (p == null || isNaN(p) ? "—" : p >= 0.01 ? (p * 100).toFixed(1) + "%" : p > 0 ? `1 in ${Math.round(1 / p).toLocaleString()}` : "0%");
 const pct1 = (p) => (p == null || isNaN(p) ? "—" : (p * 100).toFixed(1) + "%");
 const am = (a) => (a == null || isNaN(a) ? "—" : (a > 0 ? "+" : "") + a);
@@ -183,7 +183,7 @@ export function WeekView() {
           <H2>Week {s.week}</H2>
           <Button size="large" startIcon={<Icon d={P.info} />} onClick={() => setHow(true)}>How this works</Button>
         </Stack>
-        <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · sportsbook prices come from family uploads</Typography>
+        <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · sportsbook prices come from {S.oddsFeed && (S.oddsFeed.rows || []).length && S.oddsFeed.week === S.slate.week ? "the FanDuel / DraftKings feed and family uploads" : "family uploads"}</Typography>
         <ToggleButtonGroup exclusive fullWidth size="small" value={S.weekMarket} onChange={(e, v) => v && setWeekMarket(v)} aria-label="Market" sx={{ mt: 1, "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none", fontWeight: 600 } }}>
           <ToggleButton value="anytime_td">Anytime TD</ToggleButton><ToggleButton value="2plus_td">2+ TDs</ToggleButton>
         </ToggleButtonGroup>
@@ -927,6 +927,7 @@ export function AdminView() {
           <Typography variant="body2" sx={{ flex: 1 }}>Wk {t.week} {t.scorer} ({t.team} vs {t.opp}) · {TYPE[t.type]}</Typography>
           <Button variant="outlined" onClick={() => setPlay(t)} sx={{ minHeight: 44 }}>Review</Button></Stack>)}
       </Fold>
+      <FeedAdmin />
       <Fold title="Data sources">
         {S.meta.sources.map((s) => <Typography key={s.name} variant="body2"><b>{s.name}</b>: {s.fields}{s.through_week ? ` (through week ${s.through_week})` : ""}</Typography>)}
         <Typography variant="body2" color="text.secondary">Not connected: {S.meta.not_connected.join("; ")}.</Typography>
@@ -934,6 +935,43 @@ export function AdminView() {
       </Fold>
       {play && <PlayDialog t={play} onClose={() => setPlay(null)} />}
     </Stack>
+  );
+}
+
+/* Admin: the sportsbook feed (FanDuel and DraftKings prices from OddsPapi, pulled by the scheduled refresh). The key is
+   entered here by the app owner and kept in the owner's private part of the database; it is never shown again in full. */
+function FeedAdmin() {
+  const S = useStore(); const [key, setKey] = useState(""); const [busy, setBusy] = useState(false);
+  const f = S.oddsFeed; const cov = (f && f.coverage) || {};
+  const when = (t) => et(t, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  return (
+    <Fold title="Sportsbook feed" summary="FanDuel and DraftKings prices, updated automatically">
+      {!f || (!f.pulled_at && f.ok !== false) ? <Alert severity="info" sx={{ borderRadius: 2 }}>Not running yet. Once a key is saved, prices arrive with the next scheduled check and show on the Week tab for everyone.</Alert>
+        : f.ok === false ? <Alert severity="warning" sx={{ borderRadius: 2 }} data-testid="feed-status">The last pull failed{f.failed_at ? ` (${when(f.failed_at)})` : ""}: {f.error} {f.pulled_at ? `Showing prices from ${when(f.pulled_at)}.` : "No prices yet."}</Alert>
+        : <Alert severity={(f.rows || []).length ? "success" : "info"} sx={{ borderRadius: 2 }} data-testid="feed-status">
+            Last pull: <b>{when(f.pulled_at)}</b> · week {f.week} · {(f.rows || []).length} prices{cov.players ? ` for ${cov.players} players` : ""}{cov.books && cov.books.length ? ` · ${cov.books.join(", ")}` : ""}
+            {cov.games_open != null ? ` · ${cov.games_with_prices || 0} of ${cov.games_open} open games` : ""}.{f.note ? ` ${f.note}` : ""}
+            {(f.unmatched || []).length ? ` ${f.unmatched.length} name${f.unmatched.length > 1 ? "s" : ""} not matched to a player.` : ""}
+          </Alert>}
+      {f && (f.unmatched || []).length > 0 && <Typography variant="caption" color="text.secondary">Not matched: {f.unmatched.slice(0, 12).join("; ")}{f.unmatched.length > 12 ? "…" : ""}</Typography>}
+      {!S.isOwner ? <Typography variant="body2" color="text.secondary">Only the app owner can enter or change the feed's API key.</Typography> : (
+        <>
+          <Typography variant="body2" data-testid="feed-key-state">
+            {!S.feedKeyLoaded ? "Checking for a saved key…" : S.feedKey ? <>API key saved{S.feedKey.saved_at ? ` ${when(S.feedKey.saved_at)}` : ""} (ends in <b>{S.feedKey.tail}</b>).</> : "No API key saved."}
+          </Typography>
+          <TextField label={S.feedKey ? "Replace the OddsPapi API key" : "OddsPapi API key"} type="password" value={key} onChange={(e) => setKey(e.target.value)}
+            autoComplete="off" slotProps={{ htmlInput: { autoCapitalize: "off", autoCorrect: "off", spellCheck: false, "data-1p-ignore": true } }}
+            helperText="Kept in your private part of the app's database: other family members, editors and viewers can't read it, and it is never published. Only your scheduled refresh reads it." />
+          <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
+            <Button variant="contained" size="large" disabled={!key.trim() || busy} onClick={async () => { setBusy(true); if (await saveFeedKey(key)) setKey(""); setBusy(false); }}>Save key</Button>
+            {S.feedKey && <Button size="large" color="error" onClick={removeFeedKey}>Remove key</Button>}
+            {S.feedKey && <Button size="large" variant="outlined" disabled={!!(S.refresh && S.refresh.busy)} onClick={manualRefresh}>{S.refresh && S.refresh.busy ? "Checking…" : "Pull prices now"}</Button>}
+          </Stack>
+          {S.refresh && S.refresh.msg && <Typography variant="body2" role="status">{S.refresh.msg}</Typography>}
+          <Typography variant="caption" color="text.secondary">Prices are pulled by the scheduled refresh (hourly at most), only for games that haven't kicked off, and count as fresh for {FB.PRICE_FRESH_MIN / 60} hours. Family uploads keep working alongside.</Typography>
+        </>
+      )}
+    </Fold>
   );
 }
 
