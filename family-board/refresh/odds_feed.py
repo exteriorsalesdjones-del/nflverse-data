@@ -97,7 +97,7 @@ class Api:
 
     def call(self, path: str, **params):
         q = urllib.parse.urlencode({**params, "apiKey": self.key})
-        for _ in range(5):
+        for attempt in range(5):
             self.calls += 1
             try:
                 status, body = self.get(f"{BASE}/{path}?{q}")
@@ -111,6 +111,10 @@ class Api:
                 self.sleep(min(wait, 30)); continue
             if status in (401, 403):
                 raise FeedError(f"{path}: the API key was refused (HTTP {status}). Check the key on the Admin page.")
+            if status == 404:
+                return None          # nothing there (e.g. a fixture with no board yet): not an error
+            if status >= 500 and attempt < 3:
+                self.sleep(2.0 * (attempt + 1)); continue   # the service's own errors are often momentary
             if status != 200:
                 raise FeedError(scrub(f"{path}: HTTP {status}: {body[:160]}", self.key))
             try:
@@ -229,7 +233,7 @@ def td_rows(odds: dict, catalog: dict, game: dict, players: Players, pulled_at: 
 
 
 def load_catalog(api: Api) -> dict:
-    cat = api.call("markets", sportId=SPORT_ID)
+    cat = api.call("markets", sportId=SPORT_ID) or []
     cat = cat if isinstance(cat, list) else cat.get("markets", cat.get("data", []))
     return {"market": {str(m.get("marketId")): m.get("marketName") for m in cat},
             "outcome": {(str(m.get("marketId")), str(o.get("outcomeId"))): o.get("outcomeName") for m in cat for o in (m.get("outcomes") or [])}}
@@ -254,6 +258,7 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     days = [datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET).astimezone(timezone.utc) for g in open_games]
     fixtures = api.call("fixtures", sportId=SPORT_ID, tournamentId=TOURNAMENT_ID,
                         **{"from": (min(days) - timedelta(days=1)).strftime("%Y-%m-%d"), "to": (max(days) + timedelta(days=1)).strftime("%Y-%m-%d")})
+    fixtures = fixtures or []
     fixtures = fixtures if isinstance(fixtures, list) else fixtures.get("fixtures", fixtures.get("data", []))
     catalog = load_catalog(api)
     if TD_MARKET not in {str(v).strip().lower() for v in catalog["market"].values()}:
@@ -264,7 +269,8 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
         if not fx:
             no_fixture.append(g["game_id"]); continue
         try:
-            odds = api.call("odds", fixtureId=fx.get("fixtureId"))
+            # ask only for the books the family uses (smaller reply); everything is filtered again on our side
+            odds = api.call("odds", fixtureId=fx.get("fixtureId"), bookmakers=",".join(BOOKS)) or {}
         except FeedError as e:   # one game's failure never loses the other games' prices
             failed.append(f"{g['game_id']}: {e}"); continue
         rows, um, seen = td_rows(odds, catalog, g, Players(slate_by[g["game_id"]]), pulled_at)
@@ -348,7 +354,9 @@ def main(argv=None) -> int:
             cat = load_catalog(api); td_ids = [m for m, n in cat["market"].items() if str(n).strip().lower() == TD_MARKET]
             print("TD market ids:", td_ids, "outcomes:", sorted({cat["outcome"].get((m, o)) for (m, o) in cat["outcome"] if m in td_ids}, key=str))
             if fxl:
-                od = api.call("odds", fixtureId=fxl[0].get("fixtureId")); bo = od.get("bookmakerOdds") or {}
+                fxl = sorted(fxl, key=lambda f: (not f.get("hasOdds"), str(f.get("startTime"))))
+                print("first fixture keys:", sorted(fxl[0].keys()), "| names:", fxl[0].get("participant1Name"), "v", fxl[0].get("participant2Name"), fxl[0].get("startTime"), "hasOdds", fxl[0].get("hasOdds"))
+                od = api.call("odds", fixtureId=fxl[0].get("fixtureId")) or {}; bo = od.get("bookmakerOdds") or {}
                 print("books on first fixture:", len(bo), "| wanted present:", [b for b in BOOKS if b in bo], "| similar:", [b for b in bo if "duel" in b or "draft" in b])
                 for b in BOOKS:
                     if b in bo:

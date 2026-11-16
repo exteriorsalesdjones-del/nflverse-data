@@ -951,9 +951,9 @@ function FeedAdmin() {
         : <Alert severity={(f.rows || []).length ? "success" : "info"} sx={{ borderRadius: 2 }} data-testid="feed-status">
             Last pull: <b>{when(f.pulled_at)}</b> · week {f.week} · {(f.rows || []).length} prices{cov.players ? ` for ${cov.players} players` : ""}{cov.books && cov.books.length ? ` · ${cov.books.join(", ")}` : ""}
             {cov.games_open != null ? ` · ${cov.games_with_prices || 0} of ${cov.games_open} open games` : ""}.{f.note ? ` ${f.note}` : ""}
-            {(f.unmatched || []).length ? ` ${f.unmatched.length} name${f.unmatched.length > 1 ? "s" : ""} not matched to a player.` : ""}
+            {(f.unmatched || []).length ? ` ${f.unmatched.length} price${f.unmatched.length > 1 ? "s were" : " was"} for players not on the app's list this week (left out).` : ""}
           </Alert>}
-      {f && (f.unmatched || []).length > 0 && <Typography variant="caption" color="text.secondary">Not matched: {f.unmatched.slice(0, 12).join("; ")}{f.unmatched.length > 12 ? "…" : ""}</Typography>}
+      {f && (f.unmatched || []).length > 0 && <Typography variant="caption" color="text.secondary">Left out (defenders, deep reserves or a name the app doesn't list): {f.unmatched.slice(0, 12).join("; ")}{f.unmatched.length > 12 ? "…" : ""}</Typography>}
       {!S.isOwner ? <Typography variant="body2" color="text.secondary">Only the app owner can enter or change the feed's API key.</Typography> : (
         <>
           <Typography variant="body2" data-testid="feed-key-state">
