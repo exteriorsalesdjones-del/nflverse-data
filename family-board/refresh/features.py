@@ -14,10 +14,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import os
 import numpy as np
 import pandas as pd
 
-C = Path(__file__).resolve().parents[1] / ".data" / "cache"
+C = Path(os.environ.get("FB_CACHE", Path(__file__).resolve().parents[1] / ".data" / "cache"))
 PRIOR_WEIGHT = 0.5
 SKILL = ["QB", "RB", "WR", "TE"]
 

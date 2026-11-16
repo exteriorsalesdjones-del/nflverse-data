@@ -4,7 +4,7 @@ import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Chip
 import { FB, useStore, ensureResearch, effAttr, effCand, chanceFor, boardFor } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 import { AnalysisReports } from "./analysis.jsx";
-import { lastGameText } from "./views.jsx";
+import { lastGameText, ExtrasError } from "./views.jsx";
 
 /* Research: one place to browse the data the app already has, with the Analysis reports at the bottom.
    Kinds of data are labelled: completed-game stats, live/provisional results, pregame model estimates, uploaded prices. */
@@ -54,7 +54,7 @@ export function ResearchView() {
   const slateWeek = S.slate ? S.slate.week : null;
   const [week, setWeek] = useState(slateWeek || weeks[weeks.length - 1]);
   const [game, setGame] = useState("all"); const [q, setQ] = useState(""); const [pos, setPos] = useState("All"); const [mk, setMk] = useState(S.weekMarket || "anytime_td");
-  if (!S.extrasLoaded) return <LinearProgress aria-label="Loading research data" />;
+  if (!S.extrasLoaded) return S.extrasError ? <ExtrasError /> : <LinearProgress aria-label="Loading research data" />;
   const games = S.games.filter((g) => g.week === week).sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et));
   const inGame = (gid) => game === "all" || gid === game;
   const qq = q.trim().toLowerCase();

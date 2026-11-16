@@ -15,7 +15,7 @@ provider (BALLDONTLIE /nfl/v1/games + /plays, every 15 s)
 
 * The provider key never reaches the app: it is a network secret on the cloud environment, injected by the proxy.
 * Live touchdowns are provisional and never settle a pick. Picks and parlay legs settle only from the hourly postgame
-  job (touchdowns match the official final score AND each scorer matches official player stats).
+  job (touchdowns match the official final score AND each scorer matches the weekly player stats).
 * Each game is its own document, so a problem in one game never holds up the others.
 * Corrections: every poll rebuilds the game from the source by play id. Repeats never duplicate; a dropped play is
   marked overturned (struck through, not counted); a re-credited play keeps its key and records the change.

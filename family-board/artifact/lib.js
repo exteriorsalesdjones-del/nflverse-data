@@ -51,7 +51,9 @@
     if (!isFinite(a) || a === 0 || (a > -100 && a < 100)) return NaN;
     return a > 0 ? 100 / (a + 100) : -a / (-a + 100);
   }
-  function americanToDecimal(a) { a = Number(a); return a > 0 ? 1 + a / 100 : 1 + 100 / -a; }
+  function americanToDecimal(a) {
+    a = Number(a); if (!isFinite(a) || Math.abs(a) < 100) return NaN; // not an American price
+    return a > 0 ? 1 + a / 100 : 1 + 100 / -a; }
   function probToAmerican(p) {
     if (!(p > 0 && p < 1)) return null;
     return p > 0.5 ? Math.round(-100 * p / (1 - p)) : Math.round(100 * (1 - p) / p); // exactly 50% = +100 (even money)
@@ -109,7 +111,7 @@
     var need = pick.market === "2plus_td" ? 2 : 1;
     var count = (tds || []).filter(function (t) { return t.scorer_id === pick.gsis_id; }).length;
     if (count >= need) return { state: "win", why: need === 2 ? "Scored " + count + " touchdowns." : "Scored a touchdown." };
-    if (!played) return { state: "needs_review", why: "Participation not published yet." };
+    if (!played) return { state: "pending", why: "Final, waiting for the snap counts that show who played." };
     if (played.indexOf(pick.gsis_id) === -1) return { state: "void", why: "Did not play (house rule: void)." };
     return { state: "loss", why: need === 2 && count === 1 ? "Played, one touchdown (2+ needed)." : "Played, no touchdown." };
   }
@@ -213,8 +215,11 @@
     // full-game markets only: half, quarter, first/last TD and other period markets are not comparable
     if (/half|quarter|\b1h\b|\b2h\b|\b[1-4]q\b|\bq[1-4]\b|first|last|1st|2nd|3rd|4th|period/.test(raw)) return null;
     var x = raw.replace(/[^a-z0-9+]/g, "");
-    if (!x || x.indexOf("any") !== -1) return "anytime_td";
-    if (x.indexOf("2") !== -1 || x.indexOf("two") !== -1) return "2plus_td";
+    // "Anytime 2+ TD", "2+ Anytime Touchdowns", "to score 2 or more": the count decides before the word "anytime"
+    if (/2\+|2ormore|twoormore|\btwo\b|2tds?\b|2plus|atleast2|multi/.test(x) || /\b(2|two)\s*(\+|or more|plus)|\b(2|two)\s*(td|touchdown)/.test(raw)) return "2plus_td";
+    if (/3\+|3ormore|three/.test(x)) return null; // 3+ TDs is not a market the app tracks
+    if (!x || x.indexOf("any") !== -1 || /^atds?$/.test(x)) return "anytime_td";
+    if (x.indexOf("2") !== -1) return "2plus_td";
     return null; // other markets are ignored
   }
   /* Observation time from an upload. ISO with Z or an offset is used as is; a bare "YYYY-MM-DD HH:MM" is read as

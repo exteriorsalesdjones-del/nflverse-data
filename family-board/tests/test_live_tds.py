@@ -101,5 +101,39 @@ check("scorer check: a wrongly credited TD is flagged even though the final scor
       rec_bad[row.game_id]["reconciled"] and rec_bad[row.game_id]["scorers_verified"] is False and len(rec_bad[row.game_id]["scorer_mismatches"]) == 2,
       "; ".join(f"{m['player']}: records {m['records']} vs official {m['official']}" for m in rec_bad[row.game_id]["scorer_mismatches"]))
 
+# ---- game status: a night game must stay "upcoming" until well after kickoff (the runner's clock is UTC)
+import datetime as _dt
+from zoneinfo import ZoneInfo as _Z
+class _Clock(_dt.datetime):
+    fixed = None
+    @classmethod
+    def now(cls, tz=None):
+        return cls.fixed.astimezone(tz) if tz else cls.fixed.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+_real = BD.datetime; BD.datetime = _Clock
+row = pd.Series({"game_id": "2026_10_PIT_CIN", "result": float("nan"), "gameday": "2026-11-15", "gametime": "20:20"})
+def status_at(et):
+    _Clock.fixed = _dt.datetime.fromisoformat(et).replace(tzinfo=_Z("America/New_York")); return BD.game_status(row, set())
+check("7:30 PM ET (already the next day in UTC), 50 minutes before an 8:20 PM kickoff: still upcoming", status_at("2026-11-15T19:30") == "upcoming", status_at("2026-11-15T19:30"))
+check("during the game, no plays posted yet: still upcoming (not postponed)", status_at("2026-11-15T22:30") == "upcoming")
+check("12+ hours after kickoff with no result: shown as not final", status_at("2026-11-16T09:00") == "postponed_or_pending")
+# ---- saved pregame chances
+tmp = Path(tempfile.mkdtemp()); old_out = BD.OUT; BD.OUT = tmp
+import json as _json
+cand = lambda p: {"teams": [{"candidates": [{"gsis_id": "00-1", "p": p}]}]}
+games_out = [{"game_id": "A", "status": "upcoming", "kickoff_et": "2026-11-16T20:15"}, {"game_id": "B", "status": "upcoming", "kickoff_et": "2026-11-15T13:00"}]
+(tmp / "predictions.json").write_text(_json.dumps({"A": {"00-1": {"p": 0.2, "model": "m"}}, "B": {"00-1": {"p": 0.3, "model": "m"}}, "OLD": {"x": {"p": 0.1}}}))
+_Clock.fixed = _dt.datetime(2026, 11, 16, 17, 0, tzinfo=_Z("America/New_York")); BD.HEALTH["problems"].clear()
+n = BD.save_predictions({"games": [{"game_id": "A", **cand(0.25)}, {"game_id": "B", **cand(0.9)}]}, games_out)
+pr = _json.loads((tmp / "predictions.json").read_text())
+check("before kickoff the chance updates; after kickoff it is frozen; earlier weeks are kept", pr["A"]["00-1"]["p"] == 0.25 and pr["B"]["00-1"]["p"] == 0.3 and "OLD" in pr and n == 1, _json.dumps(pr))
+BD.save_predictions({"games": [{"game_id": "A", "teams": []}]}, games_out)
+check("an empty candidate list never replaces a saved game", _json.loads((tmp / "predictions.json").read_text())["A"]["00-1"]["p"] == 0.25)
+(tmp / "predictions.json").unlink(); BD.HEALTH["problems"].clear()
+BD.save_predictions({"games": [{"game_id": "B", **cand(0.9)}]}, games_out)
+check("a run that starts without the saved file reports the kicked-off game instead of silently losing it", any("No saved pregame chances for B" in x for x in BD.HEALTH["problems"]), str(BD.HEALTH["problems"]))
+BD.OUT = old_out; BD.datetime = _real; BD.HEALTH["problems"].clear()
+# ---- results fingerprint moves when a game becomes settleable
+fa = BD.results_fingerprint([], [], {"G": {"reconciled": True, "scorers_verified": None}}); fb = BD.results_fingerprint([], [], {"G": {"reconciled": True, "scorers_verified": True}})
+check("results fingerprint changes when scorers become verified", fa != fb)
 print(f"\n{sum(results)} passed, {len(results) - sum(results)} failed")
 sys.exit(0 if all(results) else 1)

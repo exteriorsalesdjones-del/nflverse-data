@@ -32,7 +32,7 @@ import json
 import math
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -104,8 +104,16 @@ def game_status(row, pbp_games: set) -> str:
         return "final"
     if row.game_id in pbp_games:
         return "in_progress"
-    if isinstance(row.get("gameday"), str) and row.gameday < datetime.now().strftime("%Y-%m-%d"):
-        return "postponed_or_pending"  # date passed, no result: shown as not final
+    # Kickoff passed long ago with no result and no plays: shown as not final. Judged on the kickoff in Eastern time
+    # plus 12 hours, never on the runner's UTC date (that flipped night games to this status from 7 PM ET, before
+    # they kicked off, which locked their picks early).
+    try:
+        from zoneinfo import ZoneInfo
+        kick = datetime.fromisoformat(f"{row.gameday}T{row.gametime if isinstance(row.get('gametime'), str) else '23:59'}")
+        if datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None) > kick + timedelta(hours=12):
+            return "postponed_or_pending"
+    except (TypeError, ValueError):
+        pass
     return "upcoming"
 
 
@@ -199,10 +207,10 @@ def reconcile(pbp: pd.DataFrame, td: pd.DataFrame, games: pd.DataFrame) -> dict:
     return out
 
 
-def results_change(tds: list, games_out: list) -> dict:
+def results_change(tds: list, games_out: list, recon: dict | None = None) -> dict:
     """results_changed_at advances only when the results fingerprint differs from the previous meta.json in the output
     folder (the scheduled job downloads the published one first); a check with no changes keeps the old time."""
-    fp = results_fingerprint(tds, games_out); prev = {}
+    fp = results_fingerprint(tds, games_out, recon); prev = {}
     try:
         prev = json.loads((OUT / "meta.json").read_text())
     except Exception:
@@ -213,7 +221,7 @@ def results_change(tds: list, games_out: list) -> dict:
 
 def check_scorers(tds: list, recon: dict, stats_path: Path | None = None) -> None:
     """Second check on each final game: every player's touchdown count in the rebuilt records must equal nflverse's
-    official weekly player stats (rushing + receiving + special-teams + defensive + fumble-recovery TDs). A matching
+    nflverse weekly player stats (built from the same feed: a consistency check, not an independent source) (rushing + receiving + special-teams + defensive + fumble-recovery TDs). A matching
     final score can't catch a touchdown credited to the wrong player; this can. Adds to recon[game]:
     scorers_verified True / False / None (official stats for that game not published yet) and scorer_mismatches."""
     path = stats_path or (CACHE / f"stats_player_week_{SEASON}.parquet")
@@ -244,11 +252,13 @@ def check_scorers(tds: list, recon: dict, stats_path: Path | None = None) -> Non
         r["scorers_verified"] = not bad; r["scorer_mismatches"] = bad
 
 
-def results_fingerprint(tds: list, games_out: list) -> str:
+def results_fingerprint(tds: list, games_out: list, recon: dict | None = None) -> str:
     """Changes only when a touchdown, its scorer, or a final score changes."""
     import hashlib
     parts = sorted(f"{t['key']}|{t.get('scorer_id')}|{t.get('team')}" for t in tds)
     parts += sorted(f"{g['game_id']}|{g.get('status')}|{g.get('away_score')}|{g.get('home_score')}" for g in games_out if g.get("status") == "final")
+    # a game becoming settleable (score check passed, scorers verified) is a results change too
+    parts += sorted(f"{k}|{v.get('reconciled')}|{v.get('scorers_verified')}|{v.get('awaiting_source')}" for k, v in (recon or {}).items())
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
@@ -807,9 +817,16 @@ def save_predictions(slate: dict, games_out: list) -> int:
     n = 0
     for g in slate.get("games", []):
         if g["game_id"] in locked:
+            # a slate game that has kicked off must already have its pregame record; if it doesn't, this run started
+            # from a missing or out-of-date predictions.json and publishing would lose that game's record for good
+            if not preds.get(g["game_id"]):
+                HEALTH["problems"].append(f"No saved pregame chances for {g['game_id']}, which has kicked off (predictions.json missing or out of date at the start of this run).")
             continue
-        preds[g["game_id"]] = {c["gsis_id"]: {"p": c["p"], "model": c.get("model", MODEL_VERSION)} for t in g["teams"] for c in t["candidates"]}
-        n += len(preds[g["game_id"]])
+        cur = {c["gsis_id"]: {"p": c["p"], "model": c.get("model", MODEL_VERSION)} for t in g["teams"] for c in t["candidates"]}
+        if not cur:
+            continue  # nothing to save (e.g. no spread/total yet): never replace a saved game with an empty one
+        preds[g["game_id"]] = cur
+        n += len(cur)
     write_json("predictions.json", preds)
     return n
 
@@ -849,7 +866,7 @@ def main() -> int:
         "season": SEASON, "refreshed_at": now_iso(),
         "feed": "Postgame results",
         "td_source": "nflverse play-by-play (NFL Game Statistics & Information System feed), published after each game ends; checked hourly during game windows",
-        **results_change(tds, games_out),
+        **results_change(tds, games_out, recon),
         "latest_final_week": max((g["week"] for g in finals), default=None),
         "final_games": len(finals), "reconciled_games": sum(1 for v in recon.values() if v["reconciled"]),
         "touchdowns": len(tds),
@@ -869,7 +886,16 @@ def main() -> int:
     pmap = players.dropna(subset=["pfr_id"]).drop_duplicates("pfr_id").set_index("pfr_id")["gsis_id"]
     s = snaps.assign(gsis=snaps.pfr_player_id.map(pmap))
     s = s[(s[["offense_snaps", "defense_snaps", "st_snaps"]].fillna(0).sum(axis=1) > 0) & s.gsis.notna()]
-    played = {gid: sorted(set(x)) for gid, x in s.groupby("game_id").gsis}
+    played = {gid: set(x) for gid, x in s.groupby("game_id").gsis}
+    # A player missing from the snap file's id mapping (no pfr_id) still played if the play-by-play shows him carrying,
+    # targeted, passing or scoring. Added only to games whose snap counts are already published: a list built from
+    # touches alone would read as "everyone else did not play" and void their picks.
+    for col in ("rusher_player_id", "receiver_player_id", "passer_player_id", "td_player_id"):
+        if col in pbp.columns:
+            for gid, x in pbp[pbp[col].notna()].groupby("game_id")[col]:
+                if gid in played:
+                    played[gid] |= set(x)
+    played = {gid: sorted(x) for gid, x in played.items()}
     write_json("played.json", played)
     write_json("defenders.json", {"through_week": int(pfr.week.max()), "min_targets": 25, "source": PFR_SOURCE,
                                   "rows": MU.defender_board(pfr)})
@@ -904,7 +930,7 @@ def main() -> int:
     no_fc = [g["game_id"] for g in outdoor if (g.get("weather") or {}).get("wind_mph") is None]
     if no_fc:
         HEALTH["problems"].append(f"No weather forecast for {len(no_fc)} of {len(outdoor)} open-air games.")
-    meta["health"] = {"model": slate.get("headline_model"), "predictions_saved": n_pred, "problems": HEALTH["problems"],
+    meta["health"] = {"model": slate.get("headline_model"), "predictions_saved": n_pred, "prediction_games_stored": len(json.loads((OUT / "predictions.json").read_text())), "problems": HEALTH["problems"],
                       "ok": not any(("failed" in x and "Weekly" not in x) or "v0.2" in x for x in HEALTH["problems"])}
     write_json("meta.json", meta)  # last: its timestamp marks a complete refresh
     print(json.dumps({"final_games": len(finals), "reconciled": meta["reconciled_games"], "unreconciled": bad, "awaiting_source": waiting,

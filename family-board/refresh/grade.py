@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import json
 import sys
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
 
-D = Path(__file__).resolve().parents[1] / "artifact" / "data"
+D = Path(os.environ.get("FB_OUT", Path(__file__).resolve().parents[1] / "artifact" / "data"))  # same folder build_data.py writes
 ET = ZoneInfo("America/New_York")
 
 

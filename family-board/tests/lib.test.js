@@ -45,7 +45,8 @@ test("settlement states", () => {
   assert.strictEqual(FB.settle(pick, fin, [{ scorer_id: "00-1" }], ["00-1"], lock, now).state, "win");
   assert.strictEqual(FB.settle(pick, fin, [], ["00-1"], lock, now).state, "loss");
   assert.strictEqual(FB.settle(pick, fin, [], ["00-2"], lock, now).state, "void");
-  assert.strictEqual(FB.settle(pick, fin, [], undefined, lock, now).state, "needs_review");
+  assert.strictEqual(FB.settle(pick, fin, [], undefined, lock, now).state, "pending"); // who played isn't published yet: waiting, not a review
+  assert.strictEqual(FB.settle(pick, fin, [{ scorer_id: pick.gsis_id }], undefined, lock, now).state, "win"); // a scorer played
   assert.strictEqual(FB.settle(pick, fin, [], ["00-1"], {}, now).state, "needs_review"); // added after kickoff
   assert.strictEqual(FB.settle(pick, fin, [], ["00-1"], undefined, now).state, "needs_review"); // no snapshot
   assert.strictEqual(FB.settle({ ...pick, status: "draft" }, fin, [], [], lock, now).state, "draft");
@@ -209,6 +210,11 @@ test("only full-game anytime and 2+ markets are comparable", () => {
   for (const m of ["1st Half Anytime TD", "2nd half anytime", "1Q anytime TD", "First TD Scorer", "Last TD", "1H Anytime"]) assert.strictEqual(FB.normMarket(m), null, m);
   assert.strictEqual(FB.normMarket("Anytime TD Scorer"), "anytime_td");
   assert.strictEqual(FB.normMarket("To Score 2+ Touchdowns"), "2plus_td");
+  // the count decides before the word "anytime": a +900 two-TD price must never be stored as an anytime price
+  for (const m of ["Anytime 2+ TD", "2+ Anytime Touchdowns", "Anytime TD Scorer (2 or more)", "Two or more touchdowns", "Player to score 2 touchdowns", "2+ TDs"]) assert.strictEqual(FB.normMarket(m), "2plus_td", m);
+  for (const m of ["Anytime TD", "anytime", "", "ATD", "Anytime Touchdown Scorer"]) assert.strictEqual(FB.normMarket(m), "anytime_td", m);
+  assert.strictEqual(FB.normMarket("3+ TDs"), null);
+  assert.ok(Number.isNaN(FB.americanToDecimal(0)) && Number.isNaN(FB.americanToDecimal(50)));
 });
 
 test("model vs price: percentage points and EV per $1, worked by hand", () => {

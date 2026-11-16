@@ -7,7 +7,8 @@ import { FB, useStore, nameOf, resultRows, toast } from "./store.js";
 const pct1 = (x) => (x == null || isNaN(x) ? "—" : (x * 100).toFixed(1) + "%");
 const OUT = { hit: "Hit", miss: "Miss", void: "Void", pending: "Pending", review: "Needs review" };
 const CAT = { member: "Member", position: "Position", team: "Team", market: "Market", probability: "Saved probability", above_fair: "Above fair at pick" };
-const MKT = { anytime_td: "Anytime TD" };
+const MKT = { anytime_td: "Anytime TD", "2plus_td": "2+ TDs" };
+const NEED = (m) => (m === "2plus_td" ? "2+ TDs" : "1+ TD");
 const wkLabel = (w, multiSeason) => (multiSeason ? `${w.season} W${w.week}` : `W${w.week}`);
 
 function Section({ title, children, note }) {
@@ -124,7 +125,7 @@ export function ResultsDashboard() {
     : sort === "player" ? String(a.player).localeCompare(String(b.player)) : (b.season - a.season) || (b.week - a.week) || String(a.player).localeCompare(String(b.player)));
   async function exportPicks() {
     const cols = [["season", (r) => r.season], ["week", (r) => r.week], ["game_id", (r) => r.game_id], ["member", (r) => (unit === "unique" ? r.uid : nameOf(r.uid))],
-      ["player", (r) => r.player], ["gsis_id", (r) => r.gsis_id], ["team", (r) => r.team], ["pos", (r) => r.pos], ["market", (r) => r.market], ["predicted", () => "scores 1+ TD"],
+      ["player", (r) => r.player], ["gsis_id", (r) => r.gsis_id], ["team", (r) => r.team], ["pos", (r) => r.pos], ["market", (r) => r.market], ["predicted", (r) => `scores ${NEED(r.market)}`],
       ["saved_probability", (r) => (r.p == null ? "" : r.p)], ["qualifying_tds", (r) => (r.tds == null ? "" : r.tds)], ["result", (r) => OUT[r.outcome]], ["reason", (r) => r.why || ""]]
       .map(([label, get]) => ({ label, get }));
     const text = FB.csv(d.rows, cols);
@@ -247,7 +248,7 @@ export function ResultsDashboard() {
           <Button onClick={exportPicks} sx={{ minHeight: 44 }}>Export CSV</Button>
         </Stack>
         <SimpleTable caption="Pick-level results" head={["Week", unit === "unique" ? "Members" : "Member", "Player", "Market", "Pick", "Saved chance", "TDs", "Result", "Reason"]}
-          rows={shown.map((r) => [wkLabel(r, multiSeason), unit === "unique" ? r.uid : nameOf(r.uid), `${r.player} (${r.pos || "?"} ${r.team || ""})`, MKT[r.market] || r.market, "1+ TD",
+          rows={shown.map((r) => [wkLabel(r, multiSeason), unit === "unique" ? r.uid : nameOf(r.uid), `${r.player} (${r.pos || "?"} ${r.team || ""})`, MKT[r.market] || r.market, NEED(r.market),
             r.p == null ? "not saved" : pct1(r.p), r.tds == null ? "—" : r.tds,
             <Chip key="c" size="small" variant="outlined" color={r.outcome === "hit" ? "success" : r.outcome === "miss" ? "error" : "default"} label={OUT[r.outcome]} />,
             r.outcome === "hit" || r.outcome === "miss" ? "" : r.why || ""])} />

@@ -20,7 +20,7 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
    the schedule but has no plays in the play-by-play yet is listed under `awaiting_source`: it does not fail the build, its picks stay
    pending, and the next run picks it up. Before building, copy the published `data/meta.json` into the output folder so
    `results_changed_at` only moves when touchdowns, scorers or final scores actually change. `reconciliation.json` also carries
-   `scorers_verified` (each scorer's TD count checked against official weekly player stats; picks settle only when it is true).
+   `scorers_verified` (each scorer's TD count checked against nflverse weekly player stats, which are built from the same play-by-play feed, so this catches a mismatch between the two files but not a scorer the feed itself has wrong; picks settle only when it is true).
    `meta.json` is written last, so a crash leaves the old data and old timestamp in place.
 3. `python3 -m pytest -q tests` is not needed; run `node --test tests/lib.test.js`
    only when `artifact/lib.js` changed.
@@ -34,6 +34,10 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
    - `python3 refresh/make_locks.py <tmp> <tmp>/out <existing ids...>`
    - For each file printed, `ArtifactData set collection=locks doc_id=<game_id> file_path=<file>`
      (create only; never overwrite an existing lock).
+   Game window (hourly job): run when a game kicked off in the last 9 hours **or** the published `meta.json` lists a game
+   under "Final but not yet in the play-by-play source" (so a late game is picked up the next hour, not at the next kickoff).
+   `health.problems` may also say "No saved pregame chances for <game>": the run started without the published
+   `predictions.json`. Fetch it and rebuild before publishing, or that game's pregame record is lost.
 6. Report: final games, reconciled games, games awaiting the source, scorer-check mismatches, touchdowns, new snapshots, and any failure.
 
 Never write to `picks`, `parlays`, `lines`, `refs`, `odds`, `overrides` or `reviews` from the refresh. Those belong to members and admins.

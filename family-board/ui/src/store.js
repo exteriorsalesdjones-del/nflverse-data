@@ -57,7 +57,10 @@ export function ensureExtras() {
   if (!extrasPromise) extrasPromise = (async () => {
     const [tds, weekly, played, recon, defenders, grades] = await Promise.all(
       ["touchdowns", "weekly", "played", "reconciliation", "defenders", "grades"].map((n) => loadJson(n + ".json").catch(() => null)));
-    Object.assign(S, { tds: tds || [], weekly: weekly || [], played: played || {}, recon: recon || {}, defenders, grades, extrasLoaded: true });
+    // Results settle from touchdowns + who played + the reconciliation. If any of the three didn't load, nothing is
+    // treated as loaded (an empty touchdown list would turn every winner into a loss); the next visit to a tab retries.
+    if (!tds || !played || !recon) { S.extrasError = true; extrasPromise = null; emit(); return; }
+    Object.assign(S, { tds, weekly: weekly || [], played, recon, defenders, grades, extrasLoaded: true, extrasError: false });
     if (grades && grades.market && S.validation) S.validation = { ...S.validation, clv_n: grades.market.n };
     emit();
   })();
@@ -176,15 +179,22 @@ export async function connect() {
     S.canWrite = (await user.can("data.write")) !== false;
   }
   if (!db) { clearTimeout(timer); S.dbState = "off"; emit(); return; }
-  const ok = () => { clearTimeout(timer); S.dbState = "ok"; };
-  const fail = (e) => { clearTimeout(timer); S.dbState = "error"; console.warn(e); emit(); };
-  db.collection("picks").onSnapshot((s) => {
+  /* One listener per collection. A listener the platform ends (its error callback) is started again after a short,
+     growing wait, so no part of the page stays frozen until a reload. The page is "ok" only while every listener is
+     alive and the picks have been confirmed by the database (not just a saved copy). */
+  const down = new Set(); let picksConfirmed = false;
+  const state = () => { const st = down.size ? "error" : picksConfirmed ? "ok" : S.dbState === "slow" ? "slow" : "connecting"; if (st !== "connecting") clearTimeout(timer); if (st !== S.dbState) { S.dbState = st; } };
+  const watch = (coll, onData, tries = 0) => db.collection(coll).onSnapshot((s) => {
+    tries = 0; if (down.delete(coll)) state();
+    onData(s); (S.loaded ||= {})[coll] = S.loaded[coll] || !s.metadata.fromCache; emit();
+  }, (e) => { console.warn(coll, e); down.add(coll); state(); emit(); setTimeout(() => watch(coll, onData, tries + 1), Math.min(30000, 3000 * 2 ** tries) + Math.random() * 2000); });
+  watch("picks", (s) => {
     S.allPicks = Object.fromEntries(s.docs.map((d) => [d.id, d.data()]));
-    if (!s.metadata.fromCache) ok();
-    resolveNames(); emit();
-  }, fail);
-  db.collection("odds").onSnapshot((s) => { S.odds = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
-  db.collection("locks").onSnapshot((s) => { S.locks = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
+    if (!s.metadata.fromCache) { picksConfirmed = true; state(); }
+    resolveNames();
+  });
+  watch("odds", (s) => { S.odds = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); });
+  watch("locks", (s) => { S.locks = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); });
   // shared lines: one marker doc per uploader, their rows for each week in a subcollection
   // A week is stored in up to LINE_PARTS documents (w10, w10_p2, ...) because one document holds at most 256 KB.
   // A listener can be ended by the platform (e.g. while a phone is in another app); a fresh subscription is the only
@@ -194,19 +204,19 @@ export async function connect() {
   const watchPart = (uid, i) => db.doc(`lines/${uid}/weeks/${linePartId(S.slate.week, i)}`).onSnapshot(
     (w) => setPart(uid, i, w.exists ? (w.data().rows || []) : []),
     () => setTimeout(() => watchPart(uid, i), 3000 + Math.random() * 2000));
-  db.collection("lines").onSnapshot((s) => {
+  watch("lines", (s) => {
     s.docs.forEach((d) => {
       if (lineSubs[d.id] || !S.slate) return;
       lineSubs[d.id] = true; linePartsByUid[d.id] = [];
       for (let i = 0; i < LINE_PARTS; i++) watchPart(d.id, i);
     });
-  }, fail);
+  });
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshLines(); });
   watchLive(db);
-  db.collection("parlays").onSnapshot((s) => { S.parlaysAll = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
-  db.collection("refs").onSnapshot((s) => { S.refs = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); emit(); }, fail);
-  db.collection("overrides").onSnapshot((s) => { S.overrides = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit(); }, fail);
-  db.collection("reviews").onSnapshot((s) => { S.reviews = Object.fromEntries(s.docs.map((d) => [d.id.replace("~", ":"), d.data()])); emit(); }, fail);
+  watch("parlays", (s) => { S.parlaysAll = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); });
+  watch("refs", (s) => { S.refs = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); resolveNames(); });
+  watch("overrides", (s) => { S.overrides = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); });
+  watch("reviews", (s) => { S.reviews = Object.fromEntries(s.docs.map((d) => [d.id.replace("~", ":"), d.data()])); });
   window.claude.use("downloads").then((d) => { S.downloads = d; });
   if (S.isAdmin) window.claude.use("sample").then((s) => { S.sample = s; emit(); });
   emit();
@@ -274,16 +284,26 @@ function rematch(r) {
   if (!m) return r;
   const g = S.gameById[m.game_id]; const t = Date.parse(r.captured_at);
   if (!g || !isFinite(t) || t >= FB.etToUtcMs(g.kickoff_et)) return r;
-  return { ...r, gsis_id: m.gsis_id, game_id: m.game_id, team: m.team, player: m.full_name || m.player, matched_on_read: true };
+  return { ...r, gsis_id: m.gsis_id, game_id: m.game_id, team: m.team, player: m.full_name || m.player, stored_player: r.player, matched_on_read: true };
 }
-export function allLineRows(week) {
-  const up = S.slate && week === S.slate.week ? Object.entries(S.lines).flatMap(([uid, rows]) => rows.map((r) => rematch({ ...r, uploaded_by: uid }))) : [];
-  return liveOddsRows(week).concat(up);
+/* All price rows for a week, built once per store change (not once per player per render: the Week and Research tabs
+   ask for every player's prices), plus an index by player and market. */
+let lineCache = { key: null, rows: [], by: new Map() };
+function lineIndex(week) {
+  const key = `${week}|${S.version}`;
+  if (lineCache.key !== key) {
+    const up = S.slate && week === S.slate.week ? Object.entries(S.lines).flatMap(([uid, rows]) => rows.map((r) => rematch({ ...r, uploaded_by: uid }))) : [];
+    const rows = liveOddsRows(week).concat(up); const by = new Map();
+    rows.forEach((r) => { if (!r.gsis_id) return; const k = `${r.gsis_id}|${r.market || "anytime_td"}`; const a = by.get(k); if (a) a.push(r); else by.set(k, [r]); });
+    lineCache = { key, rows, by };
+  }
+  return lineCache;
 }
+export function allLineRows(week) { return lineIndex(week).rows; }
+const rowsFor = (c, week, market) => lineIndex(week).by.get(`${c.gsis_id}|${market}`) || [];
 /* Best price across books (fresh = captured in the last 2 hours); stale fallback is flagged. */
 export function priceFor(c, week, market = "anytime_td") {
-  const rows = allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market);
-  return FB.bestPrice(rows, Date.now());
+  return FB.bestPrice(rowsFor(c, week, market), Date.now());
 }
 /* Weekly Rankings for the selected market: every available player in games still open (Out/inactive players are left
    out, as on the matchup list), with that market's model chance and that player's uploaded prices. */
@@ -304,7 +324,7 @@ export function weekRankings(market = S.weekMarket, nowMs = Date.now()) {
 }
 /* Every book's latest price for a player and market (best payout first, ages shown), and this week's line moves. */
 export function boardFor(c, week, market = "anytime_td") {
-  return FB.bookBoard(allLineRows(week).filter((r) => r.gsis_id === c.gsis_id && (r.market || "anytime_td") === market), Date.now());
+  return FB.bookBoard(rowsFor(c, week, market), Date.now());
 }
 export function weekMoves(week) { return FB.lineMoves(allLineRows(week), Date.now()); }
 /* Results dashboard rows: one per SUBMITTED pick (drafts are counted separately, parlays and backtests are not included).
@@ -330,15 +350,19 @@ export function resultRows() {
 /* A final game settles only after its rebuilt touchdowns reconcile with the official final score (reconciliation.json).
    Until then a result is provisional; a mismatch is held for review. Applies to picks and parlay legs. */
 function reconGate(gameId, r) {
-  const g = S.gameById[gameId]; if (!g || g.status !== "final" || !S.extrasLoaded) return r;
+  const g = S.gameById[gameId]; if (!g || g.status !== "final") return r;
+  const loadingWhy = S.extrasError ? "The results didn't load. Check your connection and reopen this tab." : "Loading the results…";
+  if (!S.extrasLoaded && r.state === "pending") return { ...r, why: loadingWhy };
   if (r.state !== "win" && r.state !== "loss" && r.state !== "void") return r;
+  // no result is shown from a touchdown list that hasn't loaded (it would read as "no touchdowns": a loss)
+  if (!S.extrasLoaded) return { state: "pending", why: loadingWhy };
   const rec = S.recon[gameId];
   if (!rec) return { state: "pending", why: "Final, waiting for the touchdown records to reconcile with the official score (provisional)." };
   if (rec.awaiting_source) return { state: "pending", why: "Final, waiting for the source to publish this game's touchdown records (provisional)." };
   if (!rec.reconciled) return { state: "needs_review", why: "Touchdown records don't match the official final score yet; held for review." };
-  // individual records: each scorer's TD count must match the official player stats (catches a TD credited to the wrong player)
-  if (rec.scorers_verified === false) return { state: "needs_review", why: "A touchdown scorer doesn't match the official player stats yet; held for review." };
-  if (rec.scorers_verified !== true) return { state: "pending", why: "Final, waiting for official player stats to verify each touchdown scorer (provisional)." };
+  // individual records: each scorer's TD count must match the weekly player stats (catches a TD credited to the wrong player)
+  if (rec.scorers_verified === false) return { state: "needs_review", why: "A touchdown scorer doesn't match the weekly player stats yet; held for review." };
+  if (rec.scorers_verified !== true) return { state: "pending", why: "Final, waiting for the weekly player stats to verify each touchdown scorer (provisional)." };
   return r;
 }
 export function settlePick(uid, p) {
@@ -355,15 +379,29 @@ export const setToast = (f) => { toastFn = f; };
 export const toast = (m, action) => toastFn(m, action);
 let writing = false;
 
-async function savePicks(items) {
+/* Every change to my picks or parlays starts from the copy the database holds at that moment, read fresh, never from
+   what this page happens to have loaded. A whole-document save built from a page that is still connecting, showing a
+   saved copy, or behind another device would otherwise erase everything it hadn't seen. `change(items)` edits the
+   fresh items in place; returning false cancels the save. */
+async function changeMine(coll, change, denied) {
+  if (!S.db || !S.uid) { toast("Sign in to Claude to save."); return false; }
   if (writing) { toast("Still saving the last change. Try again in a moment."); return false; }
   writing = true;
-  try { await S.db.doc("picks/" + S.uid).set({ items, updated_at: new Date().toISOString() }); return true; }
-  catch (e) {
-    toast(e && e.code === "invalid_argument" ? "You can view the board but not save picks. Ask the owner for access." : "Couldn't save. Check your connection and try again.");
+  try {
+    const ref = S.db.doc(`${coll}/${S.uid}`); const snap = await ref.get();
+    if (snap.metadata && snap.metadata.fromCache) { toast("Can't reach the family database right now, so nothing was changed. Try again in a moment."); return false; }
+    const items = snap.exists ? structuredClone((snap.data() || {}).items || {}) : {};
+    if (change(items) === false) return false;
+    const body = { items, updated_at: new Date().toISOString() };
+    await ref.set(body);
+    (coll === "picks" ? S.allPicks : S.parlaysAll)[S.uid] = body; emit(); // shown at once, even if the listener is slow
+    return true;
+  } catch (e) {
+    toast(e && e.code === "invalid_argument" ? denied : "Couldn't save. Check your connection and try again.");
     return false;
   } finally { writing = false; }
 }
+const savePicks = (change) => changeMine("picks", change, "You can view the board but not save picks. Ask the owner for access.");
 /* What a pick or parlay leg records about the price at the moment it was made. A copy, so later uploads never change it. */
 export function priceRecord(pr, market = "anytime_td") {
   if (!pr) return null;
@@ -377,9 +415,8 @@ function priceSnapshot(pr, stage, market = "anytime_td") {
 }
 export async function addPick(c, market = S.weekMarket) {
   const g = S.gameById[c.game_id]; const week = g.week;
-  const items = structuredClone(myItems());
   const pick = { week, game_id: c.game_id, gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, pos: c.pos, market };
-  const errs = FB.validatePick(items, pick, g, Date.now());
+  const errs = FB.validatePick(myItems(), pick, g, Date.now());
   if (errs.length) { toast(errs[0]); return; }
   const now = new Date().toISOString();
   const two = market === "2plus_td"; const board = boardFor(c, week, market);
@@ -394,21 +431,26 @@ export async function addPick(c, market = S.weekMarket) {
       return { above_fair: !!m, above_fair_price: { book: fresh.book, american: fresh.american, captured_at: fresh.captured_at, pts: m ? m.pts : null } };
     })(),
     saved_at: now, submitted_at: now }, priceSnapshot(board && board.best, "submission", market));
-  items[pick.key] = pick;
-  if (await savePicks(items)) toast(`Picked ${pick.player}${two ? " for 2+ TDs" : ""}. Locks at kickoff.`, { label: "Undo", run: () => removePick(pick.key) });
+  const saved = await savePicks((items) => {
+    const again = FB.validatePick(items, pick, g, Date.now()); // checked again against the fresh copy
+    if (again.length) { toast(again[0]); return false; }
+    items[pick.key] = pick;
+  });
+  if (saved) toast(`Picked ${pick.player}${two ? " for 2+ TDs" : ""}. Locks at kickoff.`, { label: "Undo", run: () => removePick(pick.key) });
 }
 export async function removePick(key) {
-  const items = structuredClone(myItems()); const p = items[key]; if (!p) return;
+  const p = myItems()[key]; if (!p) return;
   if (FB.isLocked(S.gameById[p.game_id], Date.now())) { toast("This game has kicked off. The pick is locked."); return; }
-  delete items[key];
-  if (await savePicks(items)) toast(`Removed ${p.player}.`);
+  if (await savePicks((items) => { delete items[key]; })) toast(`Removed ${p.player}.`);
 }
 export const markInactive = (c) => setOverride(c.gsis_id, c.full_name || c.player, c.team, "Inactive", "Game-day inactive");
 /* Match one of my uploaded rows that no player matched */
 export async function matchLine(row, c) {
   const why = FB.lineProblem(row, S.gameById[c.game_id], Date.now());
   if (why) { toast(`Can't match: ${why}.`); return; }
-  const week = S.slate.week; const rows = (S.lines[S.uid] || []).map((r) => (r === row || (r.player === row.player && r.book === row.book && r.market === row.market && !r.gsis_id))
+  let mine;
+  try { mine = await freshLineRows(S.uid); } catch (e) { toast("Couldn't save the match."); return; }
+  const week = S.slate.week; const rows = mine.map((r) => (r === row || (r.player === row.player && r.book === row.book && r.market === row.market && !r.gsis_id))
     ? { ...r, gsis_id: c.gsis_id, player: c.full_name || c.player, team: c.team, matched_by_hand: true } : r);
   try { await saveLineRows(S.uid, rows); toast(`Matched to ${c.full_name || c.player}.`); }
   catch (e) { toast("Couldn't save the match."); }
@@ -421,18 +463,20 @@ export async function setOverride(gsis, name, team, status, note) {
   catch (e) { toast("Couldn't save the player status."); }
 }
 export async function setPickStatus(key, status) {
-  const items = structuredClone(myItems()); const p = items[key]; if (!p) return;
-  if (FB.isLocked(S.gameById[p.game_id], Date.now())) { toast("This game has kicked off. The pick is locked."); return; }
-  if (status === "remove") delete items[key];
-  else {
+  const mine = myItems()[key]; if (!mine) return;
+  if (FB.isLocked(S.gameById[mine.game_id], Date.now())) { toast("This game has kicked off. The pick is locked."); return; }
+  const saved = await savePicks((items) => {
+    const p = items[key]; if (!p) { toast("That pick was already removed on another device."); return false; }
+    if (status === "remove") { delete items[key]; return; }
     p.status = status;
     if (status === "submitted") {
       p.submitted_at = new Date().toISOString();
+      const market = p.market || "anytime_td"; // the price recorded is the one for the pick's own market
       const c = slateCands().find((x) => x.gsis_id === p.gsis_id);
-      Object.assign(p, priceSnapshot(c && priceFor(c, p.week), "submission"));
+      Object.assign(p, priceSnapshot(c && priceFor(c, p.week, market), "submission", market));
     }
-  }
-  if (await savePicks(items)) toast(status === "remove" ? "Removed." : status === "submitted" ? "Submitted. It locks at kickoff." : "Moved back to draft.");
+  });
+  if (saved) toast(status === "remove" ? "Removed." : status === "submitted" ? "Submitted. It locks at kickoff." : "Moved back to draft.");
 }
 
 /* ---------- admin ---------- */
@@ -470,10 +514,21 @@ export async function readShot(file, book) {
   } catch (e) { toast(e && e.code === "not_granted" ? "Screenshot reading was declined." : "Couldn't read that screenshot. Paste CSV instead."); }
 }
 export async function freeze(games) {
+  // A snapshot is permanent, so it is built from a fresh read of everyone's picks and parlays, never from a page that
+  // is still loading or has lost its connection, and a snapshot that already exists is never rewritten.
+  let allPicks, parlaysAll;
+  try {
+    const [ps, pl] = await Promise.all([S.db.collection("picks").get(), S.db.collection("parlays").get()]);
+    if (ps.metadata.fromCache || pl.metadata.fromCache) throw new Error("not confirmed");
+    allPicks = Object.fromEntries(ps.docs.map((d) => [d.id, d.data()])); parlaysAll = Object.fromEntries(pl.docs.map((d) => [d.id, d.data()]));
+  } catch (e) { toast("Can't reach the family database right now, so no snapshot was taken. Try again in a moment."); return; }
+  let made = 0;
   for (const g of games) {
     if (S.locks[g.game_id]) continue; // existing snapshots are never rewritten
+    try { const cur = await S.db.doc("locks/" + g.game_id).get(); if (cur.exists || cur.metadata.fromCache) continue; }
+    catch (e) { toast("Couldn't check " + g.game_id + "; no snapshot taken for it."); return; }
     const picks = {}; const review = {};
-    for (const [uid, d] of Object.entries(S.allPicks)) {
+    for (const [uid, d] of Object.entries(allPicks)) {
       const sub = Object.values(d.items || {}).filter((p) => p.game_id === g.game_id && p.status === "submitted");
       const ok = sub.filter((p) => FB.snapshotEligibility(p, g).ok);
       if (ok.length) picks[uid] = Object.fromEntries(ok.map((p) => [p.key, { gsis_id: p.gsis_id, status: p.status, price: p.price || null }]));
@@ -481,16 +536,16 @@ export async function freeze(games) {
       if (held.length) review[uid] = Object.fromEntries(held.map((p) => [p.key, FB.snapshotEligibility(p, g).why]));
     }
     const parlays = {};
-    for (const [uid, d] of Object.entries(S.parlaysAll)) {
+    for (const [uid, d] of Object.entries(parlaysAll)) {
       for (const par of Object.values(d.items || {})) {
         const first = par.legs.map((l) => S.gameById[l.game_id]).filter(Boolean).sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et))[0];
         if (first && first.game_id === g.game_id) (parlays[uid] ||= {})[par.id] = par.legs.map((l) => l.gsis_id);
       }
     }
-    try { await S.db.doc("locks/" + g.game_id).set({ frozen_at: new Date().toISOString(), by: "admin page", picks, review, parlays }); }
+    try { await S.db.doc("locks/" + g.game_id).set({ frozen_at: new Date().toISOString(), by: "admin page", picks, review, parlays }); made++; }
     catch (e) { toast("Couldn't snapshot " + g.game_id); return; }
   }
-  toast("Snapshots saved.");
+  toast(made ? `Saved ${made} snapshot${made > 1 ? "s" : ""}.` : "Nothing to snapshot: those games already have one.");
 }
 export async function saveReview(t, body) {
   const prev = S.reviews[t.key];
@@ -546,6 +601,16 @@ function dedupeLines(rows) {
   rows.forEach((r) => { const k = lineKey(r); const cur = m.get(k); if (!cur || Date.parse(r.captured_at) > Date.parse(cur.captured_at)) m.set(k, r); });
   return [...m.values()];
 }
+/* One member's rows for the slate week, read from the database at this moment. Every change to a member's price
+   documents starts from this, so a page that hasn't finished loading (or an admin's copy that is behind the member's
+   own upload) can never save over rows it hasn't seen. */
+async function freshLineRows(uid) {
+  const snaps = await Promise.all(Array.from({ length: LINE_PARTS }, (_, i) => S.db.doc(`lines/${uid}/weeks/${linePartId(S.slate.week, i)}`).get()));
+  if (snaps.some((w) => w.metadata && w.metadata.fromCache)) throw Object.assign(new Error("offline"), { code: "unavailable" });
+  const parts = snaps.map((w) => (w.exists ? (w.data().rows || []) : []));
+  linePartsByUid[uid] = parts; S.lines[uid] = dedupeLines(parts.flat());
+  return S.lines[uid];
+}
 /* Write one uploader's week across the part documents. Over the limit, prices for games that have started go first
    (oldest first), then unmatched rows; prices for games still to come are never dropped: the save is refused instead. */
 async function saveLineRows(uid, rows) {
@@ -579,7 +644,9 @@ export async function uploadLines(rows, source) {
   rows = rows.filter((r) => { const why = FB.lineProblem(r, r.game_id ? S.gameById[r.game_id] : null, Date.now()); if (why) skipped.push({ line: `${r.player} ${r.book} ${r.american}`, why }); return !why; });
   if (!rows.length) { toast(skipped.length ? `Nothing saved. ${skipped.length} skipped: ${skipped[0].why}.` : "No usable prices found."); return false; }
   const week = S.slate.week; const key = (r) => `${r.gsis_id || r.player}|${r.book}|${r.market}`;
-  const merged = Object.fromEntries((S.lines[S.uid] || []).map((r) => [key(r), r]));
+  let mine;
+  try { mine = await freshLineRows(S.uid); } catch (e) { toast("Can't reach the family database right now, so nothing was saved. Try again in a moment."); return false; }
+  const merged = Object.fromEntries(mine.map((r) => [key(r), r]));
   // keep the newer OBSERVATION per player/book/market; an older screenshot never replaces a newer price
   let older = 0;
   rows.forEach((r) => {
@@ -605,9 +672,11 @@ export async function uploadLines(rows, source) {
   } catch (e) { toast(e && e.code === "too_many" ? `Not saved: over ${LINE_MAX_ROWS.toLocaleString()} prices this week for games that haven't started. Remove some on the Uploads tab first.` : e && e.code === "invalid_argument" ? "Your access is view-only, so lines can't be saved." : "Couldn't save the lines."); return false; }
 }
 export async function deleteLines(uid, filter) {
-  const week = S.slate.week; const rows = (S.lines[uid] || []).filter((r) => !filter(r));
-  try { await saveLineRows(uid, rows); toast("Removed."); }
-  catch (e) { toast("Couldn't remove those lines."); }
+  try {
+    const cur = await freshLineRows(uid); const rows = cur.filter((r) => !filter(r));
+    if (rows.length === cur.length) { toast("That price was already removed."); return; }
+    await saveLineRows(uid, rows); toast("Removed.");
+  } catch (e) { toast("Couldn't remove those lines."); }
 }
 export function setShotReview(rows) { S.shotReview = rows; emit(); }
 export function clearSkipped() { S.lastSkipped = null; emit(); }
@@ -675,7 +744,7 @@ export async function readLinesShots(files, book) {
     toast(files.length > 1 ? `Reading screenshot ${i + 1} of ${files.length}…` : "Reading the screenshot…");
     try {
       const rows = pricesFromJson(await sample.json(SHOT_PROMPT, { images: [file] }));
-      rows.filter((r) => r && typeof r === "object").forEach((r) => {
+      rows.filter((r) => r && typeof r === "object" && (!String(r.market || "").trim() || normMarket(r.market))).forEach((r) => {
         staged.push({ id: nextId++, shot: shotBase + i + 1, shot_name: file.name || `Screenshot ${i + 1}`, player: String(r.player || ""), team: (r.team || "").toUpperCase(),
           market: normMarket(r.market) || "anytime_td", american: FB.parseAmerican(r.american), book: book || "Screenshot",
           captured_at: new Date(file.lastModified || Date.now()).toISOString(), time_source: file.lastModified ? "screenshot file time" : "upload time" });
@@ -734,18 +803,16 @@ export async function saveParlay(name) {
   if (legs.length < 2) { toast("A parlay needs at least 2 legs."); return false; }
   if (FB.parlayLocked(legs, S.gameById, Date.now())) { toast("One of these games has started. Remove it to save."); return false; }
   const id = "p" + Date.now().toString(36); const now = new Date().toISOString();
-  const items = structuredClone(myParlays());
-  items[id] = { id, name: name || `${legs.length}-leg parlay`, week: S.slate.week, status: "submitted", created_at: now,
+  const parlay = { id, name: name || `${legs.length}-leg parlay`, week: S.slate.week, status: "submitted", created_at: now,
     legs: legs.map((l) => ({ ...l, market: l.market || "anytime_td", price: priceRecord(priceFor(l, S.slate.week, l.market || "anytime_td"), l.market || "anytime_td") })),
     model_p: FB.parlayChance(legs).p };
-  try { await S.db.doc("parlays/" + S.uid).set({ items, updated_at: now }); S.draft = []; saveDraft(); toast("Parlay saved. It locks when its first game kicks off."); return true; }
-  catch (e) { toast(e && e.code === "invalid_argument" ? "Your access is view-only, so parlays can't be saved." : "Couldn't save the parlay."); return false; }
+  if (!(await changeMine("parlays", (items) => { items[id] = parlay; }, "Your access is view-only, so parlays can't be saved."))) return false;
+  S.draft = []; saveDraft(); toast("Parlay saved. It locks when its first game kicks off."); return true;
 }
 export async function deleteParlay(id) {
-  const items = structuredClone(myParlays()); const p = items[id]; if (!p) return;
+  const p = myParlays()[id]; if (!p) return;
   if (FB.parlayLocked(p.legs, S.gameById, Date.now())) { toast("This parlay is locked."); return; }
-  delete items[id];
-  try { await S.db.doc("parlays/" + S.uid).set({ items, updated_at: new Date().toISOString() }); toast("Parlay removed."); } catch (e) { toast("Couldn't remove it."); }
+  if (await changeMine("parlays", (items) => { delete items[id]; }, "Your access is view-only, so parlays can't be changed.")) toast("Parlay removed.");
 }
 export function settleParlayFor(uid, par) {
   const legStates = par.legs.map((l) => {

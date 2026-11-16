@@ -52,4 +52,20 @@ t = LF.td_from_play({"id": "7", "scoring_play": True, "type_slug": "passing-touc
                      "participants": [], "team": {"abbreviation": "NO"}, "period": 4, "clock_display": "3:49"}, {})
 check("scorer read from the play text when no participant is given (matched: Alvin Kamara)", t["scorer_name"] == "A.Kamara" and M.player("NO", t["scorer_name"])[0] == "00-0033906")
 check("two-point tries and non-scoring plays are ignored", LF.td_from_play({"id": "8", "scoring_play": True, "type_slug": "two-point-conversion", "text": "TWO-POINT CONVERSION ATTEMPT ... TOUCHDOWN", "participants": []}, {}) is None)
+check("a touchdown whose text mentions the failed two-point try still counts", LF.td_from_play({"id": "9", "scoring_play": True, "type_slug": "rushing-touchdown", "text": "J.Cook up the middle for 2 yards, TOUCHDOWN. (Two-Point Conversion Failed)", "participants": [], "team": {"abbreviation": "BUF"}}, {}) is not None)
+t = LF.td_from_play({"id": "10", "scoring_play": True, "type_slug": "fumble-return-touchdown", "text": "TOUCHDOWN", "participants": [{"type": "passer", "player_id": 1}, {"type": "receiver", "player_id": 2}, {"type": "recoverer", "player_id": 3}], "team": {"abbreviation": "BUF"}}, {1: "QB One", 2: "WR Two", 3: "LB Three"})
+check("fumble-return touchdown is credited to the recoverer, not the intended receiver", t["scorer_name"] == "LB Three", t["scorer_name"])
+t = LF.td_from_play({"id": "11", "scoring_play": True, "type_slug": "passing-touchdown", "text": "pass, TOUCHDOWN", "participants": [{"type": "passer", "player_id": 1}, {"type": "blocker", "player_id": 2}], "team": {"abbreviation": "BUF"}}, {1: "QB One", 2: "OL Two"})
+check("a passer is never credited when no scorer is listed with him", t["scorer_name"] is None, str(t["scorer_name"]))
+check("in-game status wording (Halftime, 3rd Quarter, Final/OT) is recognised", [LF.game_from_bdl({"id": 1, "status": s})["status"] for s in ("Halftime", "3rd Quarter", "Final/OT", "Final", "Scheduled", "in")] == ["in_progress", "in_progress", "final", "final", "scheduled", "in_progress"],
+      str([LF.game_from_bdl({"id": 1, "status": s})["status"] for s in ("Halftime", "3rd Quarter", "Final/OT", "Final", "Scheduled", "in")]))
+class Flaky:
+    name = "flaky"
+    def games(self): return [LF.game_from_bdl(sim_live.game(9001, "BUF", "NYJ", 7, 0)), LF.game_from_bdl(sim_live.game(9002, "CAR", "NO", 7, 0))]
+    def touchdowns(self, g):
+        if g["source_game_id"] == 9002: raise TimeoutError("slow")
+        return [LF.td_from_play({"id": "5001", "scoring_play": True, "type_slug": "rushing-touchdown", "text": "J.Cook up the middle for 2 yards, TOUCHDOWN.", "participants": [], "team": {"abbreviation": "BUF"}, "period": 1, "clock_display": "9:00"}, {})]
+st2 = {}; o2 = tmp / "o2"; o2.mkdir()
+w = LF.poll_once(Flaky(), M, st2, o2, 10)
+check("one game's failed fetch doesn't lose the other game's update, and the error is reported", len(w) == 1 and B in w[0].name and st2["_errors"] and C in st2["_errors"][0], f"{[p.name for p in w]} {st2.get('_errors')}")
 print(f"\n{sum(res)} passed, {len(res) - sum(res)} failed"); sys.exit(0 if all(res) else 1)

@@ -131,6 +131,12 @@ function LastGame({ c, full }) {
 const Num = ({ children, sx }) => <Box component="span" sx={{ fontVariantNumeric: "tabular-nums", ...sx }}>{children}</Box>;
 const Result = ({ r }) => <Chip size="small" variant="outlined" color={RESULT[r.state][1]} label={RESULT[r.state][0]} title={r.why} />;
 const StatusChip = ({ s }) => <Chip size="small" variant="outlined" color={STATUS_COLOR[s]} label={STATUS[s]} />;
+/* The results files (touchdowns, who played, the score check) didn't load: say so and offer another try. */
+export const ExtrasError = () => (
+  <Alert severity="error" sx={{ borderRadius: 2 }} action={<Button color="inherit" onClick={() => ensureExtras()} sx={{ minHeight: 44 }}>Try again</Button>}>
+    The results didn't load. Check your connection and try again. Picks stay pending until they do.
+  </Alert>
+);
 const Empty = ({ children }) => <Box sx={{ p: 2, border: 1, borderStyle: "dashed", borderColor: "divider", borderRadius: 2, color: "text.secondary" }}>{children}</Box>;
 const H2 = ({ children, sx }) => <Typography variant="h5" component="h2" sx={sx}>{children}</Typography>;
 function Fold({ title, summary, children, defaultExpanded = false }) {
@@ -159,7 +165,7 @@ export function DbNote() {
   const S = useStore();
   if (S.dbState === "ok") return null;
   const msg = { connecting: "Connecting to family picks…", slow: "Family picks can't be reached yet. Research still works.",
-    off: "Sign in to Claude to make picks and see the family board.", error: "Lost the connection to family picks. Reload to reconnect." }[S.dbState];
+    off: "Sign in to Claude to make picks and see the family board.", error: "Lost the connection to the family database. Reconnecting… what you see may be out of date." }[S.dbState];
   return <Alert severity={S.dbState === "error" ? "error" : "info"} sx={{ borderRadius: 2 }}>{msg}</Alert>;
 }
 
@@ -487,7 +493,7 @@ const blankF = { week: "latest", team: "", def: "", type: "", status: "", scorer
 export function TouchdownsView() {
   const S = useStore(); const [f, setF] = useState(blankF); const [filters, setFilters] = useState(false); const [play, setPlay] = useState(null);
   const [limit, setLimit] = useState(30); const [csvText, setCsvText] = useState(null);
-  if (!S.extrasLoaded) return <Empty>Loading the season's touchdowns…</Empty>;
+  if (!S.extrasLoaded) return S.extrasError ? <ExtrasError /> : <Empty>Loading the season's touchdowns…</Empty>;
   const weeks = [...new Set(S.tds.map((t) => t.week))].sort((a, b) => a - b);
   const settled = weeks.filter((w) => { const g = S.games.filter((x) => x.week === w); return g.length && g.filter((x) => x.status === "final").length * 2 >= g.length; });
   const wk = f.week === "latest" ? (settled.length ? settled[settled.length - 1] : S.meta.latest_final_week) : f.week;
@@ -564,7 +570,7 @@ function ResultsStatus() {
           ? ` ${live} game${live > 1 ? "s are" : " is"} in progress: live touchdowns appear below as the live feed publishes them; final results are verified after each game.`
           : ` ${live} game${live > 1 ? "s are" : " is"} in progress: touchdowns appear after the game ends and the source publishes them.`)}
         {inWindow && ago > 75 && " Results may be delayed: the latest check hasn't come through. These are the last successful results."}
-        {" "}Picks and parlay legs settle only after a final game's touchdowns match the official score and each scorer matches the official player stats.
+        {" "}Picks and parlay legs settle only after a final game's touchdowns match the official score and each scorer matches the weekly player stats.
       </Typography>
     </Alert>
   );
@@ -1112,7 +1118,7 @@ export function LinesView() {
             <Typography variant="body2" color="text.secondary">{r.book} · implied {pct1(imp)}{e ? ` · model ${pct1(c.p)} (${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} pts vs price; model unproven vs sportsbooks)` : ""}{!r.gsis_id ? " · not matched to a player" : ""}</Typography>
             <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
               <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>{nameOf(r.uploaded_by)} · {r.source || "upload"} · observed {et(r.captured_at, { hour: "numeric", minute: "2-digit" })}{` (${timeBasis(r.time_source)})`}{FB.priceFresh(r, Date.now()) ? "" : ` · stale (over ${FB.PRICE_FRESH_MIN / 60} h)`}</Typography>
-              {canDel && r.uploaded_by && S.lines[r.uploaded_by] && <Button size="small" onClick={() => deleteLines(r.uploaded_by, (x) => x.player === r.player && x.book === r.book && (x.market || "anytime_td") === market)}>Remove</Button>}
+              {canDel && r.uploaded_by && S.lines[r.uploaded_by] && <Button size="small" onClick={() => deleteLines(r.uploaded_by, (x) => (x.gsis_id && r.gsis_id && !r.matched_on_read ? x.gsis_id === r.gsis_id : x.player === (r.stored_player || r.player)) && x.book === r.book && (x.market || "anytime_td") === market)}>Remove</Button>}
             </Stack>
           </CardContent></Card>
         );
@@ -1143,7 +1149,7 @@ function AllowedChips({ r, hi }) {
 }
 export function DefenseView() {
   const S = useStore(); const [sortBy, setSortBy] = useState("total"); const [span, setSpan] = useState("season");
-  if (!S.extrasLoaded) return <Stack spacing={1.5}><H2>Defense</H2><LinearProgress /></Stack>;
+  if (!S.extrasLoaded) return <Stack spacing={1.5}><H2>Defense</H2>{S.extrasError ? <ExtrasError /> : <LinearProgress aria-label="Loading" />}</Stack>;
   const rows = defenseTable(S, span === "last4" ? 4 : 0);
   const per = (r, k) => (r.games ? r[k] / r.games : 0);
   const list = Object.values(rows).sort((a, b) => per(b, sortBy) - per(a, sortBy) || b[sortBy] - a[sortBy]);

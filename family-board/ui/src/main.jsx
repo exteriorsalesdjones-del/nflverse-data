@@ -35,7 +35,8 @@ function makeTheme(mode) {
       mode,
       primary: { main: dark ? "#3a9d68" : "#1d6b43", contrastText: dark ? "#06110b" : "#ffffff" },
       secondary: { main: dark ? "#c88ee6" : "#8d3fb0" },
-      warning: { main: dark ? "#e3a83a" : "#b9790b" },
+      warning: { main: dark ? "#e3a83a" : "#8f5d06" },   // light values chosen for 4.5:1 text contrast on white
+      info: { main: dark ? "#5fb8ea" : "#0b6aa2" },
       background: { default: dark ? "#101512" : "#f3f4ef", paper: dark ? "#171e1a" : "#ffffff" },
       text: { primary: dark ? "#e7ece6" : "#18211b", secondary: dark ? "#9aa79f" : "#5d6a61" },
       divider: dark ? "#2b352f" : "#d9ddd3",
@@ -52,6 +53,8 @@ function makeTheme(mode) {
       MuiTab: { styleOverrides: { root: { fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 600, fontSize: 16, letterSpacing: "0.04em" } } },
       MuiCard: { defaultProps: { variant: "outlined" } },
       MuiButton: { styleOverrides: { root: { minHeight: 40, textTransform: "none", fontSize: 15, borderRadius: 10 }, sizeLarge: { minHeight: 48 } } },
+      // readable in both themes: unselected uses the secondary text colour, selected the primary text colour (4.5:1 or better)
+      MuiToggleButton: { styleOverrides: { root: { color: dark ? "#a9b5ad" : "#55625a", "&.Mui-selected": { color: dark ? "#e7ece6" : "#123f28" } } } },
       MuiChip: { styleOverrides: { root: { fontWeight: 600 } } },
       MuiBottomNavigationAction: { styleOverrides: { root: { minWidth: 0, padding: "6px 2px" }, label: { fontSize: 12, "&.Mui-selected": { fontSize: 12, fontWeight: 700 } } } },
     },
@@ -132,4 +135,5 @@ function App() {
   );
 }
 
+if (!document.documentElement.lang) document.documentElement.lang = "en"; // screen readers pick the right voice
 createRoot(document.getElementById("root")).render(<App />);

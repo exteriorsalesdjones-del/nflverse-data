@@ -61,14 +61,20 @@ def norm(s) -> str:
 def td_from_play(p: dict, names: dict) -> dict | None:
     """One BALLDONTLIE-shaped play -> a touchdown record, or None. Two-point tries and non-scoring plays are skipped."""
     blob = f"{p.get('type_slug', '')} {p.get('type_text', '')} {p.get('text', '')}"
-    if not p.get("scoring_play") or not TD_RE.search(blob) or re.search(r"two-point|2pt|conversion", blob, re.I):
+    # a two-point try is skipped by its play TYPE; a touchdown whose text mentions the failed try after it still counts
+    kind_blob = f"{p.get('type_slug', '')} {p.get('type_text', '')}"
+    if not p.get("scoring_play") or not TD_RE.search(blob) or re.search(r"two-point|2pt|conversion", kind_blob, re.I) \
+            or re.match(r"\s*\(?[\d:]*\)?\s*TWO-POINT CONVERSION ATTEMPT", p.get("text") or "", re.I):
         return None
     parts = p.get("participants") or []
+    # a return or recovery touchdown is credited to the returner/recoverer, never to the offense's intended receiver
+    is_return = bool(re.search(r"fumble|intercept|return|recover|punt|kickoff", kind_blob, re.I))
+    order = ("scorer", "returner", "recoverer", "interceptor", "receiver", "rusher", "passer") if is_return else SCORER_TYPES
     scorer = None
-    for t in SCORER_TYPES:
-        scorer = next((x for x in parts if x.get("type") == t), None)
-        if scorer and not (t == "passer" and len(parts) > 1):
-            break
+    for t in order:
+        hit = next((x for x in parts if x.get("type") == t), None)
+        if hit and not (t == "passer" and len(parts) > 1):   # a passer scores only when he is the only player listed
+            scorer = hit; break
     sid = scorer.get("player_id") if scorer else None
     name = names.get(sid) if sid is not None else None
     if not name:   # fall back to the play text: "J.Cook 74 yd run ... TOUCHDOWN" / "pass ... to D.Moore for 45 yards, TOUCHDOWN"
@@ -84,7 +90,9 @@ def td_from_play(p: dict, names: dict) -> dict | None:
 
 def game_from_bdl(g: dict) -> dict:
     st = (g.get("status_state") or g.get("status") or "").lower()
-    status = "final" if st in ("final", "post") else "in_progress" if st in ("in", "in_progress", "inprogress", "live") else "scheduled"
+    status = ("final" if st in ("post",) or st.startswith("final") else
+              "in_progress" if st in ("in", "in_progress", "inprogress", "live") or re.search(r"half|quarter|overtime|\bot\b|\bq[1-4]\b|\d(st|nd|rd|th)\b|in progress", st) or
+              (g.get("period") and not st.startswith(("sched", "pre", "postpon", "cancel"))) else "scheduled")
     ab = lambda t: ALIAS.get((t or {}).get("abbreviation"), (t or {}).get("abbreviation"))
     return {"source_game_id": g["id"], "away": ab(g.get("visitor_team")), "home": ab(g.get("home_team")), "status": status,
             "period": g.get("period"), "clock": g.get("time") or g.get("clock"), "away_score": g.get("visitor_team_score"),
@@ -238,13 +246,16 @@ def window_games(games_json: list, now: datetime) -> list[dict]:
 
 
 def poll_once(provider, matcher: Matcher, state: dict, outbox: Path, week: int) -> list[Path]:
-    seen = now_iso(); written = []
+    seen = now_iso(); written = []; errors = state.setdefault("_errors", []); errors.clear()
     for g in provider.games():
         app = matcher.game(g)
         if not app or g["status"] == "scheduled":
             continue
         gid = app["game_id"]; prev = state.get(gid)
-        tds = provider.touchdowns(g)
+        try:
+            tds = provider.touchdowns(g)
+        except Exception as e:   # one game's failed fetch never holds up, or loses, another game's update
+            errors.append(f"{gid}: {type(e).__name__}: {str(e)[:100]}"); continue
         for t in tds:
             t["gsis_id"], t["scorer"] = matcher.player(t["team"], t["scorer_name"])
             if t["scorer"] is None:
@@ -292,7 +303,10 @@ def main(argv=None) -> int:
         try:
             for p in poll_once(provider, matcher, state, outbox, week):
                 print(f"LIVE_UPDATE {p}", flush=True)
-            state_f.write_text(json.dumps(state)); fails = 0
+            state_f.write_text(json.dumps(state))
+            if state.get("_errors"):
+                raise RuntimeError("; ".join(state["_errors"])[:200])   # reported below; the other games were already written
+            fails = 0
             if time.time() - last_hb >= a.heartbeat:
                 print(f"LIVE_HEARTBEAT {heartbeat(outbox, week, True, None, provider, live)}", flush=True); last_hb = time.time()
         except Exception as e:  # keep polling; the app keeps the last known results and labels the delay

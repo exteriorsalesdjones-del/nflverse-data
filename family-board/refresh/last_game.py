@@ -18,6 +18,7 @@ Statuses: "ok" (game found), "none" (season records show no earlier appearance),
 """
 from __future__ import annotations
 
+import os
 import json
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-CACHE = ROOT / ".data" / "cache"
+CACHE = Path(os.environ.get("FB_CACHE", ROOT / ".data" / "cache"))
 DATA = ROOT / "artifact" / "data"
 SEASON = 2026
 HANDOFF_NOTE = ("Handoffs unavailable: play-by-play doesn't record who handed the ball off (or mark tosses and pitches), "
