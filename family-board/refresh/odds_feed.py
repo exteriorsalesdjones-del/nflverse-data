@@ -37,6 +37,7 @@ BASE = "https://api.oddspapi.io/v4"
 ET = ZoneInfo("America/New_York")
 SPORT_ID, TOURNAMENT_ID = 14, 31          # American football, NFL
 TD_MARKET = "player to score td (incl. overtime)"
+ML_MARKET = "winner (incl. overtime)"     # the game moneyline: outcome "1" = the feed's participant 1, "2" = participant 2
 BOOKS = {"fanduel": "FanDuel", "draftkings": "DraftKings"}   # feed slug -> name shown in the app
 OUTCOME_MARKET = {"yes": "anytime_td", "1+": "anytime_td", "2+": "2plus_td"}
 TEAMS = {  # nflverse abbreviation -> words that identify the team in a feed's team name
@@ -232,6 +233,41 @@ def td_rows(odds: dict, catalog: dict, game: dict, players: Players, pulled_at: 
     return list(best.values()), sorted(set(unmatched)), seen_books
 
 
+def moneylines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str) -> list[dict]:
+    """One fixture's game moneyline per book in BOOKS: {game_id, book, away, home, away_american, home_american, ...}.
+    Which side is home is read from the feed's team names, never assumed from participant order."""
+    side = {}
+    for n in ("1", "2"):
+        name = [str(fx.get(f"participant{n}Name") or "").lower()]
+        hit = [s for s in ("away", "home") if team_in(game[s], name)]
+        if len(hit) == 1:
+            side[n] = hit[0]
+    if sorted(side.values()) != ["away", "home"]:
+        return []
+    out = []
+    for slug, book in (odds.get("bookmakerOdds") or {}).items():
+        name = BOOKS.get(str(slug).lower())
+        if not name or not isinstance(book, dict) or book.get("suspended"):
+            continue
+        for mid, market in (book.get("markets") or {}).items():
+            if str(catalog["market"].get(str(mid), "")).strip().lower() != ML_MARKET or market.get("marketActive") is False:
+                continue
+            got = {}; changed = []
+            for oid, outcome in (market.get("outcomes") or {}).items():
+                s = side.get(str(catalog["outcome"].get((str(mid), str(oid)), "")).strip())
+                price = (outcome.get("players") or {}).get("0")     # a match market is keyed "0" (no player)
+                if not s or not isinstance(price, dict) or not price.get("active"):
+                    continue
+                am = to_american(price)
+                if am is not None:
+                    got[s] = am; changed.append(price.get("bookmakerChangedAt") or price.get("changedAt"))
+            if len(got) == 2:   # both sides or nothing: half a moneyline is not shown
+                out.append({"game_id": game["game_id"], "book": name, "away": game["away"], "home": game["home"],
+                            "away_american": got["away"], "home_american": got["home"], "captured_at": pulled_at,
+                            "changed_at": max([c for c in changed if c], default=None), "source": "OddsPapi feed"})
+    return list({r["book"]: r for r in out}.values())
+
+
 def load_catalog(api: Api) -> dict:
     cat = api.call("markets", sportId=SPORT_ID) or []
     cat = cat if isinstance(cat, list) else cat.get("markets", cat.get("data", []))
@@ -250,10 +286,11 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     wk_games = [g for g in games if g.get("week") == week and g["game_id"] in slate_by]
     open_games = [g for g in wk_games if datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET) > now]
     old = {key_of(r): r for r in (prev or {}).get("rows", [])}
+    old_ml = {(m["game_id"], m["book"]): m for m in (prev or {}).get("moneylines", [])}
     out = {"source": "OddsPapi v4", "books": sorted(BOOKS.values()), "week": week, "pulled_at": pulled_at, "ok": True, "error": None,
-           "rows": [], "unmatched": [], "coverage": {}, "requests": 0}
+           "rows": [], "moneylines": [], "unmatched": [], "coverage": {}, "requests": 0}
     if not open_games:
-        out.update(rows=list(old.values()), coverage=(prev or {}).get("coverage", {}), note="No game left to kick off this week.")
+        out.update(rows=list(old.values()), moneylines=list(old_ml.values()), coverage=(prev or {}).get("coverage", {}), note="No game left to kick off this week.")
         return out
     days = [datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET).astimezone(timezone.utc) for g in open_games]
     fixtures = api.call("fixtures", sportId=SPORT_ID, tournamentId=TOURNAMENT_ID,
@@ -264,6 +301,7 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     if TD_MARKET not in {str(v).strip().lower() for v in catalog["market"].values()}:
         raise FeedError("the market list has no 'Player To Score TD (incl. overtime)' market")
     fresh, unmatched, no_fixture, no_board, per_game, books_seen, failed = {}, [], [], [], {}, set(), []
+    fresh_ml = {}
     for g in open_games:
         fx = next((f for f in fixtures if (match_fixture(f, [g]) or {}).get("game_id") == g["game_id"]), None)
         if not fx:
@@ -275,6 +313,12 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
             odds = api.call("odds", fixtureId=fx.get("fixtureId"), bookmakers=",".join(BOOKS)) or {}
         except FeedError as e:   # one game's failure never loses the other games' prices
             failed.append(f"{g['game_id']}: {e}"); continue
+        for m in moneylines(odds, catalog, g, fx, pulled_at):
+            o = old_ml.get((m["game_id"], m["book"]))
+            if o:   # the first moneyline seen from this book this week, for line moves
+                m["open_away_american"] = o.get("open_away_american", o["away_american"]); m["open_home_american"] = o.get("open_home_american", o["home_american"])
+                m["open_captured_at"] = o.get("open_captured_at", o["captured_at"])
+            fresh_ml[(m["game_id"], m["book"])] = m
         rows, um, seen = td_rows(odds, catalog, g, Players(slate_by[g["game_id"]]), pulled_at)
         per_game[g["game_id"]] = len(rows); unmatched += [f"{g['game_id']}: {x}" for x in um]; books_seen |= seen
         for r in rows:
@@ -291,9 +335,11 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
         if o:   # first price seen from this book this week, for line moves
             r["open_american"] = o.get("open_american", o.get("american")); r["open_captured_at"] = o.get("open_captured_at", o.get("captured_at"))
         merged[k] = r
+    ml = {k: m for k, m in old_ml.items() if m["game_id"] not in pulled_games}; ml.update(fresh_ml)
     out.update(rows=sorted(merged.values(), key=lambda r: (r["game_id"], r["player"], r["book"], r["market"])), unmatched=unmatched[:200],
+               moneylines=sorted(ml.values(), key=lambda m: (m["game_id"], m["book"])),
                coverage={"games_open": len(open_games), "games_with_prices": sum(1 for n in per_game.values() if n), "prices": len(fresh),
-                         "players": len({r["gsis_id"] for r in fresh.values()}), "books": sorted(books_seen),
+                         "players": len({r["gsis_id"] for r in fresh.values()}), "moneylines": len(fresh_ml), "books": sorted(books_seen),
                          "no_fixture": no_fixture, "no_board": no_board, "failed": failed}, requests=api.calls)
     missing = sorted(set(BOOKS.values()) - books_seen)
     if failed and not per_game:   # every game's request failed: a failed pull (the caller keeps the previous prices)

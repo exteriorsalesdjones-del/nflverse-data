@@ -25,18 +25,23 @@ FIX = [{"fixtureId": "fxA", "startTime": "2026-11-22T18:00:00.000Z", "participan
        {"fixtureId": "fxB", "startTime": "2026-11-22T18:00:00.000Z", "participant1Name": "New Orleans Saints", "participant2Name": "Carolina Panthers"},
        {"fixtureId": "fxC", "startTime": "2026-11-20T01:15:00.000Z", "participant1Name": "Denver Broncos", "participant2Name": "Kansas City Chiefs"},
        {"fixtureId": "fxZ", "startTime": "2026-11-22T18:00:00.000Z", "participant1Name": "Miami Dolphins", "participant2Name": "New York Giants"}]
-CAT = [{"marketId": 14388, "marketName": "Player To Score TD (incl. overtime)", "outcomes": [{"outcomeId": 1, "outcomeName": "Yes"}, {"outcomeId": 2, "outcomeName": "No"}]},
+CAT = [{"marketId": 141, "marketName": "Winner (incl. overtime)", "outcomes": [{"outcomeId": 142, "outcomeName": "2"}, {"outcomeId": 141, "outcomeName": "1"}]},
+       {"marketId": 143, "marketName": "Regular Time Result", "outcomes": [{"outcomeId": 143, "outcomeName": "1"}, {"outcomeId": 144, "outcomeName": "X"}, {"outcomeId": 145, "outcomeName": "2"}]},
+       {"marketId": 14388, "marketName": "Player To Score TD (incl. overtime)", "outcomes": [{"outcomeId": 1, "outcomeName": "Yes"}, {"outcomeId": 2, "outcomeName": "No"}]},
        {"marketId": 144637, "marketName": "Player To Score TD (incl. overtime)", "outcomes": [{"outcomeId": 11, "outcomeName": "1+"}, {"outcomeId": 12, "outcomeName": "2+"}, {"outcomeId": 13, "outcomeName": "3+"}]},
        {"marketId": 500, "marketName": "Player First TD Scorer", "outcomes": [{"outcomeId": 1, "outcomeName": "Yes"}]},
        {"marketId": 600, "marketName": "Player Receiving Yards", "handicap": 29.5, "outcomes": [{"outcomeId": 1, "outcomeName": "Over"}]}]
 P = lambda name, dec, active=True: {"playerName": name, "price": dec, "active": active, "changedAt": "2026-11-17T10:00:00Z", "bookmakerChangedAt": "2026-11-17T09:58:00Z"}
 def board(scale=1.0):
     return {"bookmakerOdds": {
-        "fanduel": {"markets": {"14388": {"outcomes": {"1": {"players": {"0": P("", 1.9), "77": P("Cook, James", 1.8 * scale), "78": P("Harrison Jr., Marvin", 3.0), "79": P("Nobody, Joe", 5.0), "80": P("Hall, Breece", 2.5, active=False)}},
+        "fanduel": {"markets": {"141": {"marketActive": True, "outcomes": {"141": {"players": {"0": P("", 2.9 * scale)}}, "142": {"players": {"0": P("", 1.43)}}}},
+                                "143": {"outcomes": {"143": {"players": {"0": P("", 3.1)}}, "144": {"players": {"0": P("", 15.0)}}, "145": {"players": {"0": P("", 1.5)}}}},
+                                "14388": {"outcomes": {"1": {"players": {"0": P("", 1.9), "77": P("Cook, James", 1.8 * scale), "78": P("Harrison Jr., Marvin", 3.0), "79": P("Nobody, Joe", 5.0), "80": P("Hall, Breece", 2.5, active=False)}},
                                                         "2": {"players": {"77": P("Cook, James", 1.9)}}}},
                                 "500": {"outcomes": {"1": {"players": {"77": P("Cook, James", 7.0)}}}},
                                 "600": {"outcomes": {"1": {"players": {"77": P("Cook, James", 1.87)}}}}}},
-        "draftkings": {"markets": {"144637": {"outcomes": {"11": {"players": {"77": P("Cook, James", 1.87), "81": P("Hall, Breece", 0)}},
+        "draftkings": {"markets": {"141": {"outcomes": {"141": {"players": {"0": P("", 2.85)}}, "142": {"players": {"0": P("", 1.444, active=False)}}}},
+                                   "144637": {"outcomes": {"11": {"players": {"77": P("Cook, James", 1.87), "81": P("Hall, Breece", 0)}},
                                                            "12": {"players": {"77": P("Cook, James", 6.5)}},
                                                            "13": {"players": {"77": P("Cook, James", 21.0)}}}}}},
         "betfirst.be": {"markets": {"14388": {"outcomes": {"1": {"players": {"77": P("Cook, James", 2.4)}}}}}},
@@ -72,11 +77,17 @@ check("each row is tied to its game, timed at the pull, and keeps the book's own
 check("a game that has kicked off is not requested", not any(q.get("fixtureId") == "fxC" for p, q in calls) and doc["coverage"]["games_open"] == 2)
 check("a 429 is retried after the wait the API names", slept and abs(slept[0] - 0.31) < 0.01, str(slept))
 check("requests per pull: fixtures + markets + one per open game", doc["requests"] == 5, str(doc["requests"]))   # 1 limited + 4
+# game moneylines (FIX[0]: participant 1 = New York Jets = home, participant 2 = Buffalo Bills = away)
+ml = {m["book"]: m for m in doc["moneylines"]}
+check("moneyline: the feed's outcome 1/2 is mapped to home/away by team name, converted to American", ml["FanDuel"]["home"] == "NYJ" and ml["FanDuel"]["home_american"] == 190 and ml["FanDuel"]["away"] == "BUF" and ml["FanDuel"]["away_american"] == -233 and ml["FanDuel"]["game_id"] == "2026_11_BUF_NYJ", json.dumps(ml["FanDuel"]))
+check("moneyline: a book with only one side active is left out; the 3-way regular-time market is ignored", list(ml) == ["FanDuel"] and len(doc["moneylines"]) == 1)
 # second pull: a price moved; the first price is kept as the opening price
 later = datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc)
 doc2 = OF.pull(OF.Api(KEY, get=make_get({"fxA": board(scale=1.1), "fxB": {"bookmakerOdds": {}}})), games, slate, doc, later)
 r = next(x for x in doc2["rows"] if (x["player"], x["book"], x["market"]) == ("James Cook", "FanDuel", "anytime_td"))
 check("a moved price keeps the first price as the opening price (line moves)", r["american"] == -102 and r["open_american"] == -125 and r["open_captured_at"] == doc["rows"][0]["captured_at"], json.dumps({k: r.get(k) for k in ("american", "open_american", "open_captured_at")}))
+m2 = doc2["moneylines"][0]
+check("moneyline: a move keeps the opening prices", m2["home_american"] == 219 and m2["open_home_american"] == 190 and m2["open_away_american"] == -233, json.dumps({k: m2[k] for k in m2 if "american" in k}))
 # a price the book took down disappears; a game that could not be pulled keeps its last prices
 b3 = board(); del b3["bookmakerOdds"]["draftkings"]
 doc3 = OF.pull(OF.Api(KEY, get=make_get({"fxA": b3})), games, slate, doc2, later)
@@ -86,7 +97,7 @@ check("one game's failed request keeps that game's last prices and is reported",
 # after kickoff nothing is requested and the last pregame prices stay
 calls.clear(); after = datetime(2026, 11, 22, 19, 0, tzinfo=timezone.utc)
 doc5 = OF.pull(OF.Api(KEY, get=make_get({})), games, slate, doc2, after)
-check("after the last kickoff no request is made and the pregame prices are kept", calls == [] and len(doc5["rows"]) == 4)
+check("after the last kickoff no request is made and the pregame prices and moneylines are kept", calls == [] and len(doc5["rows"]) == 4 and len(doc5["moneylines"]) == 1)
 check("a new week starts clean (last week's prices are not carried over)", OF.pull(OF.Api(KEY, get=make_get({})), games, {**slate, "week": 12, "games": []}, doc2, after)["rows"] == [])
 # hasOdds: a game with no board yet costs no request, and its earlier prices (if any) are kept
 calls.clear(); FIX[0]["hasOdds"] = False; FIX[1]["hasOdds"] = True

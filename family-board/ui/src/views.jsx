@@ -169,6 +169,22 @@ export function DbNote() {
   return <Alert severity={S.dbState === "error" ? "error" : "info"} sx={{ borderRadius: 2 }}>{msg}</Alert>;
 }
 
+/* Game moneyline from the sportsbook feed (FanDuel / DraftKings), one line per game card: who the books favour to win.
+   Shown with the time the feed last checked; after kickoff it is the last pregame price. Nothing here is a pick. */
+const BOOK_SHORT = { FanDuel: "FD", DraftKings: "DK" };
+function Moneyline({ g }) {
+  const S = useStore(); const f = S.oddsFeed;
+  const rows = f && f.week === g.week ? (f.moneylines || []).filter((m) => m.game_id === g.game_id) : [];
+  if (!rows.length) return null;
+  const moved = (m) => (m.open_home_american != null && (m.open_home_american !== m.home_american || m.open_away_american !== m.away_american) ? ` (opened ${am(m.open_away_american)} / ${am(m.open_home_american)})` : "");
+  return (
+    <Typography variant="body2" color="text.secondary" data-testid="moneyline">
+      Moneyline · {rows.map((m) => `${BOOK_SHORT[m.book] || m.book}: ${g.away} ${am(m.away_american)} / ${g.home} ${am(m.home_american)}${moved(m)}`).join(" · ")}
+      {" · "}as of {new Date(rows[0].captured_at).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" })} ET
+    </Typography>
+  );
+}
+
 /* =========================== THIS WEEK =========================== */
 export function WeekView() {
   const S = useStore(); const s = S.slate; const now = Date.now();
@@ -251,6 +267,7 @@ function GameCard({ g, onOpen }) {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="h6" component="h3">{g.away} at {g.home}</Typography>
           <Typography variant="body2" color="text.secondary">{kick(g)}{g.teams.every((t) => t.implied_points != null) ? ` · ${g.away} ${g.teams[0].implied_points}, ${g.home} ${g.teams[1].implied_points} pts` : ""}</Typography>
+          <Moneyline g={g} />
           {g.weather && <Stack direction="row" sx={{ alignItems: "center", gap: 0.75, mt: 0.25, flexWrap: "wrap" }}>
             <WindChip g={g} />
             {!isWindy(g) && <Typography variant="caption" color="text.secondary">{wxText(g.weather)}</Typography>}
@@ -949,7 +966,7 @@ function FeedAdmin() {
       {!f || (!f.pulled_at && f.ok !== false) ? <Alert severity="info" sx={{ borderRadius: 2 }}>Not running yet. Once a key is saved, prices arrive with the next scheduled check and show on the Week tab for everyone.</Alert>
         : f.ok === false ? <Alert severity="warning" sx={{ borderRadius: 2 }} data-testid="feed-status">The last pull failed{f.failed_at ? ` (${when(f.failed_at)})` : ""}: {f.error} {f.pulled_at ? `Showing prices from ${when(f.pulled_at)}.` : "No prices yet."}</Alert>
         : <Alert severity={(f.rows || []).length ? "success" : "info"} sx={{ borderRadius: 2 }} data-testid="feed-status">
-            Last pull: <b>{when(f.pulled_at)}</b> · week {f.week} · {(f.rows || []).length} prices{cov.players ? ` for ${cov.players} players` : ""}{cov.books && cov.books.length ? ` · ${cov.books.join(", ")}` : ""}
+            Last pull: <b>{when(f.pulled_at)}</b> · week {f.week} · {(f.rows || []).length} prices{cov.players ? ` for ${cov.players} players` : ""}{(f.moneylines || []).length ? ` · ${f.moneylines.length} game moneyline${f.moneylines.length > 1 ? "s" : ""}` : ""}{cov.books && cov.books.length ? ` · ${cov.books.join(", ")}` : ""}
             {cov.games_open != null ? ` · ${cov.games_with_prices || 0} of ${cov.games_open} open games` : ""}.{f.note ? ` ${f.note}` : ""}
             {(f.unmatched || []).length ? ` ${f.unmatched.length} price${f.unmatched.length > 1 ? "s were" : " was"} for players not on the app's list this week (left out).` : ""}
           </Alert>}
