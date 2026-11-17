@@ -17,7 +17,20 @@ const S = {
 /* Week tab: Anytime TD or 2+ TDs. Remembered on this device only. */
 export function setWeekMarket(m) { S.weekMarket = m === "2plus_td" ? "2plus_td" : "anytime_td"; try { localStorage.setItem("fb_week_market", S.weekMarket); } catch (e) { /* storage unavailable */ } emit(); }
 /* Chance shown for a market: the model's anytime chance, or the labeled Poisson estimate for 2+ TDs. */
-export const chanceFor = (c, market = S.weekMarket) => (market === "2plus_td" ? FB.p2plus(c.p) : c.p);
+/* The chance shown for a player. When the slate says the model + market blend is on (slate.blend, set by the refresh
+   from its backtest and weekly live check) and the player's position is covered, it is the blend of the model's chance
+   with the sportsbooks' implied chance: one price per book, fresh ones before kickoff; once the game has started, the
+   last prices from the 6 hours before kickoff, so the number doesn't drift back as prices age. Otherwise the model's. */
+export function blendFor(c) {
+  const b = S.slate && S.slate.blend; if (!b || !b.enabled || !(b.positions || []).includes(c.pos) || !(c.p > 0)) return null;
+  const now = Date.now(); const g = S.gameById[c.game_id]; const board = boardFor(c, S.slate.week, "anytime_td"); if (!board) return null;
+  const kick = g ? FB.etToUtcMs(g.kickoff_et) : null; const started = kick != null && now >= kick;
+  const use = board.books.filter((x) => { const t = Date.parse(x.captured_at); return started ? t < kick && kick - t <= 6 * 3600e3 : x.fresh; });
+  if (!use.length) return null;
+  const implied = use.map((x) => FB.americanToProb(x.american)); const avg = implied.reduce((a, v) => a + v, 0) / implied.length;
+  return { p: FB.blendChance(c.p, implied, b.model_weight), model: c.p, implied: avg, books: use.map((x) => x.book) };
+}
+export const chanceFor = (c, market = S.weekMarket) => { const b = blendFor(c); const p = b ? b.p : c.p; return market === "2plus_td" ? FB.p2plus(p) : p; };
 const subs = new Set();
 function emit() { S.version++; subs.forEach((f) => f()); }
 export function useStore() {
@@ -351,7 +364,8 @@ export function weekRankings(market = S.weekMarket, nowMs = Date.now()) {
     for (const t of g.teams) for (const c0 of t.candidates) {
       const c = effCand(c0); if (c.quality === "unavailable") continue;
       const prices = (byPid[c.gsis_id] || []).filter((r) => !r.game_id || r.game_id === g.game_id); // tied to this game
-      items.push({ key: c.gsis_id, name: c.full_name || c.player, chance: chanceFor(c, market), prices, c, g });
+      // chance = the headline (model + market where on); value (edge vs the price) is always judged on the model's own chance
+      items.push({ key: c.gsis_id, name: c.full_name || c.player, chance: chanceFor(c, market), valueChance: market === "2plus_td" ? FB.p2plus(c.p) : c.p, prices, c, g });
     }
   }
   return FB.weeklyRankings(items, nowMs);
@@ -455,6 +469,7 @@ export async function addPick(c, market = S.weekMarket) {
   const now = new Date().toISOString();
   const two = market === "2plus_td"; const board = boardFor(c, week, market);
   Object.assign(pick, { key: FB.pickKey(week, c.gsis_id, market), status: "submitted", model_p: chanceFor(c, market), model_version: S.slate.model_version,
+    ...(blendFor(c) ? { chance_basis: "model + market", model_only_p: market === "2plus_td" ? FB.p2plus(c.p) : c.p } : {}),
     ...(two ? { model_p_note: "2+ TD chance estimated from the anytime chance (Poisson)" } : {}),
     // the "Above fair" marker as it stood at pick time, judged on the best FRESH anytime price (the one the marker uses):
     // true / false when a fresh price existed, null otherwise (2+ TDs, or no price under 2 hours old)

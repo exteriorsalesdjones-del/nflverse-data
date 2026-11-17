@@ -1,0 +1,36 @@
+{
+ "enabled": true,
+ "model_weight": 0.5,
+ "positions": [
+  "RB",
+  "WR",
+  "TE"
+ ],
+ "rule": "chance = equal parts, on the log-odds scale, of the model's chance and the average raw implied chance of the available books (margin included); fresh prices only before kickoff",
+ "evidence": {
+  "test": "2026 Weeks 2-4, FanDuel (and 12 BetMGM) prices captured before kickoff",
+  "n": 407,
+  "games": 43,
+  "log_loss_model": 0.5749,
+  "log_loss_blend": 0.5629,
+  "gain_x1000": 11.95,
+  "ci90_x1000": [
+   5.04,
+   19.45
+  ],
+  "by_pos_x1000": {
+   "QB": 0.0,
+   "RB": 15.58,
+   "TE": 3.57,
+   "WR": 16.35
+  },
+  "by_week_x1000": {
+   "2": 37.64,
+   "3": 14.91,
+   "4": 6.16
+  },
+  "qb_note": "QBs keep the model's chance: on 44 QB rows the blend scored worse (-13.2), so they are excluded; that choice was made after seeing the test",
+  "script": "research/improvements.py"
+ },
+ "auto_off": "turned off by the refresh when the live check (grades.json blend_live) has 300+ player-games and the upper end of its 90% interval is below zero"
+}

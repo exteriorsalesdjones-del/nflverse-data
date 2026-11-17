@@ -215,6 +215,16 @@ test("only full-game anytime and 2+ markets are comparable", () => {
   for (const m of ["Anytime TD", "anytime", "", "ATD", "Anytime Touchdown Scorer"]) assert.strictEqual(FB.normMarket(m), "anytime_td", m);
   assert.strictEqual(FB.normMarket("3+ TDs"), null);
   assert.ok(Number.isNaN(FB.americanToDecimal(0)) && Number.isNaN(FB.americanToDecimal(50)));
+  // model + market blend: equal parts on the log-odds scale; no usable price -> the model's chance unchanged
+  const close = (a, b) => Math.abs(a - b) < 1e-9;
+  assert.ok(close(FB.blendChance(0.2, [0.2]), 0.2) && close(FB.blendChance(0.5, [0.5, 0.5]), 0.5));
+  assert.ok(close(FB.blendChance(0.2, [0.5]), 1 / 3), String(FB.blendChance(0.2, [0.5])));   // logit(.2) = -ln4, logit(.5) = 0 -> -ln2 -> 1/3
+  assert.ok(FB.blendChance(0.3, [0.4, 0.5]) > 0.3 && FB.blendChance(0.3, [0.4, 0.5]) < 0.45);
+  assert.strictEqual(FB.blendChance(0.3, []), 0.3); assert.strictEqual(FB.blendChance(0.3, [NaN, 0, 1]), 0.3); assert.strictEqual(FB.blendChance(0.3, null), 0.3);
+  assert.ok(close(FB.blendChance(0.2, [0.5], 1), 0.2) && close(FB.blendChance(0.2, [0.5], 0), 0.5));
+  // rankings: the headline chance can include the price, but value is judged on the model's own chance
+  const rk = FB.weeklyRankings([{ key: "a", name: "A", chance: 0.30, valueChance: 0.20, prices: [{ american: 300, book: "FD", captured_at: new Date(Date.now() - 6e5).toISOString() }] }], Date.now());
+  assert.strictEqual(rk.value.length, 0); assert.strictEqual(rk.chance[0].chance, 0.30);
 });
 
 test("model vs price: percentage points and EV per $1, worked by hand", () => {

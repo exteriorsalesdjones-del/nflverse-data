@@ -65,6 +65,37 @@ def record(rows: list) -> dict:
                             for lo, hi in ((0, .1), (.1, .2), (.2, .3), (.3, .45), (.45, 1)) for b in [[r for r in rows if lo <= r["p"] < hi]] if b]}
 
 
+def blend_live(mrows: list) -> dict | None:
+    """Live check of the model + market blend (refresh/blend.json) on player-games that had a price before kickoff:
+    log-loss gain of the blend over the saved pregame model chance, with a 90% interval from resampling games.
+    build_data.py switches the blend off when this has 300+ rows and the whole interval is below zero."""
+    try:
+        cfg = json.loads((Path(__file__).parent / "blend.json").read_text())
+        import pandas as pd
+        cache = Path(os.environ.get("FB_CACHE", Path(__file__).resolve().parents[1] / ".data" / "cache"))
+        pos = pd.read_parquet(cache / "players.parquet", columns=["gsis_id", "position"]).dropna().drop_duplicates("gsis_id").set_index("gsis_id").position.to_dict()
+    except Exception:
+        return None
+    w = float(cfg.get("model_weight", 0.5)); keep = set(cfg.get("positions", []))
+    lg = lambda p: float(np.log(min(0.999, max(0.001, p)) / (1 - min(0.999, max(0.001, p)))))
+    rows = [r for r in mrows if pos.get(r["pid"]) in keep and 0 < r["p"] < 1 and 0 < r["imp"] < 1]
+    if not rows:
+        return None
+    one = lambda p, y: -(y * np.log(min(1 - 1e-6, max(1e-6, p))) + (1 - y) * np.log(1 - min(1 - 1e-6, max(1e-6, p))))
+    gain = np.array([one(r["p"], r["y"]) - one(1 / (1 + np.exp(-(w * lg(r["p"]) + (1 - w) * lg(r["imp"])))), r["y"]) for r in rows])
+    gid = np.array([r["game_id"] for r in rows]); games = sorted(set(gid)); idx = {g: np.where(gid == g)[0] for g in games}
+    rng = np.random.default_rng(11); bs = []
+    for _ in range(1000):
+        pick = np.concatenate([idx[games[i]] for i in rng.integers(0, len(games), len(games))]); bs.append(gain[pick].mean())
+    by = {}
+    for r, g in zip(rows, gain):
+        by.setdefault(pos[r["pid"]], []).append(g)
+    return {"n": len(rows), "games": len(games), "weeks": sorted({r["week"] for r in rows}), "gain_x1000": round(float(gain.mean()) * 1000, 2),
+            "ci90_x1000": [round(float(np.percentile(bs, 5)) * 1000, 2), round(float(np.percentile(bs, 95)) * 1000, 2)],
+            "by_pos_x1000": {k: round(float(np.mean(v)) * 1000, 2) for k, v in sorted(by.items())},
+            "note": "blend minus model, log loss per player-game x1000 (positive = blend better); positions " + "/".join(sorted(keep))}
+
+
 def main(lines_dir: str | None = None) -> dict:
     preds = json.loads((D / "predictions.json").read_text()) if (D / "predictions.json").exists() else {}
     games = {g["game_id"]: g for g in json.loads((D / "games.json").read_text())}
@@ -126,6 +157,9 @@ def main(lines_dir: str | None = None) -> dict:
                 latest[book] = (t, a)
         mrows.append({**r, "imp": float(np.mean([implied(a) for t, a in latest.values()])), "books": sorted(latest)})
     if mrows:
+        bl = blend_live(mrows)
+        if bl:
+            out["blend_live"] = bl
         weeks = sorted({r["week"] for r in mrows})
         y = [r["y"] for r in mrows]
         wk = lambda w, k: [r[k] for r in mrows if r["week"] == w]

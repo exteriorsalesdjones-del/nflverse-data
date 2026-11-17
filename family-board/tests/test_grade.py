@@ -73,3 +73,17 @@ with tempfile.TemporaryDirectory() as t:
     assert make_locks.main(str(T), str(out2), [gid]) == [] and not (out2 / "locks" / f"{gid}.json").exists()
 
 print("grade and snapshot tests passed")
+
+# ---- live check of the model + market blend
+import pandas as _pd, numpy as _np
+_pl = _pd.read_parquet(ROOT / ".data" / "cache" / "players.parquet", columns=["gsis_id", "position"]).dropna()
+_rb = _pl[_pl.position == "RB"].gsis_id.tolist()[:40]; _qb = _pl[_pl.position == "QB"].gsis_id.tolist()[:10]
+_rng = _np.random.default_rng(3); _rows = []
+for i, pid in enumerate(_rb + _qb):
+    truth = 0.15 + 0.5 * _rng.random()                      # the price is close to the truth; the saved model chance is not
+    _rows.append({"pid": pid, "game_id": f"g{i % 8}", "week": 11 + i % 2, "p": 0.2, "imp": float(truth), "y": int(_rng.random() < truth)})
+_bl = grade.blend_live(_rows)
+assert _bl and _bl["n"] == 40 and "QB" not in _bl["by_pos_x1000"], _bl          # QBs are not part of the blend
+assert _bl["games"] == 8 and _bl["weeks"] == [11, 12] and _bl["ci90_x1000"][0] <= _bl["gain_x1000"] <= _bl["ci90_x1000"][1], _bl
+assert grade.blend_live([]) is None
+print("blend live check passed", _bl["gain_x1000"], _bl["ci90_x1000"])

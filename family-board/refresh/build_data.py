@@ -806,6 +806,26 @@ def referee_index_safe():
         return json.loads(f.read_text()) if f.exists() else None
 
 
+def blend_setting() -> dict:
+    """Model + market blend for the headline chance: on per refresh/blend.json (the backtest result), and switched off
+    automatically when the live check from the previous run's grades.json says it is doing worse than the model."""
+    try:
+        cfg = json.loads((Path(__file__).parent / "blend.json").read_text())
+    except (OSError, ValueError):
+        return {"enabled": False, "why": "blend.json missing"}
+    out = {k: cfg[k] for k in ("enabled", "model_weight", "positions") if k in cfg}
+    out["evidence"] = {k: cfg.get("evidence", {}).get(k) for k in ("test", "n", "log_loss_model", "log_loss_blend", "gain_x1000", "ci90_x1000")}
+    try:
+        live = json.loads((OUT / "grades.json").read_text()).get("blend_live") or {}
+    except (OSError, ValueError):
+        live = {}
+    out["live"] = {k: live.get(k) for k in ("n", "gain_x1000", "ci90_x1000")} if live else None
+    if live and (live.get("n") or 0) >= 300 and live.get("ci90_x1000") and live["ci90_x1000"][1] < 0:
+        out["enabled"] = False; out["why"] = f"switched off: on {live['n']} live player-games the blend scored worse than the model"
+        HEALTH["problems"].append("Model + market blend switched off by the live check (it scored worse than the model alone).")
+    return out
+
+
 def save_predictions(slate: dict, games_out: list) -> int:
     """Keep each player's latest pregame chance per game; games that have kicked off are frozen."""
     path = OUT / "predictions.json"
@@ -907,6 +927,7 @@ def main() -> int:
     write_json("touchdowns.json", tds)
     write_json("weekly.json", weekly)
     write_json("validation.json", validation)
+    slate["blend"] = blend_setting()
     write_json("slate.json", slate)
     # Research tab: per-player, per-game usage (a failure leaves the Research tab's usage section on "Unavailable")
     try:

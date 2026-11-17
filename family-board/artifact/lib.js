@@ -361,6 +361,18 @@
     list.forEach(function (x, i) { ranks[i] = i > 0 && cmp(list[i - 1], x) === 0 ? ranks[i - 1] : i + 1; });
     return ranks;
   }
+  /* Model + market: equal parts, on the log-odds scale, of the model's chance and the sportsbooks' implied chance (the
+     average across books of the raw implied chance, margin included). Adopted for RB / WR / TE after the Weeks 2-4 2026
+     test (research/improvements.py): 407 player-games, log loss 0.563 vs 0.575 for the model alone. Returns the model's
+     chance unchanged when there is no usable price. */
+  function blendChance(pModel, implieds, weight) {
+    var ps = (implieds || []).filter(function (x) { return typeof x === "number" && x > 0 && x < 1; });
+    if (!(pModel > 0 && pModel < 1) || !ps.length) return pModel;
+    var w = typeof weight === "number" ? weight : 0.5;
+    var lg = function (p) { p = Math.min(0.999, Math.max(0.001, p)); return Math.log(p / (1 - p)); };
+    var imp = ps.reduce(function (a, b) { return a + b; }, 0) / ps.length;
+    return 1 / (1 + Math.exp(-(w * lg(pModel) + (1 - w) * lg(imp))));
+  }
   function weeklyRankings(items, nowMs) {
     var ok = (items || []).filter(function (it) { return typeof it.chance === "number" && it.chance > 0 && it.chance < 1; });
     var byName = function (a, b) { return String(a.name).localeCompare(String(b.name)); };
@@ -369,7 +381,9 @@
     var priced = ok.map(function (it) {
       var best = bestEligiblePrice(it.prices, nowMs); if (!best) return null;
       var implied = americanToProb(best.american);
-      return Object.assign({}, it, { fair: probToAmerican(it.chance), best: best, stale: best.stale, implied: implied, edgePts: (it.chance - implied) * 100 });
+      // value is judged on the MODEL's own chance (valueChance) when the headline chance already includes the price
+      var vc = typeof it.valueChance === "number" ? it.valueChance : it.chance;
+      return Object.assign({}, it, { fair: probToAmerican(it.chance), best: best, stale: best.stale, implied: implied, edgePts: (vc - implied) * 100 });
     }).filter(Boolean);
     var value = priced.filter(function (x) { return x.edgePts > 0; })
       .sort(function (a, b) { return b.edgePts - a.edgePts || b.chance - a.chance || byName(a, b); });
@@ -504,7 +518,7 @@
     return { rows: rs, summary: summary, weeks: weeks, cumulative: cumulative, categories: categories, touchdowns: touchdowns, calibration: calibration, extremes: extremes, weekRuns: runs, smallN: SMALL_N };
   }
 
-  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, blendChance: blendChance, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

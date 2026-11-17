@@ -78,3 +78,11 @@ Chances are **not** adjusted for wind. `refresh/wind_study.py` (results in `refr
 - **Small prior-season signals:** crews that called more holding in 2024 had fewer rushing TDs in 2025 (r = −0.14, 90% −0.24 to −0.04); crews with more pass-coverage flags had lower EPA per dropback (r = −0.18) and fewer passing TDs (r = −0.12). Within a game, more flags go with more passing (pass rate r = +0.22), mostly because more dropbacks create more pass-play flags.
 - **Pick test:** adding pregame crew indices to v0.3c (holding and run-play flags for RB/QB, pass-coverage and pass-play flags for WR/TE) changed log loss by -0.33×10⁻³ on 2025 weeks 6–18 (4646 player-games; runners -0.51, pass catchers -0.24) and 0.08×10⁻³ on 2026 games with a known crew; every interval spans zero. **Not adopted**; crews are shown on game cards as information.
 - **Crew index** (`refresh/referee_index.json`): per-game rates shrunk toward the league with 6 pseudo-games, 2026 games weight 1, 2025 0.5, 2024 0.25. Rebuild with `python research/referees.py` (needs 2024–2026 play-by-play in `.data/cache`).
+
+## Model + market blend (adopted Nov 16 2026 for RB / WR / TE)
+When a fresh FanDuel/DraftKings (or uploaded) Anytime TD price exists, the chance shown for a running back, wide receiver
+or tight end is equal parts, on the log-odds scale, of the model's chance and the average raw implied chance of the
+available books. Quarterbacks keep the model's chance. Test, limits and the two inputs that were tested and **not**
+adopted (opponent-adjusted defense splits, role changes): `docs/IMPROVEMENTS_NOV16.md`. "Model vs price", "Above fair"
+and Best Value still compare the model's own chance with the price. The refresh checks the blend on live results every
+run and switches it off if it does worse than the model (`grades.json` `blend_live`).

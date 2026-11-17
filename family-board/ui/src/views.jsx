@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, saveFeedKey, removeFeedKey, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, blendFor, saveFeedKey, removeFeedKey, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { visuallyHidden } from "@mui/utils";
 import { Icon, P } from "./icons.jsx";
@@ -199,7 +199,7 @@ export function WeekView() {
           <H2>Week {s.week}</H2>
           <Button size="large" startIcon={<Icon d={P.info} />} onClick={() => setHow(true)}>How this works</Button>
         </Stack>
-        <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · sportsbook prices come from {S.oddsFeed && (S.oddsFeed.rows || []).length && S.oddsFeed.week === S.slate.week ? "the FanDuel / DraftKings feed and family uploads" : "family uploads"}</Typography>
+        <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · sportsbook prices come from {S.oddsFeed && (S.oddsFeed.rows || []).length && S.oddsFeed.week === S.slate.week ? "the FanDuel / DraftKings feed and family uploads" : "family uploads"}{S.slate.blend && S.slate.blend.enabled ? ` · ${S.slate.blend.positions.join("/")} chances combine the model with those prices when fresh` : ""}</Typography>
         <ToggleButtonGroup exclusive fullWidth size="small" value={S.weekMarket} onChange={(e, v) => v && setWeekMarket(v)} aria-label="Market" sx={{ mt: 1, "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none", fontWeight: 600 } }}>
           <ToggleButton value="anytime_td">Anytime TD</ToggleButton><ToggleButton value="2plus_td">2+ TDs</ToggleButton>
         </ToggleButtonGroup>
@@ -349,7 +349,7 @@ function PlayerRow({ c, g, locked, onOpen, team }) {
         <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
           <LinearProgress variant="determinate" value={Math.min(100, ch * 100 * (two ? 2 : 1))} sx={{ flex: 1, maxWidth: 160, height: 6, borderRadius: 3 }} aria-hidden />
           <Typography variant="body2" sx={{ fontWeight: 600 }}><Num>{pct(ch)}{two ? " est." : ""}</Num></Typography>
-          <Typography variant="body2" color="text.secondary"><Num>fair {am(two ? FB.probToAmerican(ch) : c.fair_american)}</Num></Typography>
+          <Typography variant="body2" color="text.secondary"><Num>fair {am(two || blendFor(c) ? FB.probToAmerican(ch) : c.fair_american)}</Num></Typography>
         </Stack>
         <FdDk c={c} g={g} />
         <LastGame c={c} />
@@ -364,8 +364,10 @@ function PlayerSheet({ c, onClose }) {
   if (!c) return <Sheet open={false} onClose={onClose} />;
   const g = c._g; const locked = FB.isLocked(g, Date.now());
   const pr = priceFor(c, g.week); const e = pr ? FB.edge(c.p, pr.american) : null;
-  const rows = [["Chance to score", pct1(c.p)], ["Fair odds", am(c.fair_american)],
-    ["2+ TD chance", `${pct1(FB.p2plus(c.p))} (estimate from the anytime chance) · fair ${am(FB.probToAmerican(FB.p2plus(c.p)))}`],
+  const bl = blendFor(c); const ch = chanceFor(c, "anytime_td");
+  const rows = [["Chance to score", bl ? `${pct1(ch)} · model ${pct1(bl.model)} combined with ${[...new Set(bl.books)].join(" and ")} (${pct1(bl.implied)} implied)` : pct1(ch)],
+    ["Fair odds", am(bl ? FB.probToAmerican(ch) : c.fair_american)],
+    ["2+ TD chance", `${pct1(FB.p2plus(ch))} (estimate from the anytime chance) · fair ${am(FB.probToAmerican(FB.p2plus(ch)))}`],
     ["Value check price", pr ? `${pr.stale ? "Latest (over 2 h old)" : "Best fresh"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)} · ${timeBasis(pr.time_source)}` : "No anytime price uploaded yet (Uploads tab)"],
     ...(e ? [["Model vs price", pr.stale
       ? `Price is over ${FB.PRICE_FRESH_MIN / 60} hours old and may no longer be available, so no EV is shown.`
