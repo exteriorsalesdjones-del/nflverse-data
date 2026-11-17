@@ -11,7 +11,7 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
    `ArtifactData list collection=lines` gives one document per uploader id; for each id,
    `ArtifactData list collection=lines/<id>/weeks out_dir=<tmp>`.
    Then `FB_LINES_DIR=<tmp> python3 refresh/build_data.py`
-   (needs `features.py`, `model_v03.py`, `v03_backtest.json`, `referee_index.py`, `grade.py`, `blend.json` beside it, and the
+   (needs `features.py`, `model_v03.py`, `v03_backtest.json`, `referee_index.py`, `grade.py` beside it, and the
    artifact's `data/predictions.json` saved to `artifact/data/predictions.json` first, so pregame chances accumulate).
    If there are no lines yet, run it without `FB_LINES_DIR`.
    Rebuilds `artifact/data/*.json` (including `predictions.json` and `grades.json`; publish both).

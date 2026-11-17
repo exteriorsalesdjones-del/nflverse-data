@@ -28,7 +28,7 @@ Prices: FanDuel (and 12 BetMGM) captured before kickoff, 2026 Weeks 2-4: 407 pla
   little better than a clean test would.
 * Limits: two full weeks of prices from mostly one book; the ten players who gained most account for more than the
   whole gain (the rest net to slightly negative), so the size of the gain is uncertain even though its sign is consistent.
-* In the app: `refresh/blend.json` -> `slate.json` `blend` -> the chance shown for RB/WR/TE when a fresh FanDuel/DraftKings
+* In the app: `BLEND` in `refresh/grade.py` -> `slate.json` `blend` -> the chance shown for RB/WR/TE when a fresh FanDuel/DraftKings
   (or uploaded) price exists. "Model vs price", "Above fair" and Best Value still use the model's own chance.
 * Live check: `grade.py` scores the blend against the saved pregame model chance every refresh (`grades.json`
   `blend_live`). The refresh turns the blend off when that has 300+ player-games and its whole 90% interval is below zero.

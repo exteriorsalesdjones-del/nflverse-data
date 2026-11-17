@@ -65,12 +65,52 @@ def record(rows: list) -> dict:
                             for lo, hi in ((0, .1), (.1, .2), (.2, .3), (.3, .45), (.45, 1)) for b in [[r for r in rows if lo <= r["p"] < hi]] if b]}
 
 
+# Model + market blend for the headline chance (see docs/IMPROVEMENTS_NOV16.md). Kept here, in a file every refresh
+# already downloads, so build_data.py and this live check always agree on it.
+BLEND = {
+    "enabled": True,
+    "model_weight": 0.5,
+    "positions": [
+        "RB",
+        "WR",
+        "TE"
+    ],
+    "rule": "chance = equal parts, on the log-odds scale, of the model's chance and the average raw implied chance of the available books (margin included); fresh prices only before kickoff",
+    "evidence": {
+        "test": "2026 Weeks 2-4, FanDuel (and 12 BetMGM) prices captured before kickoff",
+        "n": 407,
+        "games": 43,
+        "log_loss_model": 0.5749,
+        "log_loss_blend": 0.5629,
+        "gain_x1000": 11.95,
+        "ci90_x1000": [
+            5.04,
+            19.45
+        ],
+        "by_pos_x1000": {
+            "QB": 0.0,
+            "RB": 15.58,
+            "TE": 3.57,
+            "WR": 16.35
+        },
+        "by_week_x1000": {
+            "2": 37.64,
+            "3": 14.91,
+            "4": 6.16
+        },
+        "qb_note": "QBs keep the model's chance: on 44 QB rows the blend scored worse (-13.2), so they are excluded; that choice was made after seeing the test",
+        "script": "research/improvements.py"
+    },
+    "auto_off": "turned off by the refresh when the live check (grades.json blend_live) has 300+ player-games and the upper end of its 90% interval is below zero"
+}
+
+
 def blend_live(mrows: list) -> dict | None:
-    """Live check of the model + market blend (refresh/blend.json) on player-games that had a price before kickoff:
+    """Live check of the model + market blend (BLEND above) on player-games that had a price before kickoff:
     log-loss gain of the blend over the saved pregame model chance, with a 90% interval from resampling games.
     build_data.py switches the blend off when this has 300+ rows and the whole interval is below zero."""
     try:
-        cfg = json.loads((Path(__file__).parent / "blend.json").read_text())
+        cfg = BLEND
         import pandas as pd
         cache = Path(os.environ.get("FB_CACHE", Path(__file__).resolve().parents[1] / ".data" / "cache"))
         pos = pd.read_parquet(cache / "players.parquet", columns=["gsis_id", "position"]).dropna().drop_duplicates("gsis_id").set_index("gsis_id").position.to_dict()

@@ -807,12 +807,13 @@ def referee_index_safe():
 
 
 def blend_setting() -> dict:
-    """Model + market blend for the headline chance: on per refresh/blend.json (the backtest result), and switched off
+    """Model + market blend for the headline chance: on per grade.BLEND (the backtest result), and switched off
     automatically when the live check from the previous run's grades.json says it is doing worse than the model."""
     try:
-        cfg = json.loads((Path(__file__).parent / "blend.json").read_text())
-    except (OSError, ValueError):
-        return {"enabled": False, "why": "blend.json missing"}
+        import grade
+        cfg = grade.BLEND
+    except Exception:
+        return {"enabled": False, "why": "blend setting unavailable"}
     out = {k: cfg[k] for k in ("enabled", "model_weight", "positions") if k in cfg}
     out["evidence"] = {k: cfg.get("evidence", {}).get(k) for k in ("test", "n", "log_loss_model", "log_loss_blend", "gain_x1000", "ci90_x1000")}
     try:
