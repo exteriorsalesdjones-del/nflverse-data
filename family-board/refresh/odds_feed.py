@@ -263,11 +263,13 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     catalog = load_catalog(api)
     if TD_MARKET not in {str(v).strip().lower() for v in catalog["market"].values()}:
         raise FeedError("the market list has no 'Player To Score TD (incl. overtime)' market")
-    fresh, unmatched, no_fixture, per_game, books_seen, failed = {}, [], [], {}, set(), []
+    fresh, unmatched, no_fixture, no_board, per_game, books_seen, failed = {}, [], [], [], {}, set(), []
     for g in open_games:
         fx = next((f for f in fixtures if (match_fixture(f, [g]) or {}).get("game_id") == g["game_id"]), None)
         if not fx:
             no_fixture.append(g["game_id"]); continue
+        if fx.get("hasOdds") is False:   # the feed says no book has a board for this game yet: don't spend a request on it
+            no_board.append(g["game_id"]); continue
         try:
             # ask only for the books the family uses (smaller reply); everything is filtered again on our side
             odds = api.call("odds", fixtureId=fx.get("fixtureId"), bookmakers=",".join(BOOKS)) or {}
@@ -292,13 +294,15 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     out.update(rows=sorted(merged.values(), key=lambda r: (r["game_id"], r["player"], r["book"], r["market"])), unmatched=unmatched[:200],
                coverage={"games_open": len(open_games), "games_with_prices": sum(1 for n in per_game.values() if n), "prices": len(fresh),
                          "players": len({r["gsis_id"] for r in fresh.values()}), "books": sorted(books_seen),
-                         "no_fixture": no_fixture, "failed": failed}, requests=api.calls)
+                         "no_fixture": no_fixture, "no_board": no_board, "failed": failed}, requests=api.calls)
     missing = sorted(set(BOOKS.values()) - books_seen)
     if failed and not per_game:   # every game's request failed: a failed pull (the caller keeps the previous prices)
         raise FeedError(failed[0])
     if missing and fresh:
         out["note"] = f"No Anytime TD prices from {', '.join(missing)} on this pull."
-    if not fresh:
+    if not fresh and no_board and len(no_board) + len(no_fixture) == len(open_games):
+        out["note"] = "The books haven't posted prices for this week's games yet."
+    elif not fresh:
         out["note"] = "The feed returned no FanDuel or DraftKings Anytime TD prices for the games still to come."
     return out
 

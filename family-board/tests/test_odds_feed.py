@@ -88,6 +88,14 @@ calls.clear(); after = datetime(2026, 11, 22, 19, 0, tzinfo=timezone.utc)
 doc5 = OF.pull(OF.Api(KEY, get=make_get({})), games, slate, doc2, after)
 check("after the last kickoff no request is made and the pregame prices are kept", calls == [] and len(doc5["rows"]) == 4)
 check("a new week starts clean (last week's prices are not carried over)", OF.pull(OF.Api(KEY, get=make_get({})), games, {**slate, "week": 12, "games": []}, doc2, after)["rows"] == [])
+# hasOdds: a game with no board yet costs no request, and its earlier prices (if any) are kept
+calls.clear(); FIX[0]["hasOdds"] = False; FIX[1]["hasOdds"] = True
+doc6 = OF.pull(OF.Api(KEY, get=make_get({"fxA": board(), "fxB": {"bookmakerOdds": {}}})), games, slate, doc2, later)
+check("a game the feed marks hasOdds=false is not requested; its earlier prices stay", not any(q.get("fixtureId") == "fxA" for p, q in calls) and doc6["coverage"]["no_board"] == ["2026_11_BUF_NYJ"] and len(doc6["rows"]) == 4 and doc6["requests"] == 3, f"requests={doc6['requests']}")
+FIX[1]["hasOdds"] = False
+doc7 = OF.pull(OF.Api(KEY, get=make_get({})), games, slate, None, later)
+check("no boards posted yet: two requests, a plain note, not an error", doc7["requests"] == 2 and doc7["ok"] and "haven't posted" in doc7["note"] and doc7["rows"] == [], doc7.get("note"))
+del FIX[0]["hasOdds"]; del FIX[1]["hasOdds"]
 # the key never reaches an error message, a file or the output
 try:
     OF.Api(KEY, get=make_get({}, fail=("fixtures", 500))).call("fixtures", sportId=14); msg = ""
