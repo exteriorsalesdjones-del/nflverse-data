@@ -160,7 +160,8 @@ def team_in(abbr: str, text: list[str]) -> bool:
 
 
 def match_fixture(fx: dict, games: list[dict]) -> dict | None:
-    """A feed fixture -> the app's game: kickoff within 3 hours and both team names present. None if not exactly one."""
+    """A feed fixture -> the app's game: both team names present and kickoff within 36 hours (two teams meet once a
+    week, and a flexed game moves by hours while the schedule file can lag behind). None if not exactly one."""
     try:
         start = datetime.fromisoformat(str(fx.get("startTime")).replace("Z", "+00:00"))
     except ValueError:
@@ -169,7 +170,7 @@ def match_fixture(fx: dict, games: list[dict]) -> dict | None:
     hits = []
     for g in games:
         kick = datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET)
-        if abs((kick - start).total_seconds()) <= 3 * 3600 and team_in(g["away"], text) and team_in(g["home"], text):
+        if abs((kick - start).total_seconds()) <= 36 * 3600 and team_in(g["away"], text) and team_in(g["home"], text):
             hits.append(g)
     return hits[0] if len(hits) == 1 else None
 
@@ -350,10 +351,11 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     old = {key_of(r): r for r in (prev or {}).get("rows", [])}
     old_ml = {(m["game_id"], m["book"]): m for m in (prev or {}).get("moneylines", [])}
     old_gl = {(m["game_id"], m["book"]): m for m in (prev or {}).get("game_lines", [])}
+    kickoffs = dict((prev or {}).get("kickoffs", {}))   # the feed's kickoff per game (Eastern), for flexed games
     out = {"source": "OddsPapi v4", "books": sorted(BOOKS.values()), "week": week, "pulled_at": pulled_at, "ok": True, "error": None,
            "rows": [], "moneylines": [], "game_lines": [], "unmatched": [], "coverage": {}, "requests": 0}
     if not open_games:
-        out.update(rows=list(old.values()), moneylines=list(old_ml.values()), game_lines=list(old_gl.values()), coverage=(prev or {}).get("coverage", {}), note="No game left to kick off this week.")
+        out.update(rows=list(old.values()), moneylines=list(old_ml.values()), game_lines=list(old_gl.values()), kickoffs=dict((prev or {}).get("kickoffs", {})), coverage=(prev or {}).get("coverage", {}), note="No game left to kick off this week.")
         return out
     days = [datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET).astimezone(timezone.utc) for g in open_games]
     fixtures = api.call("fixtures", sportId=SPORT_ID, tournamentId=TOURNAMENT_ID,
@@ -369,10 +371,17 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
         fx = next((f for f in fixtures if (match_fixture(f, [g]) or {}).get("game_id") == g["game_id"]), None)
         if not fx:
             no_fixture.append(g["game_id"]); continue
+        try:   # the feed's own kickoff time: build_data.py uses it when the schedule file is behind a flex
+            kickoffs[g["game_id"]] = datetime.fromisoformat(str(fx.get("startTime")).replace("Z", "+00:00")).astimezone(ET).strftime("%Y-%m-%dT%H:%M")
+        except ValueError:
+            pass
+        if kickoffs.get(g["game_id"]) and datetime.fromisoformat(kickoffs[g["game_id"]]).replace(tzinfo=ET) <= now:
+            continue   # by the feed's own clock this game has kicked off (schedule file behind a flex): keep its pregame prices
         if fx.get("hasOdds") is False:   # the feed says no book has a board for this game yet: don't spend a request on it
             no_board.append(g["game_id"]); continue
         try:
             # ask only for the books the family uses (smaller reply); everything is filtered again on our side
+            api.sleep(1.0)   # the service limits bursts: without a pause every other request is refused and retried
             odds = api.call("odds", fixtureId=fx.get("fixtureId"), bookmakers=",".join(BOOKS)) or {}
         except FeedError as e:   # one game's failure never loses the other games' prices
             failed.append(f"{g['game_id']}: {e}"); continue
@@ -406,7 +415,7 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
         merged[k] = r
     ml = {k: m for k, m in old_ml.items() if m["game_id"] not in pulled_games}; ml.update(fresh_ml)
     out.update(rows=sorted(merged.values(), key=lambda r: (r["game_id"], r["player"], r["book"], r["market"])), unmatched=unmatched[:200],
-               moneylines=sorted(ml.values(), key=lambda m: (m["game_id"], m["book"])),
+               kickoffs=kickoffs, moneylines=sorted(ml.values(), key=lambda m: (m["game_id"], m["book"])),
                game_lines=sorted(({k: m for k, m in old_gl.items() if m["game_id"] not in pulled_games} | fresh_gl).values(), key=lambda m: (m["game_id"], m["book"])),
                coverage={"games_open": len(open_games), "games_with_prices": sum(1 for n in per_game.values() if n), "prices": len(fresh),
                          "players": len({r["gsis_id"] for r in fresh.values()}), "moneylines": len(fresh_ml), "game_lines": len(fresh_gl), "books": sorted(books_seen),

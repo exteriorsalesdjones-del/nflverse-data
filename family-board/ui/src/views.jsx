@@ -169,22 +169,6 @@ export function DbNote() {
   return <Alert severity={S.dbState === "error" ? "error" : "info"} sx={{ borderRadius: 2 }}>{msg}</Alert>;
 }
 
-/* Game moneyline from the sportsbook feed (FanDuel / DraftKings), one line per game card: who the books favour to win.
-   Shown with the time the feed last checked; after kickoff it is the last pregame price. Nothing here is a pick. */
-const BOOK_SHORT = { FanDuel: "FD", DraftKings: "DK" };
-function Moneyline({ g }) {
-  const S = useStore(); const f = S.oddsFeed;
-  const rows = f && f.week === g.week ? (f.moneylines || []).filter((m) => m.game_id === g.game_id) : [];
-  if (!rows.length) return null;
-  const moved = (m) => (m.open_home_american != null && (m.open_home_american !== m.home_american || m.open_away_american !== m.away_american) ? ` (opened ${am(m.open_away_american)} / ${am(m.open_home_american)})` : "");
-  return (
-    <Typography variant="body2" color="text.secondary" data-testid="moneyline">
-      Moneyline · {rows.map((m) => `${BOOK_SHORT[m.book] || m.book}: ${g.away} ${am(m.away_american)} / ${g.home} ${am(m.home_american)}${moved(m)}`).join(" · ")}
-      {" · "}as of {new Date(rows[0].captured_at).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" })} ET
-    </Typography>
-  );
-}
-
 /* =========================== THIS WEEK =========================== */
 export function WeekView() {
   const S = useStore(); const s = S.slate; const now = Date.now();
@@ -267,7 +251,6 @@ function GameCard({ g, onOpen }) {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="h6" component="h3">{g.away} at {g.home}</Typography>
           <Typography variant="body2" color="text.secondary">{kick(g)}{g.teams.every((t) => t.implied_points != null) ? ` · ${g.away} ${g.teams[0].implied_points}, ${g.home} ${g.teams[1].implied_points} pts` : ""}</Typography>
-          <Moneyline g={g} />
           {g.weather && <Stack direction="row" sx={{ alignItems: "center", gap: 0.75, mt: 0.25, flexWrap: "wrap" }}>
             <WindChip g={g} />
             {!isWindy(g) && <Typography variant="caption" color="text.secondary">{wxText(g.weather)}</Typography>}

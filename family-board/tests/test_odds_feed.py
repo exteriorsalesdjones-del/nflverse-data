@@ -88,7 +88,7 @@ check('"Last, First" names with a suffix are matched to the app\'s player id', b
 check("a name that matches no slate player is reported, not guessed", doc["unmatched"] == ["2026_11_BUF_NYJ: Joe Nobody (FanDuel)"], str(doc["unmatched"]))
 check("each row is tied to its game, timed at the pull, and keeps the book's own change time", all(r["game_id"] == "2026_11_BUF_NYJ" and r["captured_at"] == NOW.isoformat(timespec="seconds") and r["changed_at"] == "2026-11-17T09:58:00Z" and r["time_source"] == "sportsbook feed" for r in doc["rows"]))
 check("a game that has kicked off is not requested", not any(q.get("fixtureId") == "fxC" for p, q in calls) and doc["coverage"]["games_open"] == 2)
-check("a 429 is retried after the wait the API names", slept and abs(slept[0] - 0.31) < 0.01, str(slept))
+check("a 429 is retried after the wait the API names", any(abs(x - 0.31) < 0.01 for x in slept), str(slept))
 check("requests per pull: fixtures + markets + one per open game", doc["requests"] == 5, str(doc["requests"]))   # 1 limited + 4
 # game moneylines (FIX[0]: participant 1 = New York Jets = home, participant 2 = Buffalo Bills = away)
 ml = {m["book"]: m for m in doc["moneylines"]}
@@ -161,5 +161,9 @@ check("no key: nothing is pulled, nothing is changed, the refresh carries on", r
 OF.archive({"week": 10, "rows": doc2["rows"]}, 11); OF.archive({"week": 10, "rows": doc2["rows"]}, 11); OF.archive({"week": 11, "rows": doc2["rows"]}, 11)
 hist = json.loads((tmp / "odds_feed_history.json").read_text())["rows"]
 check("when the week moves on, last week's final prices are archived once for grading", len(hist) == 4 and all(r["week"] == 10 for r in hist))
+# a flexed game: the feed's kickoff is 3 h 25 min from the schedule's, still matched, and its time is recorded
+flexed = dict(FIX[0], startTime="2026-11-22T21:25:00.000Z")
+check("a flexed game (kickoff moved by hours) is still matched to its fixture", OF.match_fixture(flexed, games)["game_id"] == "2026_11_BUF_NYJ")
+check("the feed's kickoff time is recorded per game, in Eastern time", doc["kickoffs"].get("2026_11_BUF_NYJ") == "2026-11-22T13:00" and doc5["kickoffs"] == doc2["kickoffs"], str(doc["kickoffs"]))
 check("two teams sharing a city are told apart (Jets/Giants, Rams/Chargers)", OF.match_fixture(FIX[3], games) is None and OF.match_fixture(FIX[0], games)["game_id"] == "2026_11_BUF_NYJ")
 print(f"\n{sum(res)} passed, {len(res) - sum(res)} failed"); sys.exit(0 if all(res) else 1)

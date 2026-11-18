@@ -806,6 +806,34 @@ def referee_index_safe():
         return json.loads(f.read_text()) if f.exists() else None
 
 
+def flex_kickoffs(games: pd.DataFrame) -> pd.DataFrame:
+    """Kickoff times for games the NFL has flexed. The nflverse schedule file can keep the old time for days; the
+    sportsbook feed (odds_feed.json `kickoffs`, from the previous pull) carries the current one. A game not yet played
+    whose two times differ by 10 minutes to 36 hours takes the feed's time, and the change is reported. A wrong kickoff
+    would lock picks late (or early), so this runs before anything else uses the schedule."""
+    try:
+        ko = json.loads((OUT / "odds_feed.json").read_text()).get("kickoffs") or {}
+    except (OSError, ValueError):
+        return games
+    games = games.copy(); fixed = []
+    for gid, new in ko.items():
+        m = games.game_id == gid
+        if not m.any() or pd.notna(games.loc[m, "result"].iloc[0]):
+            continue
+        try:
+            old = datetime.fromisoformat(f"{games.loc[m, 'gameday'].iloc[0]}T{games.loc[m, 'gametime'].iloc[0]}"); nw = datetime.fromisoformat(new)
+        except (TypeError, ValueError):
+            continue
+        if timedelta(minutes=10) <= abs(nw - old) <= timedelta(hours=36):
+            games.loc[m, "gameday"] = nw.strftime("%Y-%m-%d"); games.loc[m, "gametime"] = nw.strftime("%H:%M")
+            if "weekday" in games.columns:
+                games.loc[m, "weekday"] = nw.strftime("%A")
+            fixed.append(f"{gid} {old.strftime('%a %H:%M')} -> {nw.strftime('%a %H:%M')}")
+    if fixed:
+        HEALTH["problems"].append("Kickoff time taken from the sportsbook feed (the schedule file is behind a flex): " + "; ".join(fixed) + ".")
+    return games
+
+
 def blend_setting() -> dict:
     """Model + market blend for the headline chance: on per grade.BLEND (the backtest result), and switched off
     automatically when the live check from the previous run's grades.json says it is doing worse than the model."""
@@ -862,6 +890,7 @@ def american(p: float):
 
 def main() -> int:
     pbp, games, pfr, players, injuries, snaps = load()
+    games = flex_kickoffs(games)
     games_out = build_games(games, pbp)
     tds, recon = build_touchdowns(pbp, games, pfr, players)
     check_scorers(tds, recon)

@@ -132,6 +132,17 @@ check("an empty candidate list never replaces a saved game", _json.loads((tmp / 
 BD.save_predictions({"games": [{"game_id": "B", **cand(0.9)}]}, games_out)
 check("a run that starts without the saved file reports the kicked-off game instead of silently losing it", any("No saved pregame chances for B" in x for x in BD.HEALTH["problems"]), str(BD.HEALTH["problems"]))
 BD.OUT = old_out; BD.datetime = _real; BD.HEALTH["problems"].clear()
+# ---- flexed kickoff: the feed's time replaces a stale schedule time before anything else uses it
+tmp2 = Path(tempfile.mkdtemp()); old_out = BD.OUT; BD.OUT = tmp2; BD.HEALTH["problems"].clear()
+(tmp2 / "odds_feed.json").write_text(_json.dumps({"kickoffs": {"G1": "2026-11-22T13:00", "G2": "2026-11-22T16:25", "G3": "2026-11-22T13:02", "G4": "2026-11-30T13:00", "GF": "2026-11-15T13:00"}}))
+sched = pd.DataFrame({"game_id": ["G1", "G2", "G3", "G4", "GF", "G9"], "gameday": ["2026-11-22"] * 4 + ["2026-11-15", "2026-11-22"], "gametime": ["16:25", "13:00", "13:00", "13:00", "16:25", "13:00"],
+                      "weekday": ["Sunday"] * 6, "result": [float("nan")] * 4 + [7.0, float("nan")]})
+fx_ = BD.flex_kickoffs(sched).set_index("game_id")
+check("a flexed game takes the feed's kickoff (4:25 -> 1:00 and 1:00 -> 4:25)", fx_.gametime["G1"] == "13:00" and fx_.gametime["G2"] == "16:25")
+check("a 2-minute difference, a week-long difference, a finished game and a game not on the feed are left alone", fx_.gametime["G3"] == "13:00" and fx_.gameday["G4"] == "2026-11-22" and fx_.gametime["GF"] == "16:25" and fx_.gametime["G9"] == "13:00")
+check("the change is reported in the refresh's health notes", any("G1 Sun 16:25 -> Sun 13:00" in x for x in BD.HEALTH["problems"]), str(BD.HEALTH["problems"]))
+(tmp2 / "odds_feed.json").unlink(); check("no feed file: the schedule is used as it is", BD.flex_kickoffs(sched).equals(sched))
+BD.OUT = old_out; BD.HEALTH["problems"].clear()
 # ---- results fingerprint moves when a game becomes settleable
 fa = BD.results_fingerprint([], [], {"G": {"reconciled": True, "scorers_verified": None}}); fb = BD.results_fingerprint([], [], {"G": {"reconciled": True, "scorers_verified": True}})
 check("results fingerprint changes when scorers become verified", fa != fb)
