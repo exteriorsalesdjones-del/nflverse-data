@@ -7,7 +7,7 @@ import { ResearchView } from "./research.jsx";
 import { GameLinesView } from "./gamelines.jsx";
 import { WeekView, TouchdownsView, BoardView, AdminView, ParlaysView, LinesView, DefenseView } from "./views.jsx";
 
-const TABS = [["week", "Week", P.week], ["parlays", "Parlays", P.parlays], ["gamelines", "Lines", P.lines], ["uploads", "Uploads", P.upload], ["defense", "Defense", P.defense], ["touchdowns", "TDs", P.tds], ["board", "Board", P.board], ["research", "Research", P.analysis]];
+const TABS = [["week", "TD's", P.week], ["parlays", "Parlays", P.parlays], ["gamelines", "Lines", P.lines], ["uploads", "Uploads", P.upload], ["defense", "Defense", P.defense], ["touchdowns", "TD Log", P.tds], ["board", "Board", P.board], ["research", "Research", P.analysis]];
 const ROUTES = ["week", "parlays", "uploads", "lines", "defense", "touchdowns", "board", "picks", "admin", "analysis", "research", "gamelines"];
 
 /* Follows the viewer's theme: an explicit data-theme on <html>, otherwise the OS setting. */

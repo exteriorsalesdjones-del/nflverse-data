@@ -965,7 +965,7 @@ function FeedAdmin() {
   const when = (t) => et(t, { weekday: "short", hour: "numeric", minute: "2-digit" });
   return (
     <Fold title="Sportsbook feed" summary="FanDuel and DraftKings prices, updated automatically">
-      {!f || (!f.pulled_at && f.ok !== false) ? <Alert severity="info" sx={{ borderRadius: 2 }}>Not running yet. Once a key is saved, prices arrive with the next scheduled check and show on the Week tab for everyone.</Alert>
+      {!f || (!f.pulled_at && f.ok !== false) ? <Alert severity="info" sx={{ borderRadius: 2 }}>Not running yet. Once a key is saved, prices arrive with the next scheduled check and show on the TD's tab for everyone.</Alert>
         : f.ok === false ? <Alert severity="warning" sx={{ borderRadius: 2 }} data-testid="feed-status">The last pull failed{f.failed_at ? ` (${when(f.failed_at)})` : ""}: {f.error} {f.pulled_at ? `Showing prices from ${when(f.pulled_at)}.` : "No prices yet."}</Alert>
         : <Alert severity={(f.rows || []).length ? "success" : "info"} sx={{ borderRadius: 2 }} data-testid="feed-status">
             Last pull: <b>{when(f.pulled_at)}</b> · week {f.week} · {(f.rows || []).length} prices{cov.players ? ` for ${cov.players} players` : ""}{(f.moneylines || []).length ? ` · ${f.moneylines.length} game moneyline${f.moneylines.length > 1 ? "s" : ""}` : ""}{cov.books && cov.books.length ? ` · ${cov.books.join(", ")}` : ""}
