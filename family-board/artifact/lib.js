@@ -373,6 +373,69 @@
     var imp = ps.reduce(function (a, b) { return a + b; }, 0) / ps.length;
     return 1 / (1 + Math.exp(-(w * lg(pModel) + (1 - w) * lg(imp))));
   }
+  /* ---------- game lines (Lines tab) ---------- */
+  /* Win chances from a two-sided moneyline with the book's margin removed: each side's implied chance divided by the
+     two sides' total. Both sides are posted, so this is a true no-margin number (unlike a one-sided TD price). */
+  function noVig(awayAmerican, homeAmerican) {
+    var a = americanToProb(awayAmerican), h = americanToProb(homeAmerican);
+    if (!(a > 0 && a < 1 && h > 0 && h < 1)) return null;
+    return { away: a / (a + h), home: h / (a + h), margin: a + h - 1 };
+  }
+  /* One line for a game from its books: average spread and total, the score they imply, and the no-margin win chance. */
+  function lineSummary(books) {
+    var avg = function (xs) { xs = xs.filter(function (x) { return typeof x === "number" && isFinite(x); }); return xs.length ? xs.reduce(function (a, b) { return a + b; }, 0) / xs.length : null; };
+    var sp = avg((books || []).map(function (m) { return m.spread ? m.spread.home_line : null; }));
+    var tot = avg((books || []).map(function (m) { return m.total ? m.total.line : null; }));
+    var wins = (books || []).map(function (m) { return m.ml ? noVig(m.ml.away_american, m.ml.home_american) : null; }).filter(Boolean);
+    var out = { home_line: sp, total: tot, home_pts: null, away_pts: null, home_win: avg(wins.map(function (w) { return w.home; })), books: (books || []).length };
+    if (sp != null && tot != null) { out.home_pts = tot / 2 - sp / 2; out.away_pts = tot / 2 + sp / 2; }
+    return out;
+  }
+  /* Which book is better for the bettor on each side of each market. Returned only where the books differ.
+     Spread: the larger number for that team (+16.5 beats +15.5; -15.5 beats -16.5), then the better price.
+     Total: Over wants the lower line, Under the higher, then the better price. Moneyline: the better price. */
+  function bestLines(books) {
+    var out = {}; if (!books || books.length < 2) return out;
+    var dec = function (a) { var d = americanToDecimal(a); return isFinite(d) ? d : -1; };
+    var pick = function (key, cands) {       // cands: [{book, line, price}], larger line is better
+      cands = cands.filter(function (c) { return c.line != null && isFinite(c.line) && c.price != null; });
+      if (cands.length < 2) return;
+      cands.sort(function (x, y) { return y.line - x.line || dec(y.price) - dec(x.price); });
+      var top = cands[0], next = cands[1];
+      if (top.line !== next.line || dec(top.price) !== dec(next.price)) out[key] = top.book;
+    };
+    pick("spread_home", books.map(function (m) { return { book: m.book, line: m.spread ? m.spread.home_line : null, price: m.spread && m.spread.home_american }; }));
+    pick("spread_away", books.map(function (m) { return { book: m.book, line: m.spread ? -m.spread.home_line : null, price: m.spread && m.spread.away_american }; }));
+    pick("total_over", books.map(function (m) { return { book: m.book, line: m.total ? -m.total.line : null, price: m.total && m.total.over_american }; }));
+    pick("total_under", books.map(function (m) { return { book: m.book, line: m.total ? m.total.line : null, price: m.total && m.total.under_american }; }));
+    pick("ml_home", books.map(function (m) { return { book: m.book, line: 0, price: m.ml && m.ml.home_american }; }));
+    pick("ml_away", books.map(function (m) { return { book: m.book, line: 0, price: m.ml && m.ml.away_american }; }));
+    return out;
+  }
+  /* A final score against a spread (the HOME team's line) and a total. */
+  function gradeLine(game, homeLine, total) {
+    if (!game || game.away_score == null || game.home_score == null) return null;
+    var out = { ats: null, ou: null };
+    if (homeLine != null && isFinite(homeLine)) { var v = game.home_score - game.away_score + homeLine; out.ats = v === 0 ? "push" : v > 0 ? "home" : "away"; }
+    if (total != null && isFinite(total)) { var t = game.home_score + game.away_score; out.ou = t === total ? "push" : t > total ? "over" : "under"; }
+    return out;
+  }
+  /* Season record per team from final games: points for/against per game, and results against the schedule file's
+     closing spread and total (nflverse spread_line = points the HOME team is favoured by, so its line is -spread_line). */
+  function teamRecords(games, beforeWeek) {
+    var T = {};
+    var get = function (k) { return T[k] || (T[k] = { games: 0, pf: 0, pa: 0, w: 0, l: 0, t: 0, ats_w: 0, ats_l: 0, ats_p: 0, over: 0, under: 0, ou_p: 0 }); };
+    (games || []).forEach(function (g) {
+      if (g.status !== "final" || g.away_score == null || g.home_score == null || (beforeWeek != null && g.week >= beforeWeek)) return;
+      var h = get(g.home), a = get(g.away);
+      h.games++; a.games++; h.pf += g.home_score; h.pa += g.away_score; a.pf += g.away_score; a.pa += g.home_score;
+      if (g.home_score === g.away_score) { h.t++; a.t++; } else if (g.home_score > g.away_score) { h.w++; a.l++; } else { a.w++; h.l++; }
+      var r = gradeLine(g, typeof g.spread_line === "number" ? -g.spread_line : null, typeof g.total_line === "number" ? g.total_line : null);
+      if (r && r.ats) { if (r.ats === "push") { h.ats_p++; a.ats_p++; } else if (r.ats === "home") { h.ats_w++; a.ats_l++; } else { a.ats_w++; h.ats_l++; } }
+      if (r && r.ou) { [h, a].forEach(function (x) { if (r.ou === "push") x.ou_p++; else if (r.ou === "over") x.over++; else x.under++; }); }
+    });
+    return T;
+  }
   function weeklyRankings(items, nowMs) {
     var ok = (items || []).filter(function (it) { return typeof it.chance === "number" && it.chance > 0 && it.chance < 1; });
     var byName = function (a, b) { return String(a.name).localeCompare(String(b.name)); };
@@ -518,7 +581,7 @@
     return { rows: rs, summary: summary, weeks: weeks, cumulative: cumulative, categories: categories, touchdowns: touchdowns, calibration: calibration, extremes: extremes, weekRuns: runs, smallN: SMALL_N };
   }
 
-  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, blendChance: blendChance, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, blendChance: blendChance, noVig: noVig, lineSummary: lineSummary, bestLines: bestLines, gradeLine: gradeLine, teamRecords: teamRecords, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

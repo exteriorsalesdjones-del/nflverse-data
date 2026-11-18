@@ -7,7 +7,7 @@ import {
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
-  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, blendFor, saveFeedKey, removeFeedKey, saveParlay, deleteParlay, myParlays, settleParlayFor,
+  addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, blendFor, state, clearFocusGame, saveFeedKey, removeFeedKey, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { visuallyHidden } from "@mui/utils";
 import { Icon, P } from "./icons.jsx";
@@ -242,11 +242,13 @@ function WindChip({ g }) {
 }
 
 function GameCard({ g, onOpen }) {
-  const [open, setOpen] = useState(false);
+  const focused = state.focusGame === g.game_id;                      // arrived from the Lines tab
+  const [open, setOpen] = useState(focused);
+  useEffect(() => { if (focused) { const el = document.querySelector(`[data-week-game="${g.game_id}"]`); if (el) setTimeout(() => el.scrollIntoView({ block: "start", behavior: "auto" }), 50); clearFocusGame(); } }, []);
   const locked = FB.isLocked(g, Date.now());
   const status = g.status === "final" ? `Final ${g.away_score}–${g.home_score}` : locked ? "Locked" : "Open";
   return (
-    <Card variant="outlined" sx={{ borderRadius: 2 }}>
+    <Card variant="outlined" sx={{ borderRadius: 2, scrollMarginTop: 8 }} data-week-game={g.game_id}>
       <ButtonBase onClick={() => setOpen(!open)} aria-expanded={open} sx={{ display: "flex", width: "100%", textAlign: "left", px: 1.5, py: 1.25, gap: 1, minHeight: 56 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="h6" component="h3">{g.away} at {g.home}</Typography>

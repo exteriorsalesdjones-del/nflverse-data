@@ -112,6 +112,9 @@ m2 = doc2["moneylines"][0]
 check("moneyline: a move keeps the opening prices", m2["home_american"] == 219 and m2["open_home_american"] == 190 and m2["open_away_american"] == -233, json.dumps({k: m2[k] for k in m2 if "american" in k}))
 g2 = {m["book"]: m for m in doc2["game_lines"]}["FanDuel"]
 check("a moved total keeps the opening line and prices", g2["total"]["over_american"] == 106 and g2["open_total"]["over_american"] == -115 and g2["open_spread"]["home_line"] == -3.5, json.dumps({"total": g2["total"], "open_total": g2["open_total"]}))
+check("line history: one entry at the first pull, a second only when something moved", len(gl["FanDuel"]["history"]) == 1 and len(g2["history"]) == 2 and g2["history"][0]["total"] == 44.5 and g2["history"][-1]["ml_home"] == 219, json.dumps(g2["history"]))
+doc2b = OF.pull(OF.Api(KEY, get=make_get({"fxA": board(scale=1.1), "fxB": {"bookmakerOdds": {}}})), games, slate, doc2, later)
+check("an unchanged pull adds nothing to the history", len({m["book"]: m for m in doc2b["game_lines"]}["FanDuel"]["history"]) == 2)
 # a price the book took down disappears; a game that could not be pulled keeps its last prices
 b3 = board(); del b3["bookmakerOdds"]["draftkings"]
 doc3 = OF.pull(OF.Api(KEY, get=make_get({"fxA": b3})), games, slate, doc2, later)
@@ -158,9 +161,10 @@ del os.environ["ODDSPAPI_KEY_FILE"]; buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     rc = OF.main(["pull"])
 check("no key: nothing is pulled, nothing is changed, the refresh carries on", rc == 0 and "no key" in buf.getvalue() and json.loads((tmp / "odds_feed.json").read_text()) == saved)
-OF.archive({"week": 10, "rows": doc2["rows"]}, 11); OF.archive({"week": 10, "rows": doc2["rows"]}, 11); OF.archive({"week": 11, "rows": doc2["rows"]}, 11)
+OF.archive({**doc2, "week": 10}, 11); OF.archive({**doc2, "week": 10}, 11); OF.archive({**doc2, "week": 11}, 11)
 hist = json.loads((tmp / "odds_feed_history.json").read_text())["rows"]
 check("when the week moves on, last week's final prices are archived once for grading", len(hist) == 4 and all(r["week"] == 10 for r in hist))
+check("the week's last game lines are archived too, once, with the moneyline", len(json.loads((tmp / "odds_feed_history.json").read_text())["games"]) == len(doc2["game_lines"]) and json.loads((tmp / "odds_feed_history.json").read_text())["games"][0]["week"] == 10, str(len(json.loads((tmp / "odds_feed_history.json").read_text())["games"])))
 # a flexed game: the feed's kickoff is 3 h 25 min from the schedule's, still matched, and its time is recorded
 flexed = dict(FIX[0], startTime="2026-11-22T21:25:00.000Z")
 check("a flexed game (kickoff moved by hours) is still matched to its fixture", OF.match_fixture(flexed, games)["game_id"] == "2026_11_BUF_NYJ")

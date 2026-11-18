@@ -513,3 +513,34 @@ test("Combined: average of value rank and chance rank within the Best Value grou
   assert.deepStrictEqual(t.value.map((x) => [x.name, x.valueRank]), [["E1", 1], ["E2", 1], ["E3", 3]]);
   assert.deepStrictEqual(t.combined.map((x) => [x.name, x.valueRank, x.chanceRank, x.score]), [["E1", 1, 1, 1], ["E2", 1, 1, 1], ["E3", 3, 3, 3]]);
 });
+
+test("game lines: no-margin win chance, summary, best book, results against the line, team records", () => {
+  const near = (a, b, e = 1e-6) => Math.abs(a - b) < e;
+  const nv = FB.noVig(-110, -110); assert.ok(near(nv.away, 0.5) && near(nv.home, 0.5) && near(nv.margin, 2 * (110 / 210) - 1));
+  const nv2 = FB.noVig(190, -233); assert.ok(near(nv2.away + nv2.home, 1) && nv2.home > 0.66 && nv2.home < 0.68, String(nv2.home));
+  assert.strictEqual(FB.noVig(null, -110), null);
+  const fd = { book: "FanDuel", spread: { home_line: -15.5, home_american: -115, away_american: -105 }, total: { line: 40.5, over_american: -115, under_american: -111 }, ml: { away_american: 870, home_american: -1429 } };
+  const dk = { book: "DraftKings", spread: { home_line: -16.5, home_american: -105, away_american: -115 }, total: { line: 41.5, over_american: -108, under_american: -112 }, ml: { away_american: 800, home_american: -1351 } };
+  const s = FB.lineSummary([fd, dk]);
+  assert.ok(near(s.home_line, -16) && near(s.total, 41) && near(s.home_pts, 28.5) && near(s.away_pts, 12.5) && s.home_win > 0.88 && s.home_win < 0.92, JSON.stringify(s));
+  // best book per side: the underdog wants +16.5 (DraftKings), the favourite -15.5 (FanDuel); Over wants 40.5, Under 41.5
+  assert.deepStrictEqual(FB.bestLines([fd, dk]), { spread_home: "FanDuel", spread_away: "DraftKings", total_over: "FanDuel", total_under: "DraftKings", ml_home: "DraftKings", ml_away: "FanDuel" });
+  // same line: the better price wins; identical everywhere: nothing is highlighted; one book: nothing to compare
+  const a = { book: "A", spread: { home_line: -3, home_american: -110, away_american: -110 }, total: null, ml: null }, b2 = { book: "B", spread: { home_line: -3, home_american: -105, away_american: -115 }, total: null, ml: null };
+  assert.deepStrictEqual(FB.bestLines([a, b2]), { spread_home: "B", spread_away: "A" });
+  assert.deepStrictEqual(FB.bestLines([a, { ...a, book: "C" }]), {}); assert.deepStrictEqual(FB.bestLines([a]), {});
+  // results against the line (home line -3): home wins by 7 covers, by 3 pushes, by 1 doesn't
+  const g = (hs, as) => ({ status: "final", home_score: hs, away_score: as });
+  assert.deepStrictEqual(FB.gradeLine(g(27, 20), -3, 44.5), { ats: "home", ou: "over" });
+  assert.deepStrictEqual(FB.gradeLine(g(23, 20), -3, 43), { ats: "push", ou: "push" });
+  assert.deepStrictEqual(FB.gradeLine(g(21, 20), -3, 44.5), { ats: "away", ou: "under" });
+  assert.strictEqual(FB.gradeLine({ home_score: null, away_score: null }, -3, 44), null);
+  // team records: nflverse spread_line is points the HOME team is favoured by
+  const G = [{ week: 1, status: "final", home: "KC", away: "ARI", home_score: 30, away_score: 10, spread_line: 7, total_line: 45 },      // KC covers, under
+             { week: 2, status: "final", home: "ARI", away: "KC", home_score: 24, away_score: 27, spread_line: -6.5, total_line: 44.5 },   // KC -6.5 wins by 3: ARI covers, over
+             { week: 3, status: "upcoming", home: "KC", away: "ARI", home_score: null, away_score: null, spread_line: 3, total_line: 40 }];
+  const R = FB.teamRecords(G);
+  assert.deepStrictEqual([R.KC.games, R.KC.w, R.KC.l, R.KC.ats_w, R.KC.ats_l, R.KC.over, R.KC.under, R.KC.pf, R.KC.pa], [2, 2, 0, 1, 1, 1, 1, 57, 34]);
+  assert.deepStrictEqual([R.ARI.w, R.ARI.l, R.ARI.ats_w, R.ARI.ats_l], [0, 2, 1, 1]);
+  assert.strictEqual(FB.teamRecords(G, 2).KC.games, 1);   // only games before week 2
+});

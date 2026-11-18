@@ -396,6 +396,19 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
             if o:   # the first spread / total seen from this book this week, for line moves
                 m["open_spread"] = o.get("open_spread") or o.get("spread"); m["open_total"] = o.get("open_total") or o.get("total")
                 m["open_captured_at"] = o.get("open_captured_at", o["captured_at"])
+            # every change to the spread, total or moneyline this week, oldest first (for the Lines tab's movement line)
+            mlr = fresh_ml.get((m["game_id"], m["book"])) or {}
+            snap = {"at": pulled_at, "home_line": (m["spread"] or {}).get("home_line"), "total": (m["total"] or {}).get("line"),
+                    "ml_home": mlr.get("home_american"), "ml_away": mlr.get("away_american")}
+            hist = list((o or {}).get("history") or [])
+            if not hist and o:   # a record from before history was kept: start from its opening values
+                op = {"at": o.get("open_captured_at", o["captured_at"]), "home_line": ((o.get("open_spread") or o.get("spread")) or {}).get("home_line"),
+                      "total": ((o.get("open_total") or o.get("total")) or {}).get("line"), "ml_home": None, "ml_away": None}
+                hist.append(op)
+            same = hist and all(hist[-1].get(k) == snap[k] for k in ("home_line", "total", "ml_home", "ml_away"))
+            if not same:
+                hist.append(snap)
+            m["history"] = hist[-40:]
             fresh_gl[(m["game_id"], m["book"])] = m
         rows, um, seen = td_rows(odds, catalog, g, Players(slate_by[g["game_id"]]), pulled_at)
         per_game[g["game_id"]] = len(rows); unmatched += [f"{g['game_id']}: {x}" for x in um]; books_seen |= seen
@@ -434,17 +447,30 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
 
 def archive(prev: dict | None, week) -> None:
     """When the slate week moves on, last week's final pregame prices go to odds_feed_history.json (for weekly grading)."""
-    if not prev or prev.get("week") in (None, week) or not prev.get("rows"):
+    if not prev or prev.get("week") in (None, week) or not (prev.get("rows") or prev.get("game_lines")):
         return
     f = OUT / "odds_feed_history.json"
     try:
         hist = json.loads(f.read_text()) if f.exists() else {"rows": []}
     except ValueError:
         hist = {"rows": []}
+    hist.setdefault("rows", [])
     have = {(r.get("week"), r["gsis_id"], r["book"], r["market"]) for r in hist["rows"]}
     keep = ("game_id", "gsis_id", "player", "team", "book", "market", "american", "captured_at", "open_american", "open_captured_at")
     hist["rows"] += [{"week": prev["week"], **{k: r[k] for k in keep if k in r}} for r in prev["rows"]
                      if (prev["week"], r["gsis_id"], r["book"], r["market"]) not in have]
+    # the week's last pregame game lines too (Lines tab: past weeks by book)
+    hist.setdefault("games", [])
+    have_g = {(r.get("week"), r["game_id"], r["book"]) for r in hist["games"]}
+    mls = {(m["game_id"], m["book"]): m for m in prev.get("moneylines", [])}
+    for m in prev.get("game_lines", []):
+        if (prev["week"], m["game_id"], m["book"]) in have_g:
+            continue
+        ml = mls.get((m["game_id"], m["book"])) or {}
+        hist["games"].append({"week": prev["week"], "game_id": m["game_id"], "book": m["book"], "away": m.get("away"), "home": m.get("home"),
+                              "spread": m.get("spread"), "total": m.get("total"), "open_spread": m.get("open_spread"), "open_total": m.get("open_total"),
+                              "ml": {"away_american": ml.get("away_american"), "home_american": ml.get("home_american")} if ml else None,
+                              "captured_at": m.get("captured_at")})
     tmp = OUT / "odds_feed_history.json.tmp"; tmp.write_text(json.dumps(hist, separators=(",", ":"))); tmp.replace(f)
 
 
