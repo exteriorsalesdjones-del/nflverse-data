@@ -381,6 +381,37 @@
     if (!(a > 0 && a < 1 && h > 0 && h < 1)) return null;
     return { away: a / (a + h), home: h / (a + h), margin: a + h - 1 };
   }
+  /* What a bet is worth against a fair (no-margin) chance: expected return per 1 staked. -0.045 = the bet costs 4.5%
+     of the stake on average; above 0 the price beats the fair price. null when either input is missing. */
+  function betValue(fairP, american) {
+    var d = americanToDecimal(american);
+    if (!(fairP > 0 && fairP < 1) || !isFinite(d)) return null;
+    return fairP * d - 1;
+  }
+  var VALUE_MIN_EV = 0.01, VALUE_MIN_REFS = 2;   // same thresholds as refresh/odds_feed.py
+  function isValue(fairP, american, refs) { var v = betValue(fairP, american); return v != null && v >= VALUE_MIN_EV && (refs || 0) >= VALUE_MIN_REFS; }
+  /* Every side of one book's game lines with its cost: [{market, side, team/label, line, american, fair, refs, value}]. */
+  function lineCosts(m, away, home) {
+    var out = [], f = m.fair || {};
+    var add = function (market, side, label, line, american, rec) {
+      if (american == null || !rec || rec[side] == null) return;
+      out.push({ book: m.book, market: market, side: side, label: label, line: line, american: american, fair: rec[side], refs: rec.n || 0, value: betValue(rec[side], american) });
+    };
+    if (m.spread) { add("spread", "home", home, m.spread.home_line, m.spread.home_american, f.spread); add("spread", "away", away, -m.spread.home_line, m.spread.away_american, f.spread); }
+    if (m.total) { add("total", "over", "Over", m.total.line, m.total.over_american, f.total); add("total", "under", "Under", m.total.line, m.total.under_american, f.total); }
+    if (m.ml) { add("ml", "home", home, null, m.ml.home_american, m.ml.fair); add("ml", "away", away, null, m.ml.away_american, m.ml.fair); }
+    return out;
+  }
+  /* The value tracker's record: how many flags, how they compared with the closing fair price, and how they finished. */
+  function valueSummary(log) {
+    log = log || []; var closed = log.filter(function (e) { return typeof e.clv_pts === "number"; }), done = log.filter(function (e) { return e.result; });
+    var sum = function (xs, k) { return xs.reduce(function (a, e) { return a + (e[k] || 0); }, 0); };
+    var cnt = function (r) { return done.filter(function (e) { return e.result === r; }).length; };
+    return { flagged: log.length, with_close: closed.length, avg_clv: closed.length ? sum(closed, "clv_pts") / closed.length : null,
+      beat_close: closed.length ? closed.filter(function (e) { return e.clv_pts > 0; }).length / closed.length : null,
+      graded: done.length, wins: cnt("win"), losses: cnt("loss"), pushes: cnt("push"), units: done.length ? sum(done, "units") : null,
+      avg_ev: log.length ? sum(log, "ev_pct") / log.length : null };
+  }
   /* One line for a game from its books: average spread and total, the score they imply, and the no-margin win chance. */
   function lineSummary(books) {
     var avg = function (xs) { xs = xs.filter(function (x) { return typeof x === "number" && isFinite(x); }); return xs.length ? xs.reduce(function (a, b) { return a + b; }, 0) / xs.length : null; };
@@ -581,7 +612,7 @@
     return { rows: rs, summary: summary, weeks: weeks, cumulative: cumulative, categories: categories, touchdowns: touchdowns, calibration: calibration, extremes: extremes, weekRuns: runs, smallN: SMALL_N };
   }
 
-  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, blendChance: blendChance, noVig: noVig, lineSummary: lineSummary, bestLines: bestLines, gradeLine: gradeLine, teamRecords: teamRecords, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, blendChance: blendChance, noVig: noVig, betValue: betValue, isValue: isValue, lineCosts: lineCosts, valueSummary: valueSummary, lineSummary: lineSummary, bestLines: bestLines, gradeLine: gradeLine, teamRecords: teamRecords, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

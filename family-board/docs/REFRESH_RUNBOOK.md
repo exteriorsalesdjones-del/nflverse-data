@@ -36,6 +36,10 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
    - Odds-only run (hourly job, outside a game window, when a slate game kicks off later the same day in Eastern
      time and a key is saved): fetch only `src/refresh/odds_feed.py.txt`, `data/games.json`, `data/slate.json`,
      `data/odds_feed.json` and `data/odds_feed_history.json`; run the pull; publish only the odds files.
+   - The same requests also carry sharp books and exchanges (Pinnacle, Circa, Novig, ProphetX, Kalshi, Polymarket). They are
+     used only to work out a fair, no-margin chance for each FanDuel / DraftKings price (`fair` on game lines, `fair_p` on
+     touchdown rows) and never shown as prices to bet. A price that beats fair by 1%+ with two references is logged in
+     `value_log` inside `odds_feed.json`, followed to kickoff (closing line value) and graded from the final score.
    - ~2 requests plus one per game still to kick off, per pull. Only games that haven't kicked off are requested.
 3. `python3 -m pytest -q tests` is not needed; run `node --test tests/lib.test.js`
    only when `artifact/lib.js` changed.

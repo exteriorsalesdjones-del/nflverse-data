@@ -57,6 +57,11 @@ def board(scale=1.0):
                                    "144637": {"outcomes": {"11": {"players": {"77": P("Cook, James", 1.87), "81": P("Hall, Breece", 0)}},
                                                            "12": {"players": {"77": P("Cook, James", 6.5)}},
                                                            "13": {"players": {"77": P("Cook, James", 21.0)}}}}}},
+        "pinnacle": {"markets": {"141": {"outcomes": {"141": {"players": {"0": P("", 2.5)}}, "142": {"players": {"0": P("", 1.6)}}}},
+                                 "2001": {"outcomes": {"1": {"players": {"0": dict(P("", 1.95), mainLine=True)}}, "2": {"players": {"0": dict(P("", 1.95), mainLine=True)}}}},
+                                 "3001": {"outcomes": {"1": {"players": {"0": P("", 2.0)}}, "2": {"players": {"0": P("", 1.87)}}}}}},
+        "circasports": {"markets": {"141": {"outcomes": {"141": {"players": {"0": P("", 2.45)}}, "142": {"players": {"0": P("", 1.62)}}}}}},
+        "kalshi": {"markets": {"14388": {"outcomes": {"1": {"players": {"77": P("Cook, James", 2.0), "78": P("Harrison Jr., Marvin", 3.4)}}, "2": {"players": {"77": P("Cook, James", 1.9)}}}}}},
         "betfirst.be": {"markets": {"14388": {"outcomes": {"1": {"players": {"77": P("Cook, James", 2.4)}}}}}},
         "caesars": {"suspended": True, "markets": {"14388": {"outcomes": {"1": {"players": {"77": P("Cook, James", 2.2)}}}}}}}}
 calls = []
@@ -103,6 +108,20 @@ check("half and quarter lines are ignored", all(m["spread"]["home_line"] != -1.5
 fx_flip = dict(FIX[0], participant1Name="Buffalo Bills", participant2Name="New York Jets")
 flip = {m["book"]: m for m in OF.game_lines(board(), {"handicap": {str(m["marketId"]): m.get("handicap") for m in CAT}, "market": {str(m["marketId"]): m["marketName"] for m in CAT}, "outcome": {(str(m["marketId"]), str(o["outcomeId"])): o["outcomeName"] for m in CAT for o in m["outcomes"]}}, games[0], fx_flip, "t")}
 check("when the feed lists the away team first, the line is flipped to the home team's side", flip["FanDuel"]["spread"]["home_line"] == 3.5)
+# ---- fair prices and the value tracker
+ps = OF.devig([OF.implied(-110), OF.implied(-110)]); check("margin removal: an even two-sided price is 50/50", abs(ps[0] - 0.5) < 1e-6 and abs(sum(ps) - 1) < 1e-6)
+lp = OF.devig([OF.implied(600), OF.implied(-900)]); prop = OF.implied(600) / (OF.implied(600) + OF.implied(-900))
+check("margin removal: a long shot gets LESS than the simple divide-by-total method gives it", abs(sum(lp) - 1) < 1e-6 and lp[0] < prop, f"power {lp[0]:.4f} vs simple {prop:.4f}")
+fd_gl = gl["FanDuel"]; fd_ml = ml["FanDuel"]
+check("game lines carry the sharp books' fair chance at the same line", fd_gl["fair"]["spread"] == {"home": 0.5, "away": 0.5, "n": 1} and fd_gl["fair"]["total"]["n"] == 1 and abs(fd_gl["fair"]["total"]["over"] + fd_gl["fair"]["total"]["under"] - 1) < 1e-3, json.dumps(fd_gl["fair"]))
+check("the moneyline's fair chance averages the two sharp books (n = 2)", fd_ml["fair"]["n"] == 2 and 0.38 < fd_ml["fair"]["home"] < 0.40 and abs(fd_ml["fair"]["home"] + fd_ml["fair"]["away"] - 1) < 1e-3, json.dumps(fd_ml["fair"]))
+check("a touchdown price carries the exchange's fair chance only where both Yes and No are posted", abs(by[("James Cook", "FanDuel", "anytime_td")]["fair_p"] - OF.devig([0.5, 1 / 1.9])[0]) < 1e-3 and "fair_p" not in by[("Marvin Harrison Jr.", "FanDuel", "anytime_td")])
+check("the sharp book's own main line is kept for reference", doc["sharp_lines"]["2026_11_BUF_NYJ"]["book"] == "Pinnacle" and doc["sharp_lines"]["2026_11_BUF_NYJ"]["spread"]["home_line"] == -3.5)
+log = OF.update_value_log([], doc, games, NOW)
+ids = [e["id"] for e in log]
+check("only a price that beats fair by 1%+ with two references is logged: the FanDuel home moneyline (+190 vs ~39% fair)", ids == ["11|2026_11_BUF_NYJ|FanDuel|ml|home|"] and log[0]["american"] == 190 and log[0]["refs"] == 2 and log[0]["ev_pct"] > 10, json.dumps(log)[:300])
+check("spread, total and touchdown prices that cost money are not logged", not any(x in "".join(ids) for x in ("spread", "total", "anytime_td")))
+check("a second pull doesn't log the same flag twice", len(OF.update_value_log(log, doc, games, NOW)) == 1)
 # second pull: a price moved; the first price is kept as the opening price
 later = datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc)
 doc2 = OF.pull(OF.Api(KEY, get=make_get({"fxA": board(scale=1.1), "fxB": {"bookmakerOdds": {}}})), games, slate, doc, later)
@@ -115,6 +134,15 @@ check("a moved total keeps the opening line and prices", g2["total"]["over_ameri
 check("line history: one entry at the first pull, a second only when something moved", len(gl["FanDuel"]["history"]) == 1 and len(g2["history"]) == 2 and g2["history"][0]["total"] == 44.5 and g2["history"][-1]["ml_home"] == 219, json.dumps(g2["history"]))
 doc2b = OF.pull(OF.Api(KEY, get=make_get({"fxA": board(scale=1.1), "fxB": {"bookmakerOdds": {}}})), games, slate, doc2, later)
 check("an unchanged pull adds nothing to the history", len({m["book"]: m for m in doc2b["game_lines"]}["FanDuel"]["history"]) == 2)
+log2 = OF.update_value_log(json.loads(json.dumps(log)), doc2, games, later)
+check("the flag is followed to the close: closing fair chance and closing line value are recorded", log2[0]["close_fair_p"] == log[0]["fair_p"] and log2[0]["clv_pts"] == round((log[0]["fair_p"] - OF.implied(190)) * 100, 2) and log2[0]["american"] == 190, json.dumps({k: log2[0].get(k) for k in ("close_fair_p", "clv_pts", "close_at")}))
+fin = [dict(g, status="final", away_score=17, home_score=20) if g["game_id"] == "2026_11_BUF_NYJ" else g for g in games]
+log3 = OF.update_value_log(json.loads(json.dumps(log2)), {}, fin, later)
+check("after the final (NYJ 20, BUF 17) the home moneyline flag is a win paying 1.9 units", log3[0]["result"] == "win" and log3[0]["units"] == 1.9 and log3[0]["final"] == "BUF 17, NYJ 20", json.dumps({k: log3[0].get(k) for k in ("result", "units", "final")}))
+e = lambda m, s, l: {"market": m, "side": s, "line": l, "game_id": "g"}
+G = {"status": "final", "home_score": 24, "away_score": 21}
+check("grading: spread, total and push cases", [OF._grade(e("spread", "home", -3), G, None), OF._grade(e("spread", "home", -3.5), G, None), OF._grade(e("spread", "away", 3.5), G, None), OF._grade(e("total", "over", 45), G, None), OF._grade(e("total", "under", 45.5), G, None), OF._grade(e("ml", "away", None), G, None)] == ["push", "loss", "win", "push", "win", "loss"])
+check("a touchdown flag waits for the touchdown records, then grades on the scorer", OF._grade({**e("anytime_td", "yes", None), "gsis_id": "00-1"}, G, None) is None and OF._grade({**e("anytime_td", "yes", None), "gsis_id": "00-1"}, G, {("g", "00-1")}) == "win" and OF._grade({**e("anytime_td", "yes", None), "gsis_id": "00-9"}, G, {("g", "00-1")}) == "loss")
 # a price the book took down disappears; a game that could not be pulled keeps its last prices
 b3 = board(); del b3["bookmakerOdds"]["draftkings"]
 doc3 = OF.pull(OF.Api(KEY, get=make_get({"fxA": b3})), games, slate, doc2, later)

@@ -42,6 +42,13 @@ SPREAD_MARKET = "handicap (incl. overtime)"   # one market id per line; the hand
 TOTAL_MARKET = "total (incl. overtime)"       # one market id per line; outcomes "Over" / "Under"
 BOOKS = {"fanduel": "FanDuel", "draftkings": "DraftKings"}   # feed slug -> name shown in the app
 OUTCOME_MARKET = {"yes": "anytime_td", "1+": "anytime_td", "2+": "2plus_td"}
+# Fair prices. A "fair" chance is a two-sided price with the book's margin removed, averaged over the references that
+# post that exact bet. Game lines: sharp books and exchanges. Touchdowns: exchanges that post both Yes and No.
+SHARP = {"pinnacle": "Pinnacle", "circasports": "Circa", "novig.us": "Novig", "prophetx": "ProphetX"}
+TD_REFS = {"kalshi": "Kalshi", "prophetx": "ProphetX", "polymarket": "Polymarket"}
+VALUE_MIN_EV = 0.01      # a price is logged as value when it beats the fair price by 1% or more of the stake...
+VALUE_MIN_REFS = 2       # ...and at least two references agree on that fair price
+FEED_BOOKS = list(BOOKS) + [s for s in list(SHARP) + list(TD_REFS) if s not in BOOKS]
 TEAMS = {  # nflverse abbreviation -> words that identify the team in a feed's team name
     "ARI": ["arizona", "cardinals"], "ATL": ["atlanta", "falcons"], "BAL": ["baltimore", "ravens"], "BUF": ["buffalo", "bills"],
     "CAR": ["carolina", "panthers"], "CHI": ["chicago", "bears"], "CIN": ["cincinnati", "bengals"], "CLE": ["cleveland", "browns"],
@@ -201,7 +208,116 @@ def to_american(price: dict):
     return am if abs(am) >= 100 and abs(am) <= 100000 else None
 
 
-def td_rows(odds: dict, catalog: dict, game: dict, players: Players, pulled_at: str) -> tuple[list[dict], list[str], set]:
+def implied(american: float) -> float:
+    return 100 / (american + 100) if american > 0 else -american / (-american + 100)
+
+
+def decimal_odds(american: float) -> float:
+    return 1 + (american / 100 if american > 0 else 100 / -american)
+
+
+def devig(ps: list[float]) -> list[float]:
+    """Remove a book's margin from a two-sided price with the power method: find k so that the sides' implied chances
+    raised to k add to 1. Unlike dividing by the total, it doesn't overstate long shots (on the Week 11 2026 check the
+    simple method showed two long-shot moneylines as value; this one showed neither)."""
+    lo, hi = 1.0, 4.0
+    for _ in range(60):
+        k = (lo + hi) / 2
+        if sum(p ** k for p in ps) > 1:
+            lo = k
+        else:
+            hi = k
+    return [p ** k for p in ps]
+
+
+def _two_sided(market: dict, catalog: dict, mid: str) -> dict:
+    """{outcome name: American price} for a match market's active outcomes (players keyed "0")."""
+    got = {}
+    for oid, outcome in (market.get("outcomes") or {}).items():
+        price = (outcome.get("players") or {}).get("0")
+        if isinstance(price, dict) and price.get("active"):
+            am = to_american(price)
+            if am is not None:
+                got[str(catalog["outcome"].get((str(mid), str(oid)), "")).strip().lower()] = am
+    return got
+
+
+def fair_game(odds: dict, catalog: dict, game: dict, fx: dict) -> dict:
+    """No-margin chances for a game from the SHARP references, for every line they post:
+    {"ml": {"home", "away", "n"}, "spread": {home_line: {"home", "away", "n"}}, "total": {line: {"over", "under", "n"}}}.
+    n = how many references posted that exact bet. A reference whose two sides add to more than 112% is ignored."""
+    side = {}
+    for n in ("1", "2"):
+        hit = [s for s in ("away", "home") if team_in(game[s], [str(fx.get(f"participant{n}Name") or "").lower()])]
+        if len(hit) == 1:
+            side[n] = hit[0]
+    acc = {"ml": {}, "spread": {}, "total": {}}
+    if sorted(side.values()) != ["away", "home"]:
+        return {"ml": None, "spread": {}, "total": {}}
+    for slug, book in (odds.get("bookmakerOdds") or {}).items():
+        if str(slug).lower() not in SHARP or not isinstance(book, dict) or book.get("suspended"):
+            continue
+        for mid, market in (book.get("markets") or {}).items():
+            mname = str(catalog["market"].get(str(mid), "")).strip().lower()
+            if mname not in (ML_MARKET, SPREAD_MARKET, TOTAL_MARKET) or market.get("marketActive") is False:
+                continue
+            got = _two_sided(market, catalog, mid)
+            keys = ("over", "under") if mname == TOTAL_MARKET else ("1", "2")
+            if not all(k in got for k in keys):
+                continue
+            ps = [implied(got[k]) for k in keys]
+            if not 1.0 < sum(ps) < 1.12:
+                continue
+            fa = dict(zip(keys, devig(ps)))
+            if mname == TOTAL_MARKET:
+                try:
+                    line = float(catalog["handicap"].get(str(mid)))
+                except (TypeError, ValueError):
+                    continue
+                acc["total"].setdefault(line, []).append({"over": fa["over"], "under": fa["under"]})
+            else:
+                rec = {side["1"]: fa["1"], side["2"]: fa["2"]}
+                if mname == ML_MARKET:
+                    acc["ml"].setdefault(0.0, []).append(rec)
+                else:
+                    try:
+                        line = float(catalog["handicap"].get(str(mid)))
+                    except (TypeError, ValueError):
+                        continue
+                    acc["spread"].setdefault(line if side["1"] == "home" else -line, []).append(rec)
+    avg = lambda recs: {**{k: round(sum(r[k] for r in recs) / len(recs), 4) for k in recs[0]}, "n": len(recs)}
+    return {"ml": avg(acc["ml"][0.0]) if acc["ml"] else None, "spread": {k: avg(v) for k, v in acc["spread"].items()}, "total": {k: avg(v) for k, v in acc["total"].items()}}
+
+
+def fair_td(odds: dict, catalog: dict) -> dict:
+    """No-margin anytime-TD chance per player from the references that post BOTH Yes and No: {normalised name: (p, n)}."""
+    acc = {}
+    for slug, book in (odds.get("bookmakerOdds") or {}).items():
+        if str(slug).lower() not in TD_REFS or not isinstance(book, dict) or book.get("suspended"):
+            continue
+        per = {}
+        for mid, market in (book.get("markets") or {}).items():
+            if str(catalog["market"].get(str(mid), "")).strip().lower() != TD_MARKET:
+                continue
+            for oid, outcome in (market.get("outcomes") or {}).items():
+                s = {"yes": "yes", "1+": "yes", "no": "no"}.get(str(catalog["outcome"].get((str(mid), str(oid)), "")).strip().lower())
+                if not s:
+                    continue
+                for pid, price in (outcome.get("players") or {}).items():
+                    if str(pid) == "0" or not isinstance(price, dict) or not price.get("active"):
+                        continue
+                    am = to_american(price)
+                    if am is not None:
+                        per.setdefault(norm(flip(price.get("playerName"))), {})[s] = am
+        for name, v in per.items():
+            if "yes" in v and "no" in v:
+                ps = [implied(v["yes"]), implied(v["no"])]
+                if 1.0 < sum(ps) < 1.15:
+                    acc.setdefault(name, []).append(devig(ps)[0])
+    return {k: (round(sum(v) / len(v), 4), len(v)) for k, v in acc.items()}
+
+
+def td_rows(odds: dict, catalog: dict, game: dict, players: Players, pulled_at: str, fair: dict | None = None) -> tuple[list[dict], list[str], set]:
     """One fixture's odds -> price rows for BOOKS. catalog = {"market": {id: name}, "outcome": {(mid, oid): name}}."""
     rows, unmatched, seen_books = [], [], set()
     for slug, book in (odds.get("bookmakerOdds") or {}).items():
@@ -229,6 +345,9 @@ def td_rows(odds: dict, catalog: dict, game: dict, players: Players, pulled_at: 
                                  "team": c.get("team"), "book": name, "market": mk, "american": am, "captured_at": pulled_at,
                                  "changed_at": price.get("bookmakerChangedAt") or price.get("changedAt"),
                                  "time_source": "sportsbook feed", "source": "OddsPapi feed"})
+                    fp = (fair or {}).get(norm(flip(price.get("playerName")))) if mk == "anytime_td" else None
+                    if fp:   # the exchanges' no-margin chance for this player, and how many of them posted it
+                        rows[-1]["fair_p"], rows[-1]["fair_n"] = fp
     # one row per player/book/market: several market ids can carry the same price
     best = {}
     for r in rows:
@@ -236,7 +355,7 @@ def td_rows(odds: dict, catalog: dict, game: dict, players: Players, pulled_at: 
     return list(best.values()), sorted(set(unmatched)), seen_books
 
 
-def moneylines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str) -> list[dict]:
+def moneylines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str, books: dict | None = None) -> list[dict]:
     """One fixture's game moneyline per book in BOOKS: {game_id, book, away, home, away_american, home_american, ...}.
     Which side is home is read from the feed's team names, never assumed from participant order."""
     side = {}
@@ -249,7 +368,7 @@ def moneylines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str) 
         return []
     out = []
     for slug, book in (odds.get("bookmakerOdds") or {}).items():
-        name = BOOKS.get(str(slug).lower())
+        name = (books or BOOKS).get(str(slug).lower())
         if not name or not isinstance(book, dict) or book.get("suspended"):
             continue
         for mid, market in (book.get("markets") or {}).items():
@@ -279,7 +398,7 @@ def _main_line(cands: list):
     return (marked or sorted(cands, key=lambda c: abs(c["a"] - c["b"])))[0] if (marked or cands) else None
 
 
-def game_lines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str) -> list[dict]:
+def game_lines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str, books: dict | None = None) -> list[dict]:
     """One fixture's main spread and total per book in BOOKS (the moneyline is added by the caller).
     spread: {home_line, home_american, away_american}  (away line = -home_line)
     total:  {line, over_american, under_american}
@@ -293,7 +412,7 @@ def game_lines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str) 
         return []
     out = []
     for slug, book in (odds.get("bookmakerOdds") or {}).items():
-        name = BOOKS.get(str(slug).lower())
+        name = (books or BOOKS).get(str(slug).lower())
         if not name or not isinstance(book, dict) or book.get("suspended"):
             continue
         sp, tot = [], []
@@ -355,7 +474,7 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     out = {"source": "OddsPapi v4", "books": sorted(BOOKS.values()), "week": week, "pulled_at": pulled_at, "ok": True, "error": None,
            "rows": [], "moneylines": [], "game_lines": [], "unmatched": [], "coverage": {}, "requests": 0}
     if not open_games:
-        out.update(rows=list(old.values()), moneylines=list(old_ml.values()), game_lines=list(old_gl.values()), kickoffs=dict((prev or {}).get("kickoffs", {})), coverage=(prev or {}).get("coverage", {}), note="No game left to kick off this week.")
+        out.update(rows=list(old.values()), moneylines=list(old_ml.values()), game_lines=list(old_gl.values()), kickoffs=dict((prev or {}).get("kickoffs", {})), sharp_lines=dict((prev or {}).get("sharp_lines", {})), coverage=(prev or {}).get("coverage", {}), note="No game left to kick off this week.")
         return out
     days = [datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET).astimezone(timezone.utc) for g in open_games]
     fixtures = api.call("fixtures", sportId=SPORT_ID, tournamentId=TOURNAMENT_ID,
@@ -366,7 +485,7 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     if TD_MARKET not in {str(v).strip().lower() for v in catalog["market"].values()}:
         raise FeedError("the market list has no 'Player To Score TD (incl. overtime)' market")
     fresh, unmatched, no_fixture, no_board, per_game, books_seen, failed = {}, [], [], [], {}, set(), []
-    fresh_ml = {}; fresh_gl = {}
+    fresh_ml = {}; fresh_gl = {}; fairs = {}; sharp_lines = dict((prev or {}).get("sharp_lines", {}))
     for g in open_games:
         fx = next((f for f in fixtures if (match_fixture(f, [g]) or {}).get("game_id") == g["game_id"]), None)
         if not fx:
@@ -382,16 +501,30 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
         try:
             # ask only for the books the family uses (smaller reply); everything is filtered again on our side
             api.sleep(1.0)   # the service limits bursts: without a pause every other request is refused and retried
-            odds = api.call("odds", fixtureId=fx.get("fixtureId"), bookmakers=",".join(BOOKS)) or {}
+            odds = api.call("odds", fixtureId=fx.get("fixtureId"), bookmakers=",".join(FEED_BOOKS)) or {}
         except FeedError as e:   # one game's failure never loses the other games' prices
             failed.append(f"{g['game_id']}: {e}"); continue
+        fg = fair_game(odds, catalog, g, fx); fairs[g["game_id"]] = fg
+        sharp = {"game_id": g["game_id"]}     # the sharpest book's own main line, for reference on the Lines tab
+        for bk in ("pinnacle", "circasports"):
+            one = {bk: SHARP[bk]}
+            sl = game_lines(odds, catalog, g, fx, pulled_at, books=one); sm = moneylines(odds, catalog, g, fx, pulled_at, books=one)
+            if sl or sm:
+                sharp.update(book=SHARP[bk], spread=sl[0]["spread"] if sl else None, total=sl[0]["total"] if sl else None,
+                             ml={"away_american": sm[0]["away_american"], "home_american": sm[0]["home_american"]} if sm else None)
+                break
+        if "book" in sharp:
+            sharp_lines[g["game_id"]] = sharp
         for m in moneylines(odds, catalog, g, fx, pulled_at):
+            if fg["ml"]:
+                m["fair"] = fg["ml"]
             o = old_ml.get((m["game_id"], m["book"]))
             if o:   # the first moneyline seen from this book this week, for line moves
                 m["open_away_american"] = o.get("open_away_american", o["away_american"]); m["open_home_american"] = o.get("open_home_american", o["home_american"])
                 m["open_captured_at"] = o.get("open_captured_at", o["captured_at"])
             fresh_ml[(m["game_id"], m["book"])] = m
         for m in game_lines(odds, catalog, g, fx, pulled_at):
+            m["fair"] = {"spread": fg["spread"].get(m["spread"]["home_line"]) if m["spread"] else None, "total": fg["total"].get(m["total"]["line"]) if m["total"] else None}
             o = old_gl.get((m["game_id"], m["book"]))
             if o:   # the first spread / total seen from this book this week, for line moves
                 m["open_spread"] = o.get("open_spread") or o.get("spread"); m["open_total"] = o.get("open_total") or o.get("total")
@@ -410,7 +543,7 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
                 hist.append(snap)
             m["history"] = hist[-40:]
             fresh_gl[(m["game_id"], m["book"])] = m
-        rows, um, seen = td_rows(odds, catalog, g, Players(slate_by[g["game_id"]]), pulled_at)
+        rows, um, seen = td_rows(odds, catalog, g, Players(slate_by[g["game_id"]]), pulled_at, fair_td(odds, catalog))
         per_game[g["game_id"]] = len(rows); unmatched += [f"{g['game_id']}: {x}" for x in um]; books_seen |= seen
         for r in rows:
             fresh[key_of(r)] = r
@@ -428,7 +561,7 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
         merged[k] = r
     ml = {k: m for k, m in old_ml.items() if m["game_id"] not in pulled_games}; ml.update(fresh_ml)
     out.update(rows=sorted(merged.values(), key=lambda r: (r["game_id"], r["player"], r["book"], r["market"])), unmatched=unmatched[:200],
-               kickoffs=kickoffs, moneylines=sorted(ml.values(), key=lambda m: (m["game_id"], m["book"])),
+               kickoffs=kickoffs, sharp_lines=sharp_lines, _fair=fairs, _pulled=sorted(pulled_games), moneylines=sorted(ml.values(), key=lambda m: (m["game_id"], m["book"])),
                game_lines=sorted(({k: m for k, m in old_gl.items() if m["game_id"] not in pulled_games} | fresh_gl).values(), key=lambda m: (m["game_id"], m["book"])),
                coverage={"games_open": len(open_games), "games_with_prices": sum(1 for n in per_game.values() if n), "prices": len(fresh),
                          "players": len({r["gsis_id"] for r in fresh.values()}), "moneylines": len(fresh_ml), "game_lines": len(fresh_gl), "books": sorted(books_seen),
@@ -443,6 +576,97 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     elif not fresh:
         out["note"] = "The feed returned no FanDuel or DraftKings Anytime TD prices for the games still to come."
     return out
+
+
+# ---------------------------------------------------------------- value tracker
+# Every FanDuel / DraftKings price that beat the fair price is logged once, then followed: what the fair price was at the
+# last pull before kickoff (closing line value) and how the bet finished. Kept inside odds_feed.json across weeks.
+
+def _candidates(doc: dict):
+    """Every current price with a fair chance: (id parts, line, american, fair p, references)."""
+    wk = doc.get("week"); pulled = set(doc.get("_pulled") or [])
+    for m in doc.get("game_lines", []):
+        if m["game_id"] not in pulled:
+            continue
+        fa = m.get("fair") or {}
+        if m.get("spread") and fa.get("spread"):
+            for s in ("home", "away"):
+                yield (wk, m["game_id"], m["book"], "spread", s, None), (m["spread"]["home_line"] if s == "home" else -m["spread"]["home_line"]), m["spread"][s + "_american"], fa["spread"][s], fa["spread"]["n"], None
+        if m.get("total") and fa.get("total"):
+            for s in ("over", "under"):
+                yield (wk, m["game_id"], m["book"], "total", s, None), m["total"]["line"], m["total"][s + "_american"], fa["total"][s], fa["total"]["n"], None
+    for m in doc.get("moneylines", []):
+        if m["game_id"] in pulled and m.get("fair"):
+            for s in ("home", "away"):
+                yield (wk, m["game_id"], m["book"], "ml", s, None), None, m[s + "_american"], m["fair"][s], m["fair"]["n"], None
+    for r in doc.get("rows", []):
+        if r["game_id"] in pulled and r.get("market") == "anytime_td" and r.get("fair_p"):
+            yield (wk, r["game_id"], r["book"], "anytime_td", "yes", r["gsis_id"]), None, r["american"], r["fair_p"], r.get("fair_n", 1), r["player"]
+
+
+def _grade(e: dict, g: dict, scorers: set | None) -> str | None:
+    if g.get("status") != "final" or g.get("away_score") is None or g.get("home_score") is None:
+        return None
+    hs, as_ = g["home_score"], g["away_score"]
+    if e["market"] == "ml":
+        return "push" if hs == as_ else "win" if (hs > as_) == (e["side"] == "home") else "loss"
+    if e["market"] == "spread":
+        v = (hs - as_ if e["side"] == "home" else as_ - hs) + e["line"]
+        return "push" if v == 0 else "win" if v > 0 else "loss"
+    if e["market"] == "total":
+        tot = hs + as_
+        return "push" if tot == e["line"] else "win" if (tot > e["line"]) == (e["side"] == "over") else "loss"
+    if e["market"] == "anytime_td":
+        return None if scorers is None else "win" if (e["game_id"], e.get("gsis_id")) in scorers else "loss"
+    return None
+
+
+def update_value_log(log: list, doc: dict, games: list[dict], now: datetime) -> list:
+    by = {e["id"]: e for e in log}; gm = {g["game_id"]: g for g in games}; at = now.isoformat(timespec="seconds")
+    fairs = doc.get("_fair") or {}
+    for key, line, am, fp, n, player in _candidates(doc):
+        eid = "|".join("" if x is None else str(x) for x in key); ev = fp * decimal_odds(am) - 1
+        if eid in by:
+            continue
+        if ev >= VALUE_MIN_EV and n >= VALUE_MIN_REFS:
+            wk, gid, book, market, side, gsis = key
+            g = gm.get(gid, {})
+            by[eid] = {"id": eid, "week": wk, "game_id": gid, "away": g.get("away"), "home": g.get("home"), "kickoff_et": (doc.get("kickoffs") or {}).get(gid) or g.get("kickoff_et"),
+                       "book": book, "market": market, "side": side, "line": line, "player": player, "gsis_id": gsis, "american": am, "fair_p": round(fp, 4),
+                       "ev_pct": round(ev * 100, 2), "refs": n, "flagged_at": at}
+    # follow each open flag to kickoff: the fair chance of the SAME bet (same line) at this pull
+    cur = {"|".join("" if x is None else str(x) for x in k): (fp, n) for k, line, am, fp, n, player in _candidates(doc)}
+    for e in by.values():
+        if e.get("result") or e["game_id"] not in set(doc.get("_pulled") or []):
+            continue
+        fg = fairs.get(e["game_id"]) or {}
+        p = None
+        if e["market"] == "ml" and fg.get("ml"):
+            p = fg["ml"][e["side"]]
+        elif e["market"] == "spread":
+            rec = (fg.get("spread") or {}).get(e["line"] if e["side"] == "home" else -e["line"]); p = rec and rec[e["side"]]
+        elif e["market"] == "total":
+            rec = (fg.get("total") or {}).get(e["line"]); p = rec and rec[e["side"]]
+        elif e["market"] == "anytime_td" and e["id"] in cur:
+            p = cur[e["id"]][0]
+        if p is not None and e.get("flagged_at") != at:
+            e["close_fair_p"] = round(p, 4); e["close_at"] = at
+            e["clv_pts"] = round((p - implied(e["american"])) * 100, 2)      # > 0: the price taken was better than the closing fair price
+    # results
+    scorers = None
+    try:
+        scorers = {(x["game_id"], x.get("scorer_id")) for x in json.loads((OUT / "touchdowns.json").read_text())}
+    except (OSError, ValueError):
+        pass
+    for e in by.values():
+        if e.get("result"):
+            continue
+        g = gm.get(e["game_id"])
+        r = _grade(e, g, scorers if g and scorers is not None and any(s[0] == e["game_id"] for s in scorers) else None) if g else None
+        if r:
+            e["result"] = r; e["units"] = round(decimal_odds(e["american"]) - 1, 3) if r == "win" else -1.0 if r == "loss" else 0.0
+            e["final"] = f"{g['away']} {g['away_score']}, {g['home']} {g['home_score']}"
+    return sorted(by.values(), key=lambda e: e["flagged_at"])[-3000:]
 
 
 def archive(prev: dict | None, week) -> None:
@@ -498,6 +722,7 @@ def main(argv=None) -> int:
         print("odds_feed: no key (enter it on the Admin page, Sportsbook feed); nothing pulled"); return 0
     games = json.loads((OUT / "games.json").read_text()); slate = json.loads((OUT / "slate.json").read_text())
     api = Api(key)
+    log = list((prev or {}).get("value_log") or [])     # the value tracker carries across weeks
     if cmd == "pull":
         archive(prev, slate.get("week"))
     try:
@@ -522,10 +747,13 @@ def main(argv=None) -> int:
         msg = scrub(str(e), key)
         # keep the last good prices; record the failure so the Admin page can show it
         keep = prev if prev and prev.get("week") == slate.get("week") else {"source": "OddsPapi v4", "week": slate.get("week"), "rows": [], "pulled_at": None, "coverage": {}}
-        keep.update(ok=False, error=msg, failed_at=now_iso()); write(keep)
+        keep.update(ok=False, error=msg, failed_at=now_iso(), value_log=update_value_log(log, {}, games, datetime.now(timezone.utc))); write(keep)
         print("odds_feed FAILED (previous prices kept):", msg); return 0
+    doc["value_log"] = update_value_log(log, doc, games, datetime.now(timezone.utc))
+    doc.pop("_fair", None); doc.pop("_pulled", None)
+    doc["coverage"]["with_fair_price"] = sum(1 for r in doc["rows"] if r.get("fair_p")) + sum(1 for m in doc["game_lines"] if (m.get("fair") or {}).get("spread"))
     write(doc)
-    print("odds_feed:", json.dumps({"prices": len(doc["rows"]), **doc["coverage"], "unmatched": len(doc["unmatched"]), "requests": doc["requests"], "note": doc.get("note")}))
+    print("odds_feed:", json.dumps({"prices": len(doc["rows"]), "value_flags": len(doc["value_log"]), **doc["coverage"], "unmatched": len(doc["unmatched"]), "requests": doc["requests"], "note": doc.get("note")}))
     return 0
 
 

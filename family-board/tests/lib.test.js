@@ -544,3 +544,23 @@ test("game lines: no-margin win chance, summary, best book, results against the 
   assert.deepStrictEqual([R.ARI.w, R.ARI.l, R.ARI.ats_w, R.ARI.ats_l], [0, 2, 1, 1]);
   assert.strictEqual(FB.teamRecords(G, 2).KC.games, 1);   // only games before week 2
 });
+
+test("fair price: what a bet costs, when it counts as value, and the tracker's record", () => {
+  const near = (a, b, e = 1e-9) => Math.abs(a - b) < e;
+  assert.ok(near(FB.betValue(0.5, -110), 0.5 * (1 + 100 / 110) - 1) && FB.betValue(0.5, -110) < 0);   // a 50% bet at -110 costs 4.5%
+  assert.ok(near(FB.betValue(0.5, 100), 0) && FB.betValue(0.4, 190) > 0.15);
+  assert.strictEqual(FB.betValue(null, -110), null); assert.strictEqual(FB.betValue(0.5, null), null);
+  assert.strictEqual(FB.isValue(0.4, 190, 2), true);
+  assert.strictEqual(FB.isValue(0.4, 190, 1), false);      // one reference is not enough
+  assert.strictEqual(FB.isValue(0.5, 101, 3), false);      // +0.5% is under the 1% threshold
+  const m = { book: "FanDuel", spread: { home_line: -3.5, home_american: -110, away_american: -110 }, total: { line: 44.5, over_american: -115, under_american: -105 },
+    ml: { home_american: 190, away_american: -233, fair: { home: 0.39, away: 0.61, n: 2 } }, fair: { spread: { home: 0.5, away: 0.5, n: 3 }, total: null } };
+  const c = FB.lineCosts(m, "BUF", "NYJ");
+  assert.deepStrictEqual(c.map((x) => `${x.market}:${x.side}:${x.label}:${x.line}`), ["spread:home:NYJ:-3.5", "spread:away:BUF:3.5", "ml:home:NYJ:null", "ml:away:BUF:null"]);   // no fair total -> no total rows
+  assert.ok(c[0].value < 0 && c[2].value > 0.1 && c[2].refs === 2);
+  const s = FB.valueSummary([{ ev_pct: 2, clv_pts: 1.5, result: "win", units: 0.9 }, { ev_pct: 4, clv_pts: -0.5, result: "loss", units: -1 }, { ev_pct: 3 }, { ev_pct: 3, clv_pts: 0.2, result: "push", units: 0 }]);
+  assert.deepStrictEqual([s.flagged, s.with_close, s.graded, s.wins, s.losses, s.pushes], [4, 3, 3, 1, 1, 1]);
+  assert.ok(near(s.avg_clv, 0.4) && near(s.beat_close, 2 / 3) && near(s.units, -0.1) && near(s.avg_ev, 3));
+  assert.deepStrictEqual(FB.valueSummary([]).flagged, 0); assert.strictEqual(FB.valueSummary(null).avg_clv, null);
+});
+

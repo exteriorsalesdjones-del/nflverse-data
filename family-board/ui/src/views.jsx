@@ -353,6 +353,12 @@ function PlayerSheet({ c, onClose }) {
   const rows = [["Chance to score", bl ? `${pct1(ch)} · model ${pct1(bl.model)} combined with ${[...new Set(bl.books)].join(" and ")} (${pct1(bl.implied)} implied)` : pct1(ch)],
     ["Fair odds", am(bl ? FB.probToAmerican(ch) : c.fair_american)],
     ["2+ TD chance", `${pct1(FB.p2plus(ch))} (estimate from the anytime chance) · fair ${am(FB.probToAmerican(FB.p2plus(ch)))}`],
+    ...(() => {   // the exchanges' no-margin chance for this player, and what each book's price costs against it
+      const bd = boardFor(c, g.week, "anytime_td"); const rows = bd ? bd.books.filter((x) => x.fair_p) : [];
+      if (!rows.length) return [];
+      const fp = rows[0].fair_p; const n = Math.max(...rows.map((x) => x.fair_n || 1));
+      return [["Fair price", `${pct1(fp)} (${am(FB.probToAmerican(fp))}) from ${n} exchange${n > 1 ? "s" : ""} that post both Yes and No, margin removed · ${rows.map((x) => { const v = FB.betValue(fp, x.american); return `${x.book} ${am(x.american)} ${v >= 0 ? `is worth +${(v * 100).toFixed(1)}%` : `costs ${Math.abs(v * 100).toFixed(1)}%`}`; }).join(" · ")} of the stake`]];
+    })(),
     ["Value check price", pr ? `${pr.stale ? "Latest (over 2 h old)" : "Best fresh"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)} · ${timeBasis(pr.time_source)}` : "No anytime price uploaded yet (Uploads tab)"],
     ...(e ? [["Model vs price", pr.stale
       ? `Price is over ${FB.PRICE_FRESH_MIN / 60} hours old and may no longer be available, so no EV is shown.`
