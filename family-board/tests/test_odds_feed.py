@@ -25,7 +25,12 @@ FIX = [{"fixtureId": "fxA", "startTime": "2026-11-22T18:00:00.000Z", "participan
        {"fixtureId": "fxB", "startTime": "2026-11-22T18:00:00.000Z", "participant1Name": "New Orleans Saints", "participant2Name": "Carolina Panthers"},
        {"fixtureId": "fxC", "startTime": "2026-11-20T01:15:00.000Z", "participant1Name": "Denver Broncos", "participant2Name": "Kansas City Chiefs"},
        {"fixtureId": "fxZ", "startTime": "2026-11-22T18:00:00.000Z", "participant1Name": "Miami Dolphins", "participant2Name": "New York Giants"}]
-CAT = [{"marketId": 141, "marketName": "Winner (incl. overtime)", "outcomes": [{"outcomeId": 142, "outcomeName": "2"}, {"outcomeId": 141, "outcomeName": "1"}]},
+CAT = [{"marketId": 2001, "marketName": "Handicap (incl. overtime)", "handicap": -3.5, "outcomes": [{"outcomeId": 1, "outcomeName": "1"}, {"outcomeId": 2, "outcomeName": "2"}]},
+       {"marketId": 2002, "marketName": "Handicap (incl. overtime)", "handicap": -6.5, "outcomes": [{"outcomeId": 1, "outcomeName": "1"}, {"outcomeId": 2, "outcomeName": "2"}]},
+       {"marketId": 2003, "marketName": "Handicap First Half", "handicap": -1.5, "outcomes": [{"outcomeId": 1, "outcomeName": "1"}, {"outcomeId": 2, "outcomeName": "2"}]},
+       {"marketId": 3001, "marketName": "Total (incl. overtime)", "handicap": 44.5, "outcomes": [{"outcomeId": 1, "outcomeName": "Over"}, {"outcomeId": 2, "outcomeName": "Under"}]},
+       {"marketId": 3002, "marketName": "Total (incl. overtime)", "handicap": 50.5, "outcomes": [{"outcomeId": 1, "outcomeName": "Over"}, {"outcomeId": 2, "outcomeName": "Under"}]},
+       {"marketId": 141, "marketName": "Winner (incl. overtime)", "outcomes": [{"outcomeId": 142, "outcomeName": "2"}, {"outcomeId": 141, "outcomeName": "1"}]},
        {"marketId": 143, "marketName": "Regular Time Result", "outcomes": [{"outcomeId": 143, "outcomeName": "1"}, {"outcomeId": 144, "outcomeName": "X"}, {"outcomeId": 145, "outcomeName": "2"}]},
        {"marketId": 14388, "marketName": "Player To Score TD (incl. overtime)", "outcomes": [{"outcomeId": 1, "outcomeName": "Yes"}, {"outcomeId": 2, "outcomeName": "No"}]},
        {"marketId": 144637, "marketName": "Player To Score TD (incl. overtime)", "outcomes": [{"outcomeId": 11, "outcomeName": "1+"}, {"outcomeId": 12, "outcomeName": "2+"}, {"outcomeId": 13, "outcomeName": "3+"}]},
@@ -34,13 +39,21 @@ CAT = [{"marketId": 141, "marketName": "Winner (incl. overtime)", "outcomes": [{
 P = lambda name, dec, active=True: {"playerName": name, "price": dec, "active": active, "changedAt": "2026-11-17T10:00:00Z", "bookmakerChangedAt": "2026-11-17T09:58:00Z"}
 def board(scale=1.0):
     return {"bookmakerOdds": {
-        "fanduel": {"markets": {"141": {"marketActive": True, "outcomes": {"141": {"players": {"0": P("", 2.9 * scale)}}, "142": {"players": {"0": P("", 1.43)}}}},
+        "fanduel": {"markets": {"2001": {"outcomes": {"1": {"players": {"0": dict(P("", 1.91), mainLine=True)}}, "2": {"players": {"0": dict(P("", 1.91), mainLine=True)}}}},
+                                "2002": {"outcomes": {"1": {"players": {"0": P("", 2.6)}}, "2": {"players": {"0": P("", 1.5)}}}},
+                                "2003": {"outcomes": {"1": {"players": {"0": dict(P("", 1.9), mainLine=True)}}, "2": {"players": {"0": dict(P("", 1.9), mainLine=True)}}}},
+                                "3001": {"outcomes": {"1": {"players": {"0": dict(P("", 1.87 * scale), mainLine=True)}}, "2": {"players": {"0": dict(P("", 1.95), mainLine=True)}}}},
+                                "3002": {"outcomes": {"1": {"players": {"0": P("", 2.9)}}, "2": {"players": {"0": P("", 1.4)}}}},
+                                "141": {"marketActive": True, "outcomes": {"141": {"players": {"0": P("", 2.9 * scale)}}, "142": {"players": {"0": P("", 1.43)}}}},
                                 "143": {"outcomes": {"143": {"players": {"0": P("", 3.1)}}, "144": {"players": {"0": P("", 15.0)}}, "145": {"players": {"0": P("", 1.5)}}}},
                                 "14388": {"outcomes": {"1": {"players": {"0": P("", 1.9), "77": P("Cook, James", 1.8 * scale), "78": P("Harrison Jr., Marvin", 3.0), "79": P("Nobody, Joe", 5.0), "80": P("Hall, Breece", 2.5, active=False)}},
                                                         "2": {"players": {"77": P("Cook, James", 1.9)}}}},
                                 "500": {"outcomes": {"1": {"players": {"77": P("Cook, James", 7.0)}}}},
                                 "600": {"outcomes": {"1": {"players": {"77": P("Cook, James", 1.87)}}}}}},
-        "draftkings": {"markets": {"141": {"outcomes": {"141": {"players": {"0": P("", 2.85)}}, "142": {"players": {"0": P("", 1.444, active=False)}}}},
+        "draftkings": {"markets": {"2002": {"outcomes": {"1": {"players": {"0": P("", 2.6)}}, "2": {"players": {"0": P("", 1.5)}}}},
+                                   "2001": {"outcomes": {"1": {"players": {"0": P("", 1.95)}}, "2": {"players": {"0": P("", 1.87)}}}},
+                                   "3001": {"outcomes": {"1": {"players": {"0": P("", 1.9)}}, "2": {"players": {"0": P("", 1.9, active=False)}}}},
+                                   "141": {"outcomes": {"141": {"players": {"0": P("", 2.85)}}, "142": {"players": {"0": P("", 1.444, active=False)}}}},
                                    "144637": {"outcomes": {"11": {"players": {"77": P("Cook, James", 1.87), "81": P("Hall, Breece", 0)}},
                                                            "12": {"players": {"77": P("Cook, James", 6.5)}},
                                                            "13": {"players": {"77": P("Cook, James", 21.0)}}}}}},
@@ -81,6 +94,15 @@ check("requests per pull: fixtures + markets + one per open game", doc["requests
 ml = {m["book"]: m for m in doc["moneylines"]}
 check("moneyline: the feed's outcome 1/2 is mapped to home/away by team name, converted to American", ml["FanDuel"]["home"] == "NYJ" and ml["FanDuel"]["home_american"] == 190 and ml["FanDuel"]["away"] == "BUF" and ml["FanDuel"]["away_american"] == -233 and ml["FanDuel"]["game_id"] == "2026_11_BUF_NYJ", json.dumps(ml["FanDuel"]))
 check("moneyline: a book with only one side active is left out; the 3-way regular-time market is ignored", list(ml) == ["FanDuel"] and len(doc["moneylines"]) == 1)
+# main spread and total (FIX[0]: participant 1 = New York Jets = home, so the feed's -3.5 handicap is the HOME line)
+gl = {m["book"]: m for m in doc["game_lines"]}
+check("spread: the book's marked main line, as the home team's line, both prices in American", gl["FanDuel"]["spread"] == {"home_line": -3.5, "home_american": -110, "away_american": -110}, json.dumps(gl["FanDuel"]["spread"]))
+check("total: the main line with Over and Under prices", gl["FanDuel"]["total"] == {"line": 44.5, "over_american": -115, "under_american": -105}, json.dumps(gl["FanDuel"]["total"]))
+check("no main-line mark: the most even-priced line is used; a market with one side inactive is left out", gl["DraftKings"]["spread"]["home_line"] == -3.5 and gl["DraftKings"]["total"] is None, json.dumps(gl["DraftKings"]))
+check("half and quarter lines are ignored", all(m["spread"]["home_line"] != -1.5 for m in doc["game_lines"]))
+fx_flip = dict(FIX[0], participant1Name="Buffalo Bills", participant2Name="New York Jets")
+flip = {m["book"]: m for m in OF.game_lines(board(), {"handicap": {str(m["marketId"]): m.get("handicap") for m in CAT}, "market": {str(m["marketId"]): m["marketName"] for m in CAT}, "outcome": {(str(m["marketId"]), str(o["outcomeId"])): o["outcomeName"] for m in CAT for o in m["outcomes"]}}, games[0], fx_flip, "t")}
+check("when the feed lists the away team first, the line is flipped to the home team's side", flip["FanDuel"]["spread"]["home_line"] == 3.5)
 # second pull: a price moved; the first price is kept as the opening price
 later = datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc)
 doc2 = OF.pull(OF.Api(KEY, get=make_get({"fxA": board(scale=1.1), "fxB": {"bookmakerOdds": {}}})), games, slate, doc, later)
@@ -88,6 +110,8 @@ r = next(x for x in doc2["rows"] if (x["player"], x["book"], x["market"]) == ("J
 check("a moved price keeps the first price as the opening price (line moves)", r["american"] == -102 and r["open_american"] == -125 and r["open_captured_at"] == doc["rows"][0]["captured_at"], json.dumps({k: r.get(k) for k in ("american", "open_american", "open_captured_at")}))
 m2 = doc2["moneylines"][0]
 check("moneyline: a move keeps the opening prices", m2["home_american"] == 219 and m2["open_home_american"] == 190 and m2["open_away_american"] == -233, json.dumps({k: m2[k] for k in m2 if "american" in k}))
+g2 = {m["book"]: m for m in doc2["game_lines"]}["FanDuel"]
+check("a moved total keeps the opening line and prices", g2["total"]["over_american"] == 106 and g2["open_total"]["over_american"] == -115 and g2["open_spread"]["home_line"] == -3.5, json.dumps({"total": g2["total"], "open_total": g2["open_total"]}))
 # a price the book took down disappears; a game that could not be pulled keeps its last prices
 b3 = board(); del b3["bookmakerOdds"]["draftkings"]
 doc3 = OF.pull(OF.Api(KEY, get=make_get({"fxA": b3})), games, slate, doc2, later)

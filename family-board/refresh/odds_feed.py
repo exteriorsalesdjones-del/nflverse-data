@@ -38,6 +38,8 @@ ET = ZoneInfo("America/New_York")
 SPORT_ID, TOURNAMENT_ID = 14, 31          # American football, NFL
 TD_MARKET = "player to score td (incl. overtime)"
 ML_MARKET = "winner (incl. overtime)"     # the game moneyline: outcome "1" = the feed's participant 1, "2" = participant 2
+SPREAD_MARKET = "handicap (incl. overtime)"   # one market id per line; the handicap belongs to participant 1
+TOTAL_MARKET = "total (incl. overtime)"       # one market id per line; outcomes "Over" / "Under"
 BOOKS = {"fanduel": "FanDuel", "draftkings": "DraftKings"}   # feed slug -> name shown in the app
 OUTCOME_MARKET = {"yes": "anytime_td", "1+": "anytime_td", "2+": "2plus_td"}
 TEAMS = {  # nflverse abbreviation -> words that identify the team in a feed's team name
@@ -268,10 +270,70 @@ def moneylines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str) 
     return list({r["book"]: r for r in out}.values())
 
 
+def _main_line(cands: list):
+    """Of a book's lines for one market, the one it marks as its main line; if none is marked, the most even-priced."""
+    if not cands:
+        return None
+    marked = [c for c in cands if c["main"]]
+    return (marked or sorted(cands, key=lambda c: abs(c["a"] - c["b"])))[0] if (marked or cands) else None
+
+
+def game_lines(odds: dict, catalog: dict, game: dict, fx: dict, pulled_at: str) -> list[dict]:
+    """One fixture's main spread and total per book in BOOKS (the moneyline is added by the caller).
+    spread: {home_line, home_american, away_american}  (away line = -home_line)
+    total:  {line, over_american, under_american}
+    Both sides must be posted and active, or that market is left out for the book."""
+    side = {}
+    for n in ("1", "2"):
+        hit = [s for s in ("away", "home") if team_in(game[s], [str(fx.get(f"participant{n}Name") or "").lower()])]
+        if len(hit) == 1:
+            side[n] = hit[0]
+    if sorted(side.values()) != ["away", "home"]:
+        return []
+    out = []
+    for slug, book in (odds.get("bookmakerOdds") or {}).items():
+        name = BOOKS.get(str(slug).lower())
+        if not name or not isinstance(book, dict) or book.get("suspended"):
+            continue
+        sp, tot = [], []
+        for mid, market in (book.get("markets") or {}).items():
+            mname = str(catalog["market"].get(str(mid), "")).strip().lower()
+            if mname not in (SPREAD_MARKET, TOTAL_MARKET) or market.get("marketActive") is False:
+                continue
+            try:
+                line = float(catalog["handicap"].get(str(mid)))
+            except (TypeError, ValueError):
+                continue
+            got, main, changed = {}, False, []
+            for oid, outcome in (market.get("outcomes") or {}).items():
+                oname = str(catalog["outcome"].get((str(mid), str(oid)), "")).strip()
+                price = (outcome.get("players") or {}).get("0")
+                if not isinstance(price, dict) or not price.get("active"):
+                    continue
+                am = to_american(price)
+                if am is None:
+                    continue
+                got[oname.lower()] = am; main = main or bool(price.get("mainLine")); changed.append(price.get("bookmakerChangedAt") or price.get("changedAt"))
+            ch = max([c for c in changed if c], default=None)
+            if mname == SPREAD_MARKET and "1" in got and "2" in got:
+                # the handicap is participant 1's; turn it into the HOME team's line
+                home_line = line if side["1"] == "home" else -line
+                h, a = (got["1"], got["2"]) if side["1"] == "home" else (got["2"], got["1"])
+                sp.append({"main": main, "a": h, "b": a, "v": {"home_line": home_line, "home_american": h, "away_american": a}, "ch": ch})
+            if mname == TOTAL_MARKET and "over" in got and "under" in got:
+                tot.append({"main": main, "a": got["over"], "b": got["under"], "v": {"line": line, "over_american": got["over"], "under_american": got["under"]}, "ch": ch})
+        s, tl = _main_line(sp), _main_line(tot)
+        if s or tl:
+            out.append({"game_id": game["game_id"], "book": name, "away": game["away"], "home": game["home"], "spread": s and s["v"], "total": tl and tl["v"],
+                        "captured_at": pulled_at, "changed_at": max([c["ch"] for c in (s, tl) if c and c["ch"]], default=None), "source": "OddsPapi feed"})
+    return out
+
+
 def load_catalog(api: Api) -> dict:
     cat = api.call("markets", sportId=SPORT_ID) or []
     cat = cat if isinstance(cat, list) else cat.get("markets", cat.get("data", []))
-    return {"market": {str(m.get("marketId")): m.get("marketName") for m in cat},
+    return {"handicap": {str(m.get("marketId")): m.get("handicap") for m in cat},
+            "market": {str(m.get("marketId")): m.get("marketName") for m in cat},
             "outcome": {(str(m.get("marketId")), str(o.get("outcomeId"))): o.get("outcomeName") for m in cat for o in (m.get("outcomes") or [])}}
 
 
@@ -287,10 +349,11 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     open_games = [g for g in wk_games if datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET) > now]
     old = {key_of(r): r for r in (prev or {}).get("rows", [])}
     old_ml = {(m["game_id"], m["book"]): m for m in (prev or {}).get("moneylines", [])}
+    old_gl = {(m["game_id"], m["book"]): m for m in (prev or {}).get("game_lines", [])}
     out = {"source": "OddsPapi v4", "books": sorted(BOOKS.values()), "week": week, "pulled_at": pulled_at, "ok": True, "error": None,
-           "rows": [], "moneylines": [], "unmatched": [], "coverage": {}, "requests": 0}
+           "rows": [], "moneylines": [], "game_lines": [], "unmatched": [], "coverage": {}, "requests": 0}
     if not open_games:
-        out.update(rows=list(old.values()), moneylines=list(old_ml.values()), coverage=(prev or {}).get("coverage", {}), note="No game left to kick off this week.")
+        out.update(rows=list(old.values()), moneylines=list(old_ml.values()), game_lines=list(old_gl.values()), coverage=(prev or {}).get("coverage", {}), note="No game left to kick off this week.")
         return out
     days = [datetime.fromisoformat(g["kickoff_et"]).replace(tzinfo=ET).astimezone(timezone.utc) for g in open_games]
     fixtures = api.call("fixtures", sportId=SPORT_ID, tournamentId=TOURNAMENT_ID,
@@ -301,7 +364,7 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     if TD_MARKET not in {str(v).strip().lower() for v in catalog["market"].values()}:
         raise FeedError("the market list has no 'Player To Score TD (incl. overtime)' market")
     fresh, unmatched, no_fixture, no_board, per_game, books_seen, failed = {}, [], [], [], {}, set(), []
-    fresh_ml = {}
+    fresh_ml = {}; fresh_gl = {}
     for g in open_games:
         fx = next((f for f in fixtures if (match_fixture(f, [g]) or {}).get("game_id") == g["game_id"]), None)
         if not fx:
@@ -319,6 +382,12 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
                 m["open_away_american"] = o.get("open_away_american", o["away_american"]); m["open_home_american"] = o.get("open_home_american", o["home_american"])
                 m["open_captured_at"] = o.get("open_captured_at", o["captured_at"])
             fresh_ml[(m["game_id"], m["book"])] = m
+        for m in game_lines(odds, catalog, g, fx, pulled_at):
+            o = old_gl.get((m["game_id"], m["book"]))
+            if o:   # the first spread / total seen from this book this week, for line moves
+                m["open_spread"] = o.get("open_spread") or o.get("spread"); m["open_total"] = o.get("open_total") or o.get("total")
+                m["open_captured_at"] = o.get("open_captured_at", o["captured_at"])
+            fresh_gl[(m["game_id"], m["book"])] = m
         rows, um, seen = td_rows(odds, catalog, g, Players(slate_by[g["game_id"]]), pulled_at)
         per_game[g["game_id"]] = len(rows); unmatched += [f"{g['game_id']}: {x}" for x in um]; books_seen |= seen
         for r in rows:
@@ -338,8 +407,9 @@ def pull(api: Api, games: list[dict], slate: dict, prev: dict | None, now: datet
     ml = {k: m for k, m in old_ml.items() if m["game_id"] not in pulled_games}; ml.update(fresh_ml)
     out.update(rows=sorted(merged.values(), key=lambda r: (r["game_id"], r["player"], r["book"], r["market"])), unmatched=unmatched[:200],
                moneylines=sorted(ml.values(), key=lambda m: (m["game_id"], m["book"])),
+               game_lines=sorted(({k: m for k, m in old_gl.items() if m["game_id"] not in pulled_games} | fresh_gl).values(), key=lambda m: (m["game_id"], m["book"])),
                coverage={"games_open": len(open_games), "games_with_prices": sum(1 for n in per_game.values() if n), "prices": len(fresh),
-                         "players": len({r["gsis_id"] for r in fresh.values()}), "moneylines": len(fresh_ml), "books": sorted(books_seen),
+                         "players": len({r["gsis_id"] for r in fresh.values()}), "moneylines": len(fresh_ml), "game_lines": len(fresh_gl), "books": sorted(books_seen),
                          "no_fixture": no_fixture, "no_board": no_board, "failed": failed}, requests=api.calls)
     missing = sorted(set(BOOKS.values()) - books_seen)
     if failed and not per_game:   # every game's request failed: a failed pull (the caller keeps the previous prices)
