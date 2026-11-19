@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Box, Button, ButtonBase, Card, CardContent, Chip, Stack, Typography } from "@mui/material";
-import { FB, useStore, myItems, myGamePicks, myParlays, effCand, chanceFor, boardFor, weekMoves, settlePick, nameOf, focusGame } from "./store.js";
+import { FB, useStore, myItems, myGamePicks, myParlays, effCand, chanceFor, boardFor, weekMoves, settlePick, nameOf, focusGame, focusLine } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 import { PickButton, MoveTag, DbNote } from "./views.jsx";
 
@@ -169,7 +169,7 @@ export function HomeView() {
           <List label="Next games">
             {open.slice(0, 3).map((g) => { const ln = lineOf(g); return (
               <Box component="li" key={g.game_id} sx={{ ...rowSx, py: 0 }}>
-                <ButtonBase onClick={go("gamelines")} aria-label={`${g.away} at ${g.home}, ${kick(g)}${ln ? `, ${ln.replace("−", "minus ")}` : ""}. Open game lines`}
+                <ButtonBase onClick={() => focusLine(g.game_id)} aria-label={`${g.away} at ${g.home}, ${kick(g)}${ln ? `, ${ln.replace("−", "minus ")}` : ""}. Open this game's lines`}
                   sx={{ flex: 1, minWidth: 0, minHeight: 56, display: "flex", justifyContent: "space-between", gap: 1, textAlign: "left", borderRadius: 1.5, "&:focus-visible": { outline: 2, outlineColor: "primary.main" } }}>
                   <Box sx={{ minWidth: 0 }}><Typography sx={{ fontWeight: 600 }} noWrap>{g.away} at {g.home}</Typography><Typography variant="body2" color="text.secondary" noWrap>{kick(g)}</Typography></Box>
                   <Typography variant="body2" sx={{ fontVariantNumeric: "tabular-nums", textAlign: "right", flexShrink: 0 }}>{ln || "No line yet"}</Typography>

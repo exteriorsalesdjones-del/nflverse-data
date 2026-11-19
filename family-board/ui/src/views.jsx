@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Autocomplete, Box, Button, ButtonBase, Card, CardContent, Chip, Dialog,
-  DialogActions, DialogContent, DialogTitle, Drawer, LinearProgress, MenuItem, Stack, Table, TableBody, TableCell,
+  DialogActions, DialogContent, DialogTitle, Drawer, IconButton, LinearProgress, MenuItem, Stack, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Typography, useMediaQuery,
 } from "@mui/material";
 import {
@@ -61,7 +61,7 @@ function BookList({ c, g, market }) {
         <Box component="li" key={x.book} sx={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 1, px: 1, py: 0.5, borderRadius: 1, border: 1,
           borderColor: RANK_COLOR[x.rank] || "divider", borderLeftWidth: RANK_COLOR[x.rank] ? 4 : 1 }}>
           <Typography sx={{ fontWeight: 700, minWidth: 56, color: RANK_COLOR[x.rank] || "text.primary" }}><Num>{am(x.american)}</Num></Typography>
-          <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }}>{x.book}{x.rank === "best" ? " · Best" : x.rank === "worst" ? " · Worst" : ""}</Typography>
+          <Typography variant="body2" sx={{ flex: "1 1 112px" }}>{x.book}{x.rank === "best" ? " · Best" : x.rank === "worst" ? " · Worst" : ""}</Typography>
           <Typography variant="caption" color="text.secondary">{ageTxt(x.age_min)}{x.fresh ? "" : " · old"}</Typography>
           <MoveTag m={x.move} /><AboveFair c={c} x={x} market={market} />
         </Box>
@@ -142,21 +142,25 @@ export const ExtrasError = () => (
 );
 const Empty = ({ children }) => <Box sx={{ p: 2, border: 1, borderStyle: "dashed", borderColor: "divider", borderRadius: 2, color: "text.secondary" }}>{children}</Box>;
 const H2 = ({ children, sx }) => <Typography variant="h5" component="h2" sx={sx}>{children}</Typography>;
-function Fold({ title, summary, children, defaultExpanded = false }) {
+function Fold({ title, summary, children, defaultExpanded = false, small = false, id }) {
   return (
-    <Accordion disableGutters defaultExpanded={defaultExpanded} variant="outlined" sx={{ borderRadius: 2, "&:before": { display: "none" } }}>
-      <AccordionSummary expandIcon={<Icon d={P.expand} />} sx={{ minHeight: 56 }}>
-        <Box><Typography variant="h6" component="h3">{title}</Typography>{summary && <Typography variant="body2" color="text.secondary">{summary}</Typography>}</Box>
+    <Accordion disableGutters defaultExpanded={defaultExpanded} variant="outlined" sx={{ borderRadius: 2, "&:before": { display: "none" } }} data-testid={id}>
+      <AccordionSummary expandIcon={<Icon d={P.expand} />} sx={{ minHeight: 56 }} aria-controls={id ? `${id}-body` : undefined} id={id ? `${id}-head` : undefined}>
+        <Box><Typography variant={small ? "subtitle1" : "h6"} component="h3" sx={small ? { fontWeight: 700, lineHeight: 1.3 } : undefined}>{title}</Typography>{summary && <Typography variant="body2" color="text.secondary">{summary}</Typography>}</Box>
       </AccordionSummary>
-      <AccordionDetails sx={{ display: "grid", gap: 1.5 }}>{children}</AccordionDetails>
+      <AccordionDetails id={id ? `${id}-body` : undefined} sx={{ display: "grid", gap: 1.5, ...(small ? { px: 1.5 } : {}) }}>{children}</AccordionDetails>
     </Accordion>
   );
 }
-function Sheet({ open, onClose, title, children, actions }) {
+/* Bottom sheet. `top` (optional) stays in place above the scrolling part: the player sheet keeps its headline and its
+   Pick / Parlay buttons there, so the decision never scrolls away. */
+function Sheet({ open, onClose, title, children, actions, top }) {
+  const pad = "max(16px, env(safe-area-inset-left, 0px))";
   return (
-    <Drawer anchor="bottom" open={open} onClose={onClose} slotProps={{ paper: { sx: { borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: "88vh", pb: "env(safe-area-inset-bottom, 0px)" } } }}>
-      <Box sx={{ width: 40, height: 4, borderRadius: 2, bgcolor: "divider", mx: "auto", mt: 1 }} />
-      <Box sx={{ px: "max(16px, env(safe-area-inset-left, 0px))", pt: 1, pb: 2, display: "grid", gap: 1.5, overflowY: "auto", maxWidth: 720, width: "100%", mx: "auto" }}>
+    <Drawer anchor="bottom" open={open} onClose={onClose} slotProps={{ paper: { sx: { borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: "88vh", pb: "env(safe-area-inset-bottom, 0px)", ...(top ? { overflow: "hidden" } : {}) } } }}>
+      <Box sx={{ width: 40, height: 4, borderRadius: 2, bgcolor: "divider", mx: "auto", mt: 1, flexShrink: 0 }} />
+      {top && <Box data-testid="sheet-top" sx={{ px: pad, pt: 1, pb: 1.25, display: "grid", gap: 1, flexShrink: 0, maxWidth: 720, width: "100%", mx: "auto", borderBottom: 1, borderColor: "divider" }}>{top}</Box>}
+      <Box data-testid="sheet-scroll" sx={{ px: pad, pt: top ? 1.5 : 1, pb: 2, display: "grid", gap: 1.5, alignContent: "start", overflowY: "auto", maxWidth: 720, width: "100%", mx: "auto", ...(top ? { flex: "1 1 auto", minHeight: 0 } : {}) }}>
         {title && <Typography variant="h6" component="h2">{title}</Typography>}
         {children}
         <Stack direction="row" sx={{ gap: 1, justifyContent: "flex-end" }}>{actions}<Button size="large" onClick={onClose}>Close</Button></Stack>
@@ -379,29 +383,72 @@ function PlayerSheet({ c, onClose }) {
       c.proj.rec_yds != null && `${Math.round(c.proj.rec_yds)} rec yds`, c.proj.pass_yds != null && `${Math.round(c.proj.pass_yds)} pass yds`].filter(Boolean).join(" · ") + " (targets use est. routes)"]] : []),
     ["Scores by", c.rec_share != null ? `${Math.round(c.rec_share * 100)}% catching, ${Math.round((1 - c.rec_share) * 100)}% running` : "—"],
     ["Weather", wxText(g.weather) || "No forecast"]];
+  // ---- headline for the market being picked (the Anytime / 2+ switch on TD Picks)
+  const mk = S.weekMarket; const two = mk === "2plus_td"; const head = two ? FB.p2plus(ch) : ch; const rng = two ? null : rangeFor(c, true);
+  const hp = priceFor(c, g.week, mk); const name = c.full_name || c.player;
+  const boards = { anytime_td: boardFor(c, g.week, "anytime_td"), "2plus_td": boardFor(c, g.week, "2plus_td") };
+  const nBooks = (boards[mk] ? boards[mk].books : []).length;
+  const group = (keys) => rows.filter(([k]) => keys.includes(k));
+  const DL = ({ items }) => (
+    <Box component="dl" sx={{ display: "grid", gridTemplateColumns: "minmax(110px, max-content) minmax(0,1fr)", gap: "6px 12px", m: 0 }}>
+      {items.map(([k, v]) => [<Typography key={k} component="dt" variant="body2" color="text.secondary">{k}</Typography>,
+        <Typography key={k + "v"} component="dd" variant="body2" sx={{ m: 0 }}>{v}</Typography>])}
+    </Box>);
   return (
-    <Sheet open onClose={onClose} title={`${c.full_name || c.player} · ${c.pos || ""} ${c.team}`}
-      actions={<>{S.isAdmin && !locked && c.injury !== "Inactive" && <Button size="large" color="error" onClick={() => markInactive(c)}>Mark inactive</Button>}
-        {!locked && c.quality !== "unavailable" && <Button size="large" variant="outlined" onClick={() => addLeg({ ...c, game_id: g.game_id }, S.weekMarket)}>Add to parlay{S.weekMarket === "2plus_td" ? " (2+)" : ""}</Button>}<PickButton c={c} g={g} locked={locked} size="large" /></>}>
-      <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {kick(g)}</Typography>
-      {windHit(c, g) && <Alert severity="warning" sx={{ borderRadius: 2 }}>Wind {Math.round(g.weather.wind_mph)} mph forecast. Most of {c.full_name || c.player}'s touchdown chances come from catches, and passing is harder in strong wind.</Alert>}
-      {c.injury && <Alert severity={c.quality === "unavailable" ? "error" : "warning"} sx={{ borderRadius: 2 }}>{c.injury}{c.override ? ` (set by an admin${c.override.note ? `: ${c.override.note}` : ""})` : " on the injury report"}</Alert>}
-      <LastGame c={c} full />
-      {["anytime_td", "2plus_td"].map((m) => (
-        <Box key={m} sx={{ display: "grid", gap: 0.5 }}>
-          <Typography variant="subtitle2" component="h3">{MARKETS[m]} prices by sportsbook</Typography>
-          <BookList c={c} g={g} market={m} />
+    <Sheet open onClose={onClose}
+      actions={S.isAdmin && !locked && c.injury !== "Inactive" && <Button size="large" color="error" onClick={() => markInactive(c)}>Mark inactive</Button>}
+      top={<>
+        <Stack direction="row" sx={{ alignItems: "flex-start", gap: 1 }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="h6" component="h2">{name} · {c.pos || ""} {c.team}</Typography>
+            <Typography variant="body2" color="text.secondary">{g.away} at {g.home} · {kick(g)}</Typography>
+          </Box>
+          <IconButton onClick={onClose} aria-label="Close player details" sx={{ width: 44, height: 44, mt: -0.5, mr: -1 }}><Icon d={P.close} /></IconButton>
+        </Stack>
+        <Box data-testid="sheet-headline" sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
+          <Box sx={{ p: 1, borderRadius: 2, bgcolor: "action.hover" }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{two ? "Chance of 2+ TDs (est.)" : "Chance to score"}</Typography>
+            <Typography sx={{ fontSize: 26, fontWeight: 700, lineHeight: 1.15 }}><Num>{pct(head)}</Num></Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}><Num>{rng ? `likely ${pct(rng.lo)} to ${pct(rng.hi)}` : `fair ${am(FB.probToAmerican(head))}`}</Num></Typography>
+          </Box>
+          <Box sx={{ p: 1, borderRadius: 2, bgcolor: "action.hover" }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{hp ? (hp.stale ? "Latest price (over 2 h old)" : "Best price") : "Best price"}</Typography>
+            <Typography sx={{ fontSize: 26, fontWeight: 700, lineHeight: 1.15 }}><Num>{hp ? am(hp.american) : "—"}</Num></Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{hp ? `${hp.book}${nBooks > 1 ? ` · best of ${nBooks}` : ""}` : "No price yet"}</Typography>
+          </Box>
         </Box>
-      ))}
-      <Typography variant="caption" color="text.secondary">Green = best price, red = worst. ▲ the price pays more than its first price this week, ▼ it pays less ("big" = 2+ points of implied chance). Value math uses only prices under 2 hours old. <Box component="span" sx={{ color: "secondary.main", fontWeight: 700 }}>Above fair</Box> = an anytime price under 2 hours old whose implied chance is {FB.ABOVE_FAIR_PTS}+ points below the model's chance (the book pays clearly more than fair odds). It's the model's view, not a proven edge: in testing, sportsbook prices predicted better than the model.</Typography>
-      <Box component="dl" sx={{ display: "grid", gridTemplateColumns: "minmax(110px, max-content) minmax(0,1fr)", gap: "6px 12px", m: 0 }}>
-        {rows.map(([k, v]) => [<Typography key={k} component="dt" variant="body2" color="text.secondary">{k}</Typography>,
-          <Typography key={k + "v"} component="dd" variant="body2" sx={{ m: 0 }}>{v}</Typography>])}
-      </Box>
-      <Typography variant="body2"><b>Main reason:</b> {c.main_reason || c.reason}</Typography>
-      <Typography variant="body2"><b>Biggest uncertainty:</b> {c.uncertainty || c.risk}</Typography>
-      {c.matchup_why && <Typography variant="body2" color="text.secondary"><b>Matchup:</b> {c.matchup_why}</Typography>}
-      {!S.uid && <Typography variant="body2" color="text.secondary">Sign in to Claude to pick.</Typography>}
+        {locked ? <Typography variant="body2" color="text.secondary">This game has kicked off. Picks are locked.</Typography>
+          : c.quality === "unavailable" ? <Typography variant="body2" color="text.secondary">Not available to pick this week.</Typography>
+          : <Stack direction="row" sx={{ gap: 1 }}>
+              <Button size="large" variant="outlined" color="secondary" onClick={() => addLeg({ ...c, game_id: g.game_id }, mk)} sx={{ flex: 1, px: 1 }}>Add to parlay{two ? " (2+)" : ""}</Button>
+              <Box sx={{ flex: 1, display: "flex", "& > button": { flex: 1 } }}><PickButton c={c} g={g} locked={locked} size="large" /></Box>
+            </Stack>}
+        {!S.uid && !locked && <Typography variant="caption" color="text.secondary">Sign in to Claude to pick.</Typography>}
+      </>}>
+      {windHit(c, g) && <Alert severity="warning" sx={{ borderRadius: 2 }}>Wind {Math.round(g.weather.wind_mph)} mph forecast. Most of {name}'s touchdown chances come from catches, and passing is harder in strong wind.</Alert>}
+      {c.injury && <Alert severity={c.quality === "unavailable" ? "error" : "warning"} sx={{ borderRadius: 2 }}>{c.injury}{c.override ? ` (set by an admin${c.override.note ? `: ${c.override.note}` : ""})` : " on the injury report"}</Alert>}
+      <Typography variant="body2" data-testid="sheet-why"><b>Why:</b> {c.main_reason || c.reason}</Typography>
+      <Fold small id="ps-prices" title="Prices by sportsbook" defaultExpanded summary={boards.anytime_td ? `${boards.anytime_td.books.length} book${boards.anytime_td.books.length > 1 ? "s" : ""} for anytime TD${boards["2plus_td"] ? `, ${boards["2plus_td"].books.length} for 2+ TDs` : ""}` : "No prices yet"}>
+        {["anytime_td", "2plus_td"].map((m) => (
+          <Box key={m} sx={{ display: "grid", gap: 0.5 }}>
+            <Typography variant="subtitle2" component="h4">{MARKETS[m]} prices by sportsbook</Typography>
+            <BookList c={c} g={g} market={m} />
+          </Box>
+        ))}
+        <Typography variant="caption" color="text.secondary">Green = best price, red = worst. ▲ the price pays more than its first price this week, ▼ it pays less ("big" = 2+ points of implied chance). Value math uses only prices under 2 hours old. <Box component="span" sx={{ color: "secondary.main", fontWeight: 700 }}>Above fair</Box> = an anytime price under 2 hours old whose implied chance is {FB.ABOVE_FAIR_PTS}+ points below the model's chance (the book pays clearly more than fair odds). It's the model's view, not a proven edge: in testing, sportsbook prices predicted better than the model.</Typography>
+      </Fold>
+      <Fold small id="ps-chance" title="Chance and value" summary={`Fair odds ${am(bl ? FB.probToAmerican(ch) : c.fair_american)}${bl ? " · model and prices combined" : " · model only"}`}>
+        <DL items={group(["Chance to score", "Likely range", "Fair odds", "2+ TD chance", "Fair price", "Value check price", "Model vs price"])} />
+      </Fold>
+      <Fold small id="ps-usage" title="Usage and role" summary={`${Math.round(c.share * 100)}% of ${c.team}'s scoring chances · ${c.i10} touches inside the 10`}>
+        <LastGame c={c} full />
+        <DL items={group(["Usage", "Carries inside the 5", "End-zone targets", "Depth chart", "Role change", "Projection", "Scores by"])} />
+      </Fold>
+      <Fold small id="ps-matchup" title="Matchup and risks" summary={wxText(g.weather) || "No forecast"}>
+        <Typography variant="body2"><b>Biggest uncertainty:</b> {c.uncertainty || c.risk}</Typography>
+        {c.matchup_why && <Typography variant="body2"><b>Matchup:</b> {c.matchup_why}</Typography>}
+        <DL items={group(["Weather"])} />
+      </Fold>
     </Sheet>
   );
 }
@@ -1097,6 +1144,10 @@ export function LinesView() {
   const rows = allLineRows(week).filter((r) => (r.market || "anytime_td") === market);
   const latest = {}; rows.forEach((r) => { const k = `${r.gsis_id || r.player}|${r.book}`; if (!latest[k] || Date.parse(r.captured_at) > Date.parse(latest[k].captured_at)) latest[k] = r; });
   const list = Object.values(latest).sort((a, b) => FB.americanToProb(b.american) - FB.americanToProb(a.american));
+  // the list is hundreds of prices long: show ten, and let a search or "Show all" bring up the rest
+  const [q, setQ] = useState(""); const [showAll, setShowAll] = useState(false); const qq = q.trim().toLowerCase();
+  const found = qq ? list.filter((r) => `${r.player} ${r.team} ${r.book}`.toLowerCase().includes(qq)) : list;
+  const PRICE_PAGE = 10; const shown = showAll || qq ? found.slice(0, qq && !showAll ? 40 : found.length) : found.slice(0, PRICE_PAGE);
   const canWrite = !!S.uid && S.dbState === "ok";
   async function fromFile(f) {
     if (!f) return;
@@ -1112,7 +1163,7 @@ export function LinesView() {
       <DbNote />
       <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 1.25, p: 1.5, "&:last-child": { pb: 1.5 } }}>
         <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-          <Typography variant="h6" component="h3" sx={{ flex: 1 }}>Current lines</Typography>
+          <Typography variant="h6" component="h3" sx={{ flex: 1 }}>Add prices</Typography>
           <Button onClick={() => { resetUploadScreen(); setBookChoice("FanDuel"); setOtherBook(""); setText(""); setWho(null); setMPrice(""); setMMarket("anytime_td"); setMarket("anytime_td"); toast("Upload screen reset. Saved prices weren't changed."); }}
             aria-label="Reset the upload screen (saved prices are not deleted)" sx={{ minHeight: 44 }}>Reset</Button>
         </Stack>
@@ -1153,13 +1204,16 @@ export function LinesView() {
       </CardContent></Card>
       <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
         <Typography variant="h6" component="h3" sx={{ flex: 1 }}>{list.length} price{list.length === 1 ? "" : "s"}</Typography>
-        <ToggleButtonGroup exclusive size="small" value={market} onChange={(e, v) => v && setMarket(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 1.5, textTransform: "none" } }}>
+        <ToggleButtonGroup exclusive size="small" value={market} onChange={(e, v) => { if (v) { setMarket(v); setShowAll(false); } }} aria-label="Market" sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 1.5, textTransform: "none" } }}>
           {Object.entries(MARKETS).map(([k, l]) => <ToggleButton key={k} value={k}>{l}</ToggleButton>)}
         </ToggleButtonGroup>
       </Stack>
-      <LineMoves week={week} market={market} />
+      {list.length > 0 && <TextField label="Find a player, team or sportsbook" value={q} onChange={(e) => { setQ(e.target.value); setShowAll(false); }} slotProps={{ htmlInput: { inputMode: "search", "data-testid": "price-search" } }} />}
+      {list.length > 0 && <Typography variant="caption" color="text.secondary" role="status" data-testid="price-count">
+        {qq ? (found.length ? `${found.length} of ${list.length} prices match "${q.trim()}"${shown.length < found.length ? `; showing the first ${shown.length}` : ""}.` : `No price matches "${q.trim()}".`)
+          : shown.length < list.length ? `Showing the ${shown.length} likeliest scorers by price, of ${list.length}. Search above or show all.` : `All ${list.length} prices, likeliest scorers first.`}</Typography>}
       {!list.length && <Empty>No {MARKETS[market]} prices yet this week. Upload a sportsbook screenshot above.</Empty>}
-      {list.map((r) => {
+      {shown.map((r) => {
         const c = byId[r.gsis_id]; const imp = FB.americanToProb(r.american); const e = c && market === "anytime_td" ? FB.edge(c.p, r.american) : null;
         const canDel = r.uploaded_by === S.uid || S.isAdmin;
         return (
@@ -1177,6 +1231,9 @@ export function LinesView() {
           </CardContent></Card>
         );
       })}
+      {shown.length < found.length && <Button variant="outlined" size="large" onClick={() => setShowAll(true)}>Show all {found.length}{qq ? " matches" : " prices"}</Button>}
+      {showAll && found.length > PRICE_PAGE && <Button size="large" onClick={() => { setShowAll(false); window.scrollTo(0, 0); }}>Show fewer</Button>}
+      <LineMoves week={week} market={market} />
     </Stack>
   );
 }
@@ -1419,7 +1476,7 @@ function LineMoves({ week, market }) {
 }
 
 /* =========================== WEEKLY RANKINGS (Week tab) =========================== */
-const RANK_VIEWS = [["value", "Best Value"], ["chance", "Highest TD Chance"], ["combined", "Combined"]];
+const RANK_VIEWS = [["chance", "Highest TD Chance"], ["value", "Best Value"], ["combined", "Combined"]];
 const edgeTxt = (e) => (e < 0.05 ? "+<0.1" : `+${e.toFixed(1)}`) + " pts";
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* unavailable */ } } };
 /* Price used for a ranked row: book, odds and the time of the ODDS (captured, or upload time when that's all there is), in ET. */
@@ -1446,8 +1503,13 @@ function WeeklyRankings({ onOpen }) {
   const [open, setOpen] = useState(() => store.get("fb_rank_open") === "1");          // collapsed on the first visit
   const [chosen, setChosen] = useState(() => store.get("fb_rank_view"));               // null until the user picks a view
   useEffect(() => { const iv = setInterval(() => tick((n) => n + 1), 60000); return () => clearInterval(iv); }, []); // kickoff + stale ages
+  // opens on the plain "who is likeliest to score" list; the model-vs-price views are a choice (and say how they have done)
+  const view = RANK_VIEWS.some(([k]) => k === chosen) ? chosen : "chance";
+  useEffect(() => { if (open && view !== "chance") ensureExtras(); }, [open, view]);   // the track record comes with the results data
   const r = weekRankings(S.weekMarket); if (!r) return null;
-  const view = RANK_VIEWS.some(([k]) => k === chosen) ? chosen : r.value.length ? "value" : "chance";
+  const rec = (() => { const gr = S.grades || {}; const m = (b) => b && (b.rules || []).find((x) => x.key === "marker" && x.n);
+    const h = m(gr.betting_backtest), l = m(gr.betting); const one = (x) => `${x.wins} of ${x.n} won, ${x.roi >= 0 ? "+" : "−"}${Math.abs(x.roi * 100).toFixed(1)}% return per unit staked`;
+    return { text: [h && `${one(h)} in the historical test${gr.betting_backtest.weeks ? ` (weeks ${gr.betting_backtest.weeks.join(", ")})` : ""}`, l && `${one(l)} live so far`].filter(Boolean).join("; "), any: !!(h || l) }; })();
   const pick = (v) => { if (!v) return; setChosen(v); store.set("fb_rank_view", v); setAll(false); };
   const toggle = () => { const n = !open; setOpen(n); store.set("fb_rank_open", n ? "1" : "0"); };
   const two = S.weekMarket === "2plus_td"; const est = two ? " est." : "";
@@ -1480,7 +1542,7 @@ function WeeklyRankings({ onOpen }) {
         </Box>
         {right && <Box sx={{ textAlign: "right", flexShrink: 0, maxWidth: 96, pt: 0.25 }}>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.1 }}>{view === "value" ? "Edge" : "Score"}</Typography>
-          <Typography sx={{ fontWeight: 700, color: view === "value" ? (x.stale ? "text.primary" : "success.main") : "text.primary" }}><Num>{right}</Num></Typography>
+          <Typography sx={{ fontWeight: 700, color: "text.primary" }}><Num>{right}</Num></Typography>
           {x.stale && <Typography variant="caption" sx={{ display: "block", lineHeight: 1.15, color: "warning.main" }}>Based on stale odds</Typography>}
         </Box>}
       </Box>
@@ -1491,7 +1553,7 @@ function WeeklyRankings({ onOpen }) {
       <ButtonBase onClick={toggle} aria-expanded={open} aria-controls="weekly-rankings"
         sx={{ display: "flex", width: "100%", textAlign: "left", px: 1.5, py: 1, gap: 1, minHeight: 52, justifyContent: "flex-start" }}>
         <Typography variant="h6" component="h3" sx={{ flex: 1 }}>Weekly Rankings · {mk}</Typography>
-        {!open && r.value.length > 0 && <Typography variant="caption" color="text.secondary">{r.value.length} above fair</Typography>}
+        {!open && r.chance.length > 0 && <Typography variant="caption" color="text.secondary">{r.chance.length} players</Typography>}
         <Icon d={P.expand} sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s", color: "text.secondary" }} />
       </ButtonBase>
       {open && (
@@ -1502,6 +1564,8 @@ function WeeklyRankings({ onOpen }) {
             {RANK_VIEWS.map(([k, l]) => <ToggleButton key={k} value={k}>{l}</ToggleButton>)}
           </ToggleButtonGroup>
           <Typography variant="caption" color="text.secondary">{NOTE[view]}</Typography>
+          {view !== "chance" && !two && <Alert severity="info" icon={false} sx={{ borderRadius: 2, py: 0.25 }} data-testid="rank-record">
+            <b>How this has done:</b> {rec.any ? `bets where the model was at least ${FB.ABOVE_FAIR_PTS} points over the price: ${rec.text}. ` : ""}No rule tested so far has made money after the sportsbooks' margin, and prices have predicted better than the model. Use this list to see where the model and the books disagree, not as a tip sheet.</Alert>}
           {view !== "chance" && r.staleNote && list.length > 0 && <Alert severity="warning" sx={{ borderRadius: 2, py: 0 }}>{r.staleNote}</Alert>}
           {!list.length ? <Empty>{view === "chance" ? "No open games with model chances." : r.valueEmpty}</Empty> : (
             <Box component="ol" sx={{ m: 0, p: 0, listStyle: "none" }} aria-label={`${RANK_VIEWS.find((v) => v[0] === view)[1]} ranking`}>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Box, Button, ButtonBase, Card, CardContent, Chip, Stack, Table, TableBody, TableCell, TableHead, TableRow, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
-import { FB, useStore, ensureLineHistory, focusGame, myGamePicks, setGamePick, gamePickRows, nameOf } from "./store.js";
+import { FB, useStore, ensureLineHistory, focusGame, clearFocusLine, myGamePicks, setGamePick, gamePickRows, nameOf } from "./store.js";
+import { Icon, P } from "./icons.jsx";
 
 /* Lines tab: each game's main spread, total and moneyline at FanDuel and DraftKings (sportsbook feed), with a one-line
    read of what they imply, the better book on each side, movement this week, weather, each team's season scoring and
@@ -151,9 +152,14 @@ function MyPicksLine({ g }) {
   );
 }
 
-function GameCard({ g, books, rec, current, mode, sharp }) {
+function GameCard({ g, books, rec, current, mode, sharp, startOpen, all }) {
   const final = g.status === "final"; const started = FB.isLocked(g, Date.now());
-  const [open, setOpen] = useState(!final);                                   // finished games start collapsed
+  // every game starts as a one-line summary (the page is 13 games long); the page opens one when you arrive from Home
+  // for that game, and "Open all games" opens the lot
+  const [open, setOpen] = useState(!!startOpen);
+  const allN = all ? all.n : 0;
+  useEffect(() => { if (allN) setOpen(all.open); }, [allN]);
+  const myHere = current ? Object.values(myGamePicks()).filter((p) => p.game_id === g.game_id) : [];
   const sched = typeof g.spread_line === "number" || typeof g.total_line === "number";
   const s = books.length ? FB.lineSummary(books) : sched ? FB.lineSummary([{ spread: typeof g.spread_line === "number" ? { home_line: -g.spread_line } : null, total: typeof g.total_line === "number" ? { line: g.total_line } : null }]) : null;
   // the win chance comes from the sharp books' no-margin moneyline when the feed has it
@@ -176,11 +182,14 @@ function GameCard({ g, books, rec, current, mode, sharp }) {
           <Typography variant="h6" component="h4" sx={{ flex: 1 }}>{g.away} at {g.home}</Typography>
           <Chip size="small" variant="outlined" color={final ? "default" : started ? "warning" : "success"}
             label={final ? `Final · ${g.away} ${g.away_score}, ${g.home} ${g.home_score}` : started ? "Started" : "Open"} />
+          <Icon d={P.expand} sx={{ color: "text.secondary", transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
         </Stack>
         <Typography variant="body2" color="text.secondary">{kick(g)}{venue ? ` · ${venue}` : ""}</Typography>
         {summary && <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 600 }} data-testid="line-summary">{summary}{!books.length && sched ? " (closing line from the schedule file)" : ""}</Typography>}
         {final && results.length > 0 && <Typography variant="body2" sx={{ mt: 0.25 }} data-testid="line-result">
           <b>Result:</b> {sameResult ? results[0][1] : results.map(([b, r]) => `${b}: ${r}`).join(" · ")}</Typography>}
+        {!open && myHere.length > 0 && <Typography variant="body2" sx={{ mt: 0.25, color: "primary.main", fontWeight: 600 }} data-testid="my-pick-summary">
+          Your pick{myHere.length > 1 ? "s" : ""}: {myHere.map((p) => `${pickText(p)} ${am(p.american)}`).join(" · ")}</Typography>}
       </ButtonBase>
       {open && (
         <CardContent sx={{ display: "grid", gap: 0.75, pt: 0.5, "&:last-child": { pb: 1.5 } }}>
@@ -215,7 +224,14 @@ function GameCard({ g, books, rec, current, mode, sharp }) {
 export function GameLinesView() {
   const S = useStore(); const f = S.oddsFeed; const cur = S.slate.week;
   const [week, setWeek] = useState(cur); const [mode, setMode] = useState("price");
+  const [all, setAll] = useState({ n: 0, open: false });        // "Open all games" / "Close all games"
+  const [focusId] = useState(() => S.focusLine || null);        // arrived from Home for one game: it starts open
   useEffect(() => { ensureLineHistory(); }, []);
+  useEffect(() => { if (!focusId) return; clearFocusLine();
+    const t = setTimeout(() => { const el = document.querySelector(`[data-game="${focusId}"]`); if (el) el.scrollIntoView({ block: "start" }); }, 60); return () => clearTimeout(t); }, [focusId]);
+  const jump = (i) => { const el = document.getElementById(`gl-day-${i}`); if (!el) return;
+    el.scrollIntoView({ block: "start", behavior: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    const h = el.querySelector("h3"); if (h) h.focus({ preventScroll: true }); };
   const weeks = useMemo(() => [...new Set(S.games.map((g) => g.week))].filter((w) => w <= cur).sort((a, b) => b - a), [S.games, cur]);
   const by = useMemo(() => {
     const out = {};
@@ -239,22 +255,32 @@ export function GameLinesView() {
   return (
     <Stack spacing={1.5}>
       <Typography variant="h5" component="h2">Game lines · Week {week}</Typography>
-      <ToggleButtonGroup exclusive size="small" value={week} onChange={(e, v) => v && setWeek(v)} aria-label="Week"
+      <ToggleButtonGroup exclusive size="small" value={week} onChange={(e, v) => { if (v) { setWeek(v); setAll({ n: 0, open: false }); } }} aria-label="Week"
         sx={{ overflowX: "auto", maxWidth: "100%", "& .MuiToggleButton-root": { minHeight: 44, minWidth: 52, px: 1, flexShrink: 0, textTransform: "none" } }}>
         {weeks.map((w) => <ToggleButton key={w} value={w} aria-label={`Week ${w}`}>Wk {w}</ToggleButton>)}
       </ToggleButtonGroup>
       <Typography variant="body2" color="text.secondary">
         {week === cur ? "Main point spread, total and moneyline at FanDuel and DraftKings, from the sportsbook feed. The smaller number beside each line is its price in American odds."
-          : "Past week: final scores against the line. Sportsbook lines are shown where they were saved (from Week 11); otherwise the schedule file's closing spread and total."} For reference only: the app doesn't make picks on these.
+          : "Past week: final scores against the line. Sportsbook lines are shown where they were saved (from Week 11); otherwise the schedule file's closing spread and total."} The app doesn't recommend a side; any game pick is your own call.
       </Typography>
       <GamePicksPanel week={week} />
       {week === cur && any && <ValuePanel by={by} games={games} mode={mode} setMode={setMode} feed={f} />}
       {week === cur && !any && <Alert severity="info" sx={{ borderRadius: 2 }}>{f && f.pulled_at ? "No game lines for this week yet. They arrive with the next sportsbook feed pull." : "Game lines come from the sportsbook feed, which isn't running yet (Admin → Sportsbook feed)."}</Alert>}
-      {groups.length === 0 && null}
-      {groups.map(([label, gs]) => (
-        <Stack key={label} spacing={1} component="section" aria-label={label}>
-          <Typography variant="overline" component="h3" color="text.secondary" sx={{ lineHeight: 1.6, fontWeight: 700 }}>{label} · {gs.length} game{gs.length > 1 ? "s" : ""}</Typography>
-          {gs.map((g) => <GameCard key={g.game_id} g={g} rec={rec} current={week === cur} mode={week === cur ? mode : "price"} sharp={week === cur && f && f.week === cur ? (f.sharp_lines || {})[g.game_id] : null} books={Object.values(by[g.game_id] || {}).sort((a, b) => a.book.localeCompare(b.book))} />)}
+      {games.length > 0 && (
+        <Box component="nav" aria-label="Jump to a day" data-testid="day-jump" sx={{ position: "sticky", top: 0, zIndex: 3, bgcolor: "background.default", py: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
+          <Box sx={{ flex: 1, minWidth: 0, display: "flex", gap: 0.75, overflowX: "auto", py: 0.25 }}>
+            {groups.length > 1 && groups.map(([label, gs], i) => (
+              <Button key={label} variant="outlined" onClick={() => jump(i)} aria-label={`Jump to ${label}, ${gs.length} game${gs.length > 1 ? "s" : ""}`}
+                sx={{ minHeight: 44, flexShrink: 0, px: 1.25, borderRadius: 6, bgcolor: "background.paper", whiteSpace: "nowrap", fontSize: 14 }}>{label.replace("Sunday ", "Sun ").replace("Thursday", "Thu").replace("Monday", "Mon").replace("Saturday", "Sat").replace("Friday", "Fri")} · {gs.length}</Button>))}
+          </Box>
+          <Button onClick={() => setAll({ n: all.n + 1, open: !all.open })} aria-pressed={all.open} sx={{ minHeight: 44, flexShrink: 0, whiteSpace: "nowrap" }}>{all.open ? "Close all" : "Open all"}</Button>
+        </Box>
+      )}
+      {games.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ mt: "-4px !important" }}>Tap a game for both books' lines{week === cur ? ", your pick and the details" : " and the details"}.</Typography>}
+      {groups.map(([label, gs], i) => (
+        <Stack key={label} id={`gl-day-${i}`} spacing={1} component="section" aria-label={label} sx={{ scrollMarginTop: 64 }}>
+          <Typography variant="overline" component="h3" tabIndex={-1} color="text.secondary" sx={{ lineHeight: 1.6, fontWeight: 700, outline: "none" }}>{label} · {gs.length} game{gs.length > 1 ? "s" : ""}</Typography>
+          {gs.map((g) => <GameCard key={g.game_id} g={g} rec={rec} current={week === cur} startOpen={g.game_id === focusId} all={all} mode={week === cur ? mode : "price"} sharp={week === cur && f && f.week === cur ? (f.sharp_lines || {})[g.game_id] : null} books={Object.values(by[g.game_id] || {}).sort((a, b) => a.book.localeCompare(b.book))} />)}
         </Stack>
       ))}
       <Tracker log={(f && f.value_log) || []} />
