@@ -773,7 +773,7 @@ export async function uploadLines(rows, source) {
     S.lastSkipped = skipped; emit();
     toast(`Added ${rows.length} price${rows.length > 1 ? "s" : ""}${un ? ` (${un} couldn't be matched to a player)` : ""}${skipped.length ? `; skipped ${skipped.length} (see list)` : ""}. Live for everyone now.`);
     return true;
-  } catch (e) { toast(e && e.code === "too_many" ? `Not saved: over ${LINE_MAX_ROWS.toLocaleString()} prices this week for games that haven't started. Remove some on the Uploads tab first.` : e && e.code === "invalid_argument" ? "Your access is view-only, so lines can't be saved." : "Couldn't save the lines."); return false; }
+  } catch (e) { toast(e && e.code === "too_many" ? `Not saved: over ${LINE_MAX_ROWS.toLocaleString()} prices this week for games that haven't started. Remove some under TD Picks, Prices first.` : e && e.code === "invalid_argument" ? "Your access is view-only, so lines can't be saved." : "Couldn't save the lines."); return false; }
 }
 export async function deleteLines(uid, filter) {
   try {

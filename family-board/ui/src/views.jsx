@@ -31,7 +31,7 @@ const RESULT = { win: ["Won", "success"], loss: ["Lost", "error"], void: ["Void"
 const ageTxt = (m) => (m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`);
 const RANK_COLOR = { best: "success.main", worst: "error.main" };
 /* A line move since the first price of the week: green = pays more now, red = pays less. Text says so too (not colour only). */
-function MoveTag({ m, short }) {
+export function MoveTag({ m, short }) {
   if (!m) return null; const up = m.dir === "longer";
   return (
     <Typography component="span" variant="caption" sx={{ color: up ? "success.main" : "error.main", fontWeight: m.big ? 700 : 500, whiteSpace: "nowrap" }}
@@ -54,7 +54,7 @@ function AboveFair({ c, x, market }) {
 /* Every book's latest price for one market: best in green, worst in red (labelled), each with its age and line move. */
 function BookList({ c, g, market }) {
   useStore(); const b = boardFor(c, g.week, market);
-  if (!b) return <Typography variant="body2" color="text.secondary">No {MARKETS[market]} prices uploaded yet (Uploads tab).</Typography>;
+  if (!b) return <Typography variant="body2" color="text.secondary">No {MARKETS[market]} prices yet (add them under TD Picks, Prices).</Typography>;
   return (
     <Box component="ul" sx={{ m: 0, p: 0, listStyle: "none", display: "grid", gap: 0.5 }} aria-label={`${MARKETS[market]} prices by sportsbook`}>
       {b.books.map((x) => (
@@ -183,7 +183,7 @@ export function WeekView() {
       <DbNote />
       <Box>
         <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
-          <H2>Week {s.week}</H2>
+          <H2>TD Picks · Week {s.week}</H2>
           <Button size="large" startIcon={<Icon d={P.info} />} onClick={() => setHow(true)}>How this works</Button>
         </Stack>
         <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · sportsbook prices come from {S.oddsFeed && (S.oddsFeed.rows || []).length && S.oddsFeed.week === S.slate.week ? "the FanDuel / DraftKings feed and family uploads" : "family uploads"}{S.slate.blend && S.slate.blend.enabled ? ` · ${S.slate.blend.positions.join("/")} chances combine the model with those prices when fresh` : ""}</Typography>
@@ -225,7 +225,7 @@ function wxText(w) {
   return (w.roof === "retractable" ? "Retractable roof · " : "") + bits.join(" · ");
 }
 function CrewInfo({ g }) {
-  const S = useStore(); const r = refFor(g); if (!r) return <Typography variant="caption" color="text.secondary" sx={{ display: "block", pb: 0.5 }}>Referee not assigned yet (admins can add it on the Uploads tab).</Typography>;
+  const S = useStore(); const r = refFor(g); if (!r) return <Typography variant="caption" color="text.secondary" sx={{ display: "block", pb: 0.5 }}>Referee not assigned yet (admins can add it under TD Picks, Prices).</Typography>;
   const c = crewIndex(r.name); const L = S.slate.referees && S.slate.referees.league;
   const cmp = (v, l) => (v > l * 1.08 ? "above avg" : v < l * 0.92 ? "below avg" : "avg");
   return (
@@ -301,8 +301,8 @@ function OppAllowed({ t }) {
   );
 }
 
-function PickButton({ c, g, locked, size = "medium" }) {
-  const S = useStore(); const mk = S.weekMarket; const key = FB.pickKey(g.week, c.gsis_id, mk); const picked = !!myItems()[key]; const two = mk === "2plus_td";
+export function PickButton({ c, g, locked, size = "medium", market }) {
+  const S = useStore(); const mk = market || S.weekMarket; const key = FB.pickKey(g.week, c.gsis_id, mk); const picked = !!myItems()[key]; const two = mk === "2plus_td";
   const disabled = locked || !S.uid || S.dbState === "off" || c.quality === "unavailable";
   return (
     <Button variant={picked ? "outlined" : "contained"} size={size} disabled={disabled && !picked}
@@ -364,7 +364,7 @@ function PlayerSheet({ c, onClose }) {
       const fp = rows[0].fair_p; const n = Math.max(...rows.map((x) => x.fair_n || 1));
       return [["Fair price", `${pct1(fp)} (${am(FB.probToAmerican(fp))}) from ${n} exchange${n > 1 ? "s" : ""} that post both Yes and No, margin removed · ${rows.map((x) => { const v = FB.betValue(fp, x.american); return `${x.book} ${am(x.american)} ${v >= 0 ? `is worth +${(v * 100).toFixed(1)}%` : `costs ${Math.abs(v * 100).toFixed(1)}%`}`; }).join(" · ")} of the stake`]];
     })(),
-    ["Value check price", pr ? `${pr.stale ? "Latest (over 2 h old)" : "Best fresh"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)} · ${timeBasis(pr.time_source)}` : "No anytime price uploaded yet (Uploads tab)"],
+    ["Value check price", pr ? `${pr.stale ? "Latest (over 2 h old)" : "Best fresh"}: ${pr.book} ${am(pr.american)} (implied ${pct1(e.implied)}) · ${et(pr.captured_at, { hour: "numeric", minute: "2-digit" })} · from ${nameOf(pr.uploaded_by)} · ${timeBasis(pr.time_source)}` : "No anytime price yet (add one under TD Picks, Prices)"],
     ...(e ? [["Model vs price", pr.stale
       ? `Price is over ${FB.PRICE_FRESH_MIN / 60} hours old and may no longer be available, so no EV is shown.`
       : `Model ${pct1(c.p)} vs implied ${pct1(e.implied)} (book margin included): ${e.edgePts >= 0 ? "+" : ""}${e.edgePts.toFixed(1)} percentage points. Conditional EV ${e.evPerDollar >= 0 ? "+" : "-"}$${Math.abs(e.evPerDollar).toFixed(2)} per $1 staked, only if the model's chance is right and this price is still available (its time is unverified). Unproven: in testing (weeks 3-4) sportsbook prices predicted better than the model.`]] : []),
@@ -522,7 +522,7 @@ export function TouchdownsView() {
   const active = ["team", "def", "type", "status", "scorer", "defender", "game"].filter((k) => f[k]).length;
   return (
     <Stack spacing={1.5}>
-      <H2>Touchdowns</H2>
+      <H2>TD Log</H2>
       <ResultsStatus />
       <LivePanel />
       <Box sx={{ overflowX: "auto", mx: -0.5, px: 0.5, pb: 0.5 }}>
@@ -791,7 +791,7 @@ function MyPicks() {
   const weeks = [...new Set(items.map((p) => p.week))];
   return (
     <Stack spacing={1.5}>
-      {!items.length && <Empty>No picks yet. Open This Week and tap Pick on a player. You can change picks until each game kicks off.</Empty>}
+      {!items.length && <Empty>No picks yet. Open TD Picks and tap Pick on a player. You can change picks until each game kicks off.</Empty>}
       {weeks.map((w) => {
         const list = items.filter((p) => p.week === w); const rs = list.map((p) => settlePick(S.uid, p));
         const wins = rs.filter((r) => r.state === "win").length;
@@ -1058,7 +1058,7 @@ export function ParlaysView() {
         <Typography variant="h6" component="h3">Build a parlay</Typography>
         <Autocomplete options={options} value={pick} onChange={(e, v) => { if (v) { addLeg(v); setPick(null); } }} getOptionLabel={(o) => o.label}
           isOptionEqualToValue={(a, b) => a.gsis_id === b.gsis_id} renderInput={(p) => <TextField {...p} label="Add a player (open games)" />} />
-        {!legs.length && <Typography variant="body2" color="text.secondary">Add players here, from a player's details on This week, or load a suggested slate below.</Typography>}
+        {!legs.length && <Typography variant="body2" color="text.secondary">Add players here, from a player's row or details on TD Picks, or load a suggested slate below.</Typography>}
         {legs.map((l) => { const g = S.gameById[l.game_id] || {}; return (
           <Stack key={l.gsis_id} direction="row" sx={{ alignItems: "center", gap: 1 }}>
             <Box sx={{ flex: 1, minWidth: 0 }}><Typography sx={{ fontWeight: 600 }} noWrap>{l.player} <Typography component="span" variant="caption" color="text.secondary">{l.pos} {l.team}</Typography></Typography>
@@ -1107,7 +1107,7 @@ export function LinesView() {
   const mine = (S.lines[S.uid] || []).length;
   return (
     <Stack spacing={1.5}>
-      <H2>Uploads · week {week}</H2>
+      <H2>Prices · Week {week}</H2>
       <RefereeUploads />
       <DbNote />
       <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 1.25, p: 1.5, "&:last-child": { pb: 1.5 } }}>
@@ -1311,7 +1311,7 @@ function LiveRecord() {
       <TableHead><TableRow>{["Chance band", "Players", "Forecast", "Scored"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead>
       <TableBody>{m.calibration.map((b) => <TableRow key={b.bin}><TableCell>{b.bin}</TableCell><TableCell><Num>{b.n}</Num></TableCell><TableCell><Num>{pct(b.pred)}</Num></TableCell><TableCell><Num>{pct(b.actual)}</Num></TableCell></TableRow>)}</TableBody>
     </Table></TableContainer>
-    <Typography variant="body2" color="text.secondary">{k && k.n && k.log_loss_market_raw == null ? "The market record is in an older format; it will update at the next data refresh." : k && k.n ? `Against uploaded sportsbook prices (${k.n} player-games, weeks ${k.weeks.join(", ")}): model log loss ${k.log_loss_model} vs the books' raw implied chances ${k.log_loss_market_raw} (margin included; lower is better)${k.log_loss_model < k.log_loss_market_raw ? ", model ahead on this sample" : ", books ahead"}. Value Play stays off until 200+ priced player-games show the model ahead.` : "No uploaded prices have been graded yet. Upload lines before kickoff on the Uploads tab to build the model-vs-market record (200+ priced player-games needed before Value Play can switch on)."}</Typography>
+    <Typography variant="body2" color="text.secondary">{k && k.n && k.log_loss_market_raw == null ? "The market record is in an older format; it will update at the next data refresh." : k && k.n ? `Against uploaded sportsbook prices (${k.n} player-games, weeks ${k.weeks.join(", ")}): model log loss ${k.log_loss_model} vs the books' raw implied chances ${k.log_loss_market_raw} (margin included; lower is better)${k.log_loss_model < k.log_loss_market_raw ? ", model ahead on this sample" : ", books ahead"}. Value Play stays off until 200+ priced player-games show the model ahead.` : "No uploaded prices have been graded yet. Add prices before kickoff under TD Picks, Prices to build the model-vs-market record (200+ priced player-games needed before Value Play can switch on)."}</Typography>
   </>;
 }
 

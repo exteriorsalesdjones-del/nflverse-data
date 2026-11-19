@@ -1,14 +1,38 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AppBar, Badge, Box, BottomNavigation, BottomNavigationAction, Button, ButtonBase, Container, CssBaseline, IconButton, Paper, Snackbar, Stack, ThemeProvider, Toolbar, Typography, createTheme, Alert } from "@mui/material";
+import { AppBar, Box, BottomNavigation, BottomNavigationAction, Button, ButtonBase, Container, CssBaseline, IconButton, Paper, Snackbar, Stack, ThemeProvider, Toolbar, Typography, createTheme, Alert } from "@mui/material";
 import { FB, useStore, loadData, connect, setToast, myItems, ensureExtras, allLineRows } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 import { ResearchView } from "./research.jsx";
+import { HomeView } from "./home.jsx";
 import { GameLinesView } from "./gamelines.jsx";
 import { WeekView, TouchdownsView, BoardView, AdminView, ParlaysView, LinesView, DefenseView } from "./views.jsx";
 
-const TABS = [["week", "TD's", P.week], ["parlays", "Parlays", P.parlays], ["gamelines", "Lines", P.lines], ["uploads", "Uploads", P.upload], ["defense", "Defense", P.defense], ["touchdowns", "TD Log", P.tds], ["board", "Board", P.board], ["research", "Research", P.analysis]];
-const ROUTES = ["week", "parlays", "uploads", "lines", "defense", "touchdowns", "board", "picks", "admin", "analysis", "research", "gamelines"];
+/* Five destinations. Every older page still has its own address (#parlays, #uploads, #touchdowns, ...) and now lives
+   inside one of them: SECTION says which tab a page belongs to, SUBNAV lists the pages inside a tab. */
+const TABS = [["home", "Home", P.home], ["week", "TD Picks", P.week], ["gamelines", "Lines", P.lines], ["board", "Family", P.board], ["research", "Research", P.analysis]];
+const ROUTES = ["home", "week", "parlays", "uploads", "lines", "defense", "touchdowns", "board", "picks", "admin", "analysis", "research", "gamelines"];
+const SECTION = { home: "home", week: "week", parlays: "week", uploads: "week", lines: "week", gamelines: "gamelines", board: "board", picks: "board",
+  research: "research", analysis: "research", touchdowns: "research", defense: "research" };
+const SUBNAV = { week: ["TD Picks pages", [["week", "Players"], ["parlays", "Parlays"], ["uploads", "Prices"]]],
+  research: ["Research pages", [["research", "Stats & tests"], ["touchdowns", "TD Log"], ["defense", "Defense"]]] };
+const PAGE = { lines: "uploads", analysis: "research" };   // older addresses for the same page
+
+/* Pages inside a tab: plain links styled as underlined tabs (the current one is marked for screen readers). */
+function SubNav({ label, items, value, notes }) {
+  return (
+    <Box component="nav" aria-label={label} sx={{ display: "flex", borderBottom: 1, borderColor: "divider", mb: 1.5 }}>
+      {items.map(([k, l]) => { const on = k === value; const n = notes[k];
+        return (
+          <ButtonBase key={k} component="a" href={`#${k}`} aria-current={on ? "page" : undefined}
+            sx={{ flex: 1, minHeight: 48, px: 0.5, gap: 0.75, fontSize: 15, fontWeight: on ? 700 : 500, color: on ? "text.primary" : "text.secondary",
+              borderBottom: 3, borderColor: on ? "primary.main" : "transparent", mb: "-1px", "&:focus-visible": { outline: 2, outlineColor: "primary.main", outlineOffset: -2 } }}>
+            {l}{n ? <Box component="span" aria-label={n[1]} sx={{ px: 0.75, minWidth: 22, borderRadius: 5, fontSize: 12, fontWeight: 700, lineHeight: "20px", textAlign: "center", bgcolor: n[2] || "action.selected", color: (t) => (n[2] ? t.palette.getContrastText(n[2]) : t.palette.text.primary) }}>{n[0]}</Box> : null}
+          </ButtonBase>
+        ); })}
+    </Box>
+  );
+}
 
 /* Follows the viewer's theme: an explicit data-theme on <html>, otherwise the OS setting. */
 function useMode() {
@@ -57,15 +81,13 @@ function makeTheme(mode) {
       // readable in both themes: unselected uses the secondary text colour, selected the primary text colour (4.5:1 or better)
       MuiToggleButton: { styleOverrides: { root: { color: dark ? "#a9b5ad" : "#55625a", "&.Mui-selected": { color: dark ? "#e7ece6" : "#123f28" } } } },
       MuiChip: { styleOverrides: { root: { fontWeight: 600 } } },
-      // eight tabs: labels sized so none is cut off, down to a 320px-wide phone
-      MuiBottomNavigationAction: { styleOverrides: { root: { minWidth: 0, padding: "6px 2px", "@media (max-width:359px)": { padding: "6px 0" } },
-        label: { fontSize: 11, letterSpacing: "-0.01em", "&.Mui-selected": { fontSize: 11, fontWeight: 700 },
-          "@media (max-width:359px)": { fontSize: 9, letterSpacing: "-0.03em", "&.Mui-selected": { fontSize: 9 } } } } },
+      // five tabs: 13px labels fit down to a 320px-wide phone (64px per tab)
+      MuiBottomNavigationAction: { styleOverrides: { root: { minWidth: 0, padding: "6px 4px" }, label: { fontSize: 13, "&.Mui-selected": { fontSize: 13, fontWeight: 700 } } } },
     },
   });
 }
 
-const hashTab = () => { const t = (location.hash || "#week").slice(1); return ROUTES.includes(t) ? t : "week"; };
+const hashTab = () => { const t = (location.hash || "#home").slice(1); return ROUTES.includes(t) ? t : "home"; };
 
 function SlateBar() {
   const S = useStore();
@@ -97,14 +119,16 @@ function App() {
     const on = () => { setTab(hashTab()); setMsg(null); window.scrollTo(0, 0); };
     window.addEventListener("hashchange", on); return () => window.removeEventListener("hashchange", on);
   }, []);
-  useEffect(() => { if (["touchdowns", "defense", "board", "picks", "admin"].includes(tab)) ensureExtras(); }, [tab]);
+  useEffect(() => { if (["home", "touchdowns", "defense", "board", "picks", "admin"].includes(tab)) ensureExtras(); }, [tab]);
   // prices older than 2 hours for games kicking off in the next 24 hours (worth refreshing before lock)
   const soon = new Set(S.slate ? S.slate.games.filter((g) => { const k = FB.etToUtcMs(g.kickoff_et) - Date.now(); return k > 0 && k < 864e5; })
     .flatMap((g) => g.teams.flatMap((t) => t.candidates.map((c) => c.gsis_id))) : []);
   const stale = S.slate ? allLineRows(S.slate.week).filter((r) => soon.has(r.gsis_id) && !FB.priceFresh(r, Date.now())).length : 0;
-  const tabs = TABS; const navValue = tab === "lines" ? "uploads" : tab === "picks" ? "board" : tab === "analysis" ? "research" : tab === "admin" ? false : tab;
+  const tabs = TABS; const navValue = SECTION[tab] || false; const sub = SUBNAV[navValue]; const page = PAGE[tab] || tab;
+  const subNotes = { parlays: S.draft.length ? [S.draft.length, `${S.draft.length} leg${S.draft.length > 1 ? "s" : ""} in your parlay`] : null,
+    uploads: stale > 0 ? [stale > 99 ? "99+" : stale, `${stale} price${stale > 1 ? "s" : ""} over 2 hours old for games in the next day`, theme.palette.warning.main] : null };
   const fresh = S.meta && `Updated ${FB.fmtEt(Date.parse(S.meta.refreshed_at), { month: "short", day: "numeric" })} ET${(Date.now() - Date.parse(S.meta.refreshed_at)) / 3600e3 > 36 ? " · may be out of date" : ""}`;
-  const View = { week: WeekView, parlays: ParlaysView, uploads: LinesView, lines: LinesView, defense: DefenseView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView, analysis: ResearchView, research: ResearchView, gamelines: GameLinesView }[tab];
+  const View = { home: HomeView, week: WeekView, parlays: ParlaysView, uploads: LinesView, lines: LinesView, defense: DefenseView, touchdowns: TouchdownsView, board: BoardView, picks: () => <BoardView mine />, admin: AdminView, analysis: ResearchView, research: ResearchView, gamelines: GameLinesView }[tab];
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -119,15 +143,14 @@ function App() {
         {S.meta && S.meta.health && !S.meta.health.ok && <Alert severity="warning" sx={{ mb: 1.5, borderRadius: 2 }}>The last data refresh had a problem: {S.meta.health.problems.join(" ")}</Alert>}
         {S.loadError ? <Alert severity="error">The season data didn't load. Reload the page; if it keeps failing, the last refresh may be incomplete.</Alert>
           : !S.meta ? <Box sx={{ p: 2, color: "text.secondary" }}>Loading the 2026 season…</Box>
-          : <View />}
+          : <>{sub && <SubNav label={sub[0]} items={sub[1]} value={page} notes={subNotes} />}<View /></>}
         {S.meta && <Typography variant="caption" color="text.secondary" sx={{ display: { xs: "block", sm: "none" }, mt: 3, textAlign: "center" }}>{fresh}</Typography>}
       </Container>
       <Box sx={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 1100 }}>
         {tab === "week" && <Box sx={{ px: "max(12px, env(safe-area-inset-left, 0px))", pb: 1, maxWidth: 900, mx: "auto" }}><SlateBar /></Box>}
         <Paper elevation={8} square sx={{ pb: "env(safe-area-inset-bottom, 0px)" }}>
           <BottomNavigation showLabels value={navValue} onChange={(e, v) => { location.hash = v; }} sx={{ height: 60, maxWidth: 900, mx: "auto" }}>
-            {tabs.map(([k, l, d]) => <BottomNavigationAction key={k} value={k} label={l}
-              icon={k === "uploads" && stale > 0 ? <Badge color="warning" badgeContent={stale} max={99}><Icon d={d} /></Badge> : <Icon d={d} />} />)}
+            {tabs.map(([k, l, d]) => <BottomNavigationAction key={k} value={k} label={l} icon={<Icon d={d} />} />)}
           </BottomNavigation>
         </Paper>
       </Box>
