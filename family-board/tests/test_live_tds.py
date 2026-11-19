@@ -143,6 +143,19 @@ check("a 2-minute difference, a week-long difference, a finished game and a game
 check("the change is reported in the refresh's health notes", any("G1 Sun 16:25 -> Sun 13:00" in x for x in BD.HEALTH["problems"]), str(BD.HEALTH["problems"]))
 (tmp2 / "odds_feed.json").unlink(); check("no feed file: the schedule is used as it is", BD.flex_kickoffs(sched).equals(sched))
 BD.OUT = old_out; BD.HEALTH["problems"].clear()
+# ---- projected total (points-per-play formula) on real data, checked by hand
+sl = {"week": 11, "games": [{"game_id": "2026_11_IND_HOU", "away": "IND", "home": "HOU"}, {"game_id": "x", "away": "IND", "home": "ZZZ"}]}
+BD.add_projected_totals(sl, pbp_all[pbp_all.season_type == "REG"] if "season_type" in pbp_all else pbp_all, games_all)
+pj = sl["games"][0]["proj"]
+qq = pbp_all[pbp_all.play_type.isin(["run", "pass"]) & (pbp_all.two_point_attempt != 1) & (pbp_all.week < 11)]
+def _hand(team, opp):
+    gt = games_all[(games_all.week < 11) & games_all.home_score.notna()]
+    mine = gt[(gt.home_team == team) | (gt.away_team == team)]; theirs = gt[(gt.home_team == opp) | (gt.away_team == opp)]
+    pl = qq[qq.posteam == team].groupby("game_id").size(); pf = sum(r.home_score if r.home_team == team else r.away_score for r in mine.itertuples())
+    opl = qq[(qq.defteam == opp)].groupby("game_id").size(); pa = sum(r.away_score if r.home_team == opp else r.home_score for r in theirs.itertuples())
+    return pl.mean() * (pf / pl.sum() + pa / opl.sum()) / 2
+check("projected points match a hand calculation of the formula (IND and HOU, Week 11)", abs(pj["away"]["points"] - _hand("IND", "HOU")) < 0.06 and abs(pj["home"]["points"] - _hand("HOU", "IND")) < 0.06 and abs(pj["total"] - pj["away"]["points"] - pj["home"]["points"]) < 0.11, json.dumps(pj) if (json := __import__("json")) else "")
+check("a team without three games gets no projection", sl["games"][1]["proj"] is None)
 # ---- results fingerprint moves when a game becomes settleable
 fa = BD.results_fingerprint([], [], {"G": {"reconciled": True, "scorers_verified": None}}); fb = BD.results_fingerprint([], [], {"G": {"reconciled": True, "scorers_verified": True}})
 check("results fingerprint changes when scorers become verified", fa != fb)

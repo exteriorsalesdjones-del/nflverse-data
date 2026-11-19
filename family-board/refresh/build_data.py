@@ -834,6 +834,36 @@ def flex_kickoffs(games: pd.DataFrame) -> pd.DataFrame:
     return games
 
 
+def add_projected_totals(slate: dict, pbp: pd.DataFrame, games: pd.DataFrame) -> None:
+    """Points-per-play projection for each slate game (Lines tab), from this season's games before the slate week:
+        team points = plays per game x (own points per play + opponent's points per play allowed) / 2
+        game total  = the two teams' points added.
+    Shown for interest only. Tested in research/lines_edge.py (docs/LINES_EDGE_NOV18.md): on 2025 and 2026 it missed the
+    final total by about 10.7 points against 10.0 for the closing total, and did not beat the line."""
+    wk = slate.get("week")
+    q = pbp[pbp.play_type.isin(["run", "pass"]) & (pbp.two_point_attempt != 1) & (pbp.week < wk)]
+    plays = q.groupby(["game_id", "posteam"]).size()
+    rows = []
+    for r in games[(games.week < wk) & games.home_score.notna()].itertuples():
+        for team, opp, pf, pa in ((r.home_team, r.away_team, r.home_score, r.away_score), (r.away_team, r.home_team, r.away_score, r.home_score)):
+            if (r.game_id, team) in plays.index and (r.game_id, opp) in plays.index:
+                rows.append({"team": team, "pf": pf, "pa": pa, "plays": plays[(r.game_id, team)], "opp_plays": plays[(r.game_id, opp)]})
+    T = pd.DataFrame(rows)
+    for g in slate.get("games", []):
+        g["proj"] = None
+        if T.empty:
+            continue
+        out = {}
+        for side, team, opp in (("away", g["away"], g["home"]), ("home", g["home"], g["away"])):
+            a, b = T[T.team == team], T[T.team == opp]
+            if len(a) < 3 or len(b) < 3:
+                break
+            ppg = float(a.plays.mean()); r1 = float(a.pf.sum() / a.plays.sum()); r2 = float(b.pa.sum() / b.opp_plays.sum())
+            out[side] = {"plays_per_game": round(ppg, 1), "own_rate": round(r1, 3), "opp_allowed_rate": round(r2, 3), "points": round((ppg * r1 + ppg * r2) / 2, 1), "games": int(len(a))}
+        if len(out) == 2:
+            g["proj"] = {**out, "total": round(out["away"]["points"] + out["home"]["points"], 1)}
+
+
 def blend_setting() -> dict:
     """Model + market blend for the headline chance: on per grade.BLEND (the backtest result), and switched off
     automatically when the live check from the previous run's grades.json says it is doing worse than the model."""
@@ -958,6 +988,7 @@ def main() -> int:
     write_json("weekly.json", weekly)
     write_json("validation.json", validation)
     slate["blend"] = blend_setting()
+    add_projected_totals(slate, pbp, games)
     write_json("slate.json", slate)
     # Research tab: per-player, per-game usage (a failure leaves the Research tab's usage section on "Unavailable")
     try:
