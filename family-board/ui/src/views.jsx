@@ -6,7 +6,7 @@ import {
 } from "@mui/material";
 import {
   FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
-  exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
+  rangeFor, exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
   addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, blendFor, state, clearFocusGame, saveFeedKey, removeFeedKey, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { visuallyHidden } from "@mui/utils";
@@ -41,12 +41,15 @@ function MoveTag({ m, short }) {
     </Typography>
   );
 }
-/* "Above fair" marker: purple (green already means "better of FD/DK"). Fresh anytime prices only. */
+/* "Above fair" marker: purple when even the low end of the model's range beats the price, grey when the price sits
+   inside the range (green already means "better of FD/DK"). Fresh anytime prices only. */
 function AboveFair({ c, x, market }) {
-  const m = x ? FB.aboveFair(c.p, x, Date.now(), market) : null;
+  const m = x ? FB.aboveFair(c.p, x, Date.now(), market, rangeFor(c)) : null;
   if (!m) return null;
-  return <Box component="span" title={`Model ${pct1(c.p)} vs book ${pct1(m.implied)} (margin included). Research marker: in testing, sportsbook prices predicted better than the model.`}
-    sx={{ color: "secondary.main", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>Above fair +{m.pts.toFixed(1)}</Box>;
+  const tail = m.firm == null ? "" : m.firm ? ` Even the low end of the model's range (${pct1(m.lo)}) beats this price. In past testing those bets did not win more often, so this is a research flag, not a tip.`
+    : ` The price is inside the model's range (low end ${pct1(m.lo)}), so this gap is within normal model error.`;
+  return <Box component="span" title={`Model ${pct1(c.p)} vs book ${pct1(m.implied)} (margin included).${tail} In testing, sportsbook prices predicted better than the model.`}
+    sx={{ color: m.firm === false ? "text.secondary" : "secondary.main", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>Above fair +{m.pts.toFixed(1)}{m.firm == null ? "" : m.firm ? " · clears range" : " · in range"}</Box>;
 }
 /* Every book's latest price for one market: best in green, worst in red (labelled), each with its age and line move. */
 function BookList({ c, g, market }) {
@@ -351,6 +354,8 @@ function PlayerSheet({ c, onClose }) {
   const pr = priceFor(c, g.week); const e = pr ? FB.edge(c.p, pr.american) : null;
   const bl = blendFor(c); const ch = chanceFor(c, "anytime_td");
   const rows = [["Chance to score", bl ? `${pct1(ch)} · model ${pct1(bl.model)} combined with ${[...new Set(bl.books)].join(" and ")} (${pct1(bl.implied)} implied)` : pct1(ch)],
+    ...(() => { const r = rangeFor(c, true); const cf = S.slate.range || {};
+      return r ? [["Likely range", `${pct1(r.lo)} to ${pct1(r.hi)} (fair ${am(FB.probToAmerican(r.hi))} to ${am(FB.probToAmerican(r.lo))}) · about ${Math.round((cf.cover || 0.8) * 10)} in 10 times the sportsbooks' own chance for a player falls this close to ours${bl ? "; narrower here because the chance already includes the books' prices" : ""}. A price only beats the model clearly when its implied chance is under the low end.`]] : []; })(),
     ["Fair odds", am(bl ? FB.probToAmerican(ch) : c.fair_american)],
     ["2+ TD chance", `${pct1(FB.p2plus(ch))} (estimate from the anytime chance) · fair ${am(FB.probToAmerican(FB.p2plus(ch)))}`],
     ...(() => {   // the exchanges' no-margin chance for this player, and what each book's price costs against it
@@ -1009,7 +1014,7 @@ function ParlayCard({ uid, par, r, onDelete }) {
         <Typography sx={{ fontWeight: 700, flex: 1, minWidth: 0 }} noWrap>{uid ? `${nameOf(uid)} · ` : ""}{par.name}</Typography>
         <Result r={r} />
       </Stack>
-      <Typography variant="caption" color="text.secondary">Week {par.week} · {par.legs.length} legs · model chance all score {odds1(ch.p)}{ch.sameGame ? " (has same-game legs)" : ""}</Typography>
+      <Typography variant="caption" color="text.secondary">Week {par.week} · {par.legs.length} legs · model chance all score {odds1(ch.p)}{ch.sameTeam ? " (has same-team legs: slightly high)" : ch.sameGame ? " (has same-game legs)" : ""}</Typography>
       {par.legs.map((l, i) => {
         const st = r.legStates ? r.legStates[i] : "pending"; const g = S.gameById[l.game_id] || {};
         return (
@@ -1064,7 +1069,8 @@ export function ParlaysView() {
         {legs.length > 0 && <>
           <Typography variant="body2"><b>Chance every leg scores:</b> {odds1(ch.p)}{ch.p ? ` · fair odds ${am(FB.probToAmerican(ch.p))}` : ""}</Typography>
           {legs.some((l) => l.p_matchup != null) && Math.abs(ch.pMatchup - ch.p) > 1e-4 && <Typography variant="body2" color="text.secondary">With matchups: {odds1(ch.pMatchup)} · fair odds {am(FB.probToAmerican(ch.pMatchup))} (research only)</Typography>}
-          {ch.sameGame && <Alert severity="info" sx={{ borderRadius: 2 }}>Two legs are in the same game. Their touchdowns are linked, so the combined chance is only a rough estimate.</Alert>}
+          {ch.sameTeam ? <Alert severity="info" sx={{ borderRadius: 2 }}>Two legs are on the same team. Teammates share their team's touchdowns, so both scoring happens a little less often than this estimate: about 9% less often in 2026 games (4.6% of pairs vs 5.0% expected). That gap was too small to be sure of, so the number above is not adjusted.</Alert>
+            : ch.sameGame && <Alert severity="info" sx={{ borderRadius: 2 }}>Two legs are in the same game on opposite teams. In testing those pairs scored together about as often as this estimate says.</Alert>}
           {stale.length > 0 && <Alert severity="warning" sx={{ borderRadius: 2 }}>{stale.map((l) => l.player).join(", ")} {stale.length > 1 ? "are" : "is"} in a game that has started. Remove to save.</Alert>}
           <Typography variant="caption" color="text.secondary">Locks when its first game kicks off. If a player doesn't play, that leg is dropped and the rest still count. Sportsbook parlay odds are never quoted here.</Typography>
           <TextField label="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />

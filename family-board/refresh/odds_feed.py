@@ -680,7 +680,7 @@ def archive(prev: dict | None, week) -> None:
         hist = {"rows": []}
     hist.setdefault("rows", [])
     have = {(r.get("week"), r["gsis_id"], r["book"], r["market"]) for r in hist["rows"]}
-    keep = ("game_id", "gsis_id", "player", "team", "book", "market", "american", "captured_at", "open_american", "open_captured_at")
+    keep = ("game_id", "gsis_id", "player", "team", "book", "market", "american", "captured_at", "open_american", "open_captured_at", "fair_p", "fair_n")
     hist["rows"] += [{"week": prev["week"], **{k: r[k] for k in keep if k in r}} for r in prev["rows"]
                      if (prev["week"], r["gsis_id"], r["book"], r["market"]) not in have]
     # the week's last pregame game lines too (Lines tab: past weeks by book)

@@ -92,3 +92,25 @@ assert _bl and _bl["n"] == 40 and "QB" not in _bl["by_pos_x1000"], _bl          
 assert _bl["games"] == 8 and _bl["weeks"] == [11, 12] and _bl["ci90_x1000"][0] <= _bl["gain_x1000"] <= _bl["ci90_x1000"][1], _bl
 assert grade.blend_live([]) is None
 print("blend live check passed", _bl["gain_x1000"], _bl["ci90_x1000"])
+
+# 6) betting record, price movement and the exchange-fair blend trial
+with tempfile.TemporaryDirectory() as t:
+    rows = [
+        {"gsis_id": "a", "book": "FanDuel", "american": 300, "market": "anytime_td", "captured_at": "2026-11-15T15:00:00Z"},
+        {"gsis_id": "a", "book": "FanDuel", "american": 100, "market": "anytime_td", "captured_at": "2026-11-15T16:00:00Z", "fair_p": 0.45},
+        {"gsis_id": "a", "book": "DraftKings", "american": 150, "market": "anytime_td", "captured_at": "2026-11-15T17:30:00Z"},
+        {"gsis_id": "b", "book": "FanDuel", "american": 300, "market": "anytime_td", "captured_at": "2026-11-15T17:00:00Z"},
+    ]
+    out = grade.main(setup(t, rows, {"a": {"p": 0.55, "model": "usage-v0.3c"}, "b": {"p": 0.2, "model": "usage-v0.3c"}}))
+    bet = {r["key"]: r for r in out["betting"]["rules"]}
+    # every priced player: a wins at the best price +150 (+1.5 units), b loses at +300 (-1): 0.5 units on 2 bets
+    assert bet["all"]["n"] == 2 and bet["all"]["wins"] == 1 and bet["all"]["units"] == 0.5 and bet["all"]["roi"] == 0.25, bet["all"]
+    assert bet["all"]["max_drawdown_units"] == 1.0 and bet["all"]["longest_losing_run"] == 1, bet["all"]
+    # marker: a (55% vs 40% implied) qualifies; b (20% vs 25%) does not
+    assert bet["marker"]["n"] == 1 and bet["marker"]["units"] == 1.5, bet["marker"]
+    # low end: logit(0.55) = 0.2007, minus 1.28 x 0.36 = -0.2601 -> 43.5% > 40% -> qualifies; at 50% the low end is 38.7%
+    assert abs(grade.range_low(0.55) - 0.4353) < 1e-3 and abs(grade.range_low(0.5) - 0.3868) < 1e-3 and bet["firm"]["n"] == 1, bet["firm"]
+    # FanDuel moved +300 -> +100 on a: implied 25% -> 50% = +25 points; DraftKings has a single sighting
+    assert bet["marker"]["price_move"] == {"n": 1, "avg_pts": 25.0}, bet["marker"]["price_move"]
+    assert "blend_fair_live" not in out or out["blend_fair_live"]["n"] == 1   # needs the player list; skipped without it
+print("grade betting record ok")

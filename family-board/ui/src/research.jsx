@@ -47,6 +47,71 @@ function Grid({ head, rows, label, max = 40 }) {
   );
 }
 
+/* Testing dashboard: how the model, the blend and simple betting rules have actually done. Everything here is read
+   from grades.json (refresh/grade.py) and the feed's value tracker; nothing is computed from picks. */
+const sg = (v, d = 1) => (v == null || isNaN(v) ? "—" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d));
+const roi = (v) => (v == null ? "—" : sg(v * 100) + "%");
+function BetTable({ bet, label }) {
+  const [seg, setSeg] = useState("by_price"); const rules = (bet.rules || []);
+  const SEG = { by_price: "Price", by_pos: "Position", by_week: "Week" };
+  const keys = [...new Set(rules.flatMap((r) => Object.keys(r[seg] || {})))];
+  if (seg === "by_week") keys.sort((a, b) => a - b);
+  return <>
+    <Grid label={label} head={["Rule", "Bets", "Won", "Units", "Return per unit", "Likely range of return", "Worst slide", "Longest losing run", "Avg price chance", "Avg model chance", "Scored"]}
+      rows={rules.map((r) => !r.n ? [r.name, 0, "—", "—", "—", "—", "—", "—", "—", "—", "—"] : [r.name, r.n, r.wins, sg(r.units, 1), roi(r.roi), r.roi_ci90 ? `${roi(r.roi_ci90[0])} to ${roi(r.roi_ci90[1])}` : "—",
+        `${r.max_drawdown_units.toFixed(1)} units`, `${r.longest_losing_run} bets`, pct(r.avg_implied), pct(r.avg_model), pct(r.hit_rate)])} />
+    <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+      <Typography variant="body2">Split by</Typography>
+      <ToggleButtonGroup exclusive size="small" value={seg} onChange={(e, v) => v && setSeg(v)} aria-label={`${label}: split by`} sx={{ "& .MuiToggleButton-root": { minHeight: 40, px: 1.25, textTransform: "none" } }}>
+        {Object.entries(SEG).map(([k, v]) => <ToggleButton key={k} value={k}>{v}</ToggleButton>)}</ToggleButtonGroup>
+    </Stack>
+    <Grid label={`${label} by ${SEG[seg].toLowerCase()}`} head={["Rule", ...keys.map((k) => (seg === "by_week" ? `Week ${k}` : k))]}
+      rows={rules.filter((r) => r.n).map((r) => [r.name, ...keys.map((k) => { const x = (r[seg] || {})[k]; return x ? `${roi(x.roi)} (${x.wins} of ${x.n})` : "—"; })])} />
+    {rules.some((r) => r.price_move) && <Typography variant="body2" color="text.secondary">Price movement before kickoff: {rules.filter((r) => r.price_move).map((r) => `${r.name}: ${sg(r.price_move.avg_pts)} points on ${r.price_move.n} prices`).join(" · ")}. Positive means the book shortened the price after it was first seen (the market moved toward the bet).</Typography>}
+  </>;
+}
+export function TestingDashboard() {
+  const S = useStore(); const gr = S.grades;
+  if (!gr) return <Typography variant="body2" color="text.secondary">Test results: Unavailable (not in this data refresh yet).</Typography>;
+  const live = gr.model || {}; const bt = gr.backtest || {}; const m = live.n ? live : bt; const bl = gr.blend_live; const bf = gr.blend_fair_live;
+  const vs = FB.valueSummary((S.oddsFeed && S.oddsFeed.value_log) || []); const rc = gr.range_check; const hb = gr.betting_backtest;
+  const verdict = (x) => !x ? "" : x.ci90_x1000[0] > 0 ? "better than the model alone" : x.ci90_x1000[1] < 0 ? "worse than the model alone" : "not clearly different from the model alone";
+  return <>
+    <Alert severity="info" sx={{ borderRadius: 2 }}>What the numbers so far say: no betting rule tested here has made money after the sportsbooks' margin, even though the model's chances track results reasonably well. Treat every flag in the app as research.</Alert>
+
+    <Typography variant="subtitle2" component="h4">1 · Are the chances right? (calibration)</Typography>
+    {m.n ? <>
+      <Typography variant="body2" color="text.secondary">{live.n ? `Live: ${live.n.toLocaleString()} player-games published before kickoff (weeks ${live.weeks.join(", ")}).` : "No live week graded yet; showing the backtest."} Log loss {m.log_loss.toFixed(3)} vs {m.log_loss_constant.toFixed(3)} for one flat rate, Brier score {m.brier.toFixed(3)} (lower is better for both).
+        {live.n && bt.n ? ` Backtest, weeks ${bt.weeks[0]}–${bt.weeks[bt.weeks.length - 1]} (${bt.n.toLocaleString()} player-games): log loss ${bt.log_loss.toFixed(3)} vs ${bt.log_loss_constant.toFixed(3)}.` : ""}</Typography>
+      <Grid label="Calibration" head={["Chance band", "Players", "Forecast", "Scored", "Gap"]} rows={m.calibration.map((b) => [b.bin, b.n, pct(b.pred), pct(b.actual), sg((b.actual - b.pred) * 100) + " pts"])} />
+      <Grid label="Week by week" head={["Week", "Players", "Scored", "Log loss"]} rows={m.by_week.map((w) => [`Week ${w.week}`, w.n, w.scored, w.log_loss.toFixed(3)])} />
+    </> : <Typography variant="body2" color="text.secondary">No graded games yet.</Typography>}
+
+    <Typography variant="subtitle2" component="h4">2 · Flat-bet record after the books' margin</Typography>
+    <Typography variant="body2" color="text.secondary">One unit on each qualifying player at the best price seen before kickoff. "Likely range" is where the return would land 9 times in 10 if these games were replayed; a range that crosses zero means no proven edge.</Typography>
+    {gr.betting ? <><Typography variant="body2"><b>Live</b> · weeks {gr.betting.weeks.join(", ")} · {gr.betting.games} games</Typography><BetTable bet={gr.betting} label="Live flat-bet record" /></>
+      : <Typography variant="body2" color="text.secondary"><b>Live:</b> no graded game has had a sportsbook price on file yet. This fills in after the first week the price feed covers from start to finish.</Typography>}
+    {hb && <><Typography variant="body2"><b>Historical test</b> · {hb.source} · {hb.games} games · {(hb.books || []).join(", ")}</Typography><BetTable bet={hb} label="Historical flat-bet record" /></>}
+
+    <Typography variant="subtitle2" component="h4">3 · Does adding the market help? (model + market blend)</Typography>
+    <Typography variant="body2" color="text.secondary">{bl ? `Live, ${bl.n} player-games: the blend's log loss is ${sg(bl.gain_x1000, 2)} (×1000) against the model alone, likely range ${sg(bl.ci90_x1000[0], 2)} to ${sg(bl.ci90_x1000[1], 2)}: ${verdict(bl)}. Positive is better.` : "Live check: no graded game with a price yet."}
+      {S.slate && S.slate.blend && S.slate.blend.evidence && S.slate.blend.evidence.n ? ` Backtest (${S.slate.blend.evidence.n} player-games): ${sg(S.slate.blend.evidence.gain_x1000, 2)}, range ${sg(S.slate.blend.evidence.ci90_x1000[0], 2)} to ${sg(S.slate.blend.evidence.ci90_x1000[1], 2)}.` : ""}</Typography>
+    <Typography variant="body2" color="text.secondary"><b>Trial: exchange fair prices as the market input.</b> {bf ? `${bf.n} player-games so far: ${sg(bf.gain_x1000, 2)} against the model alone (range ${sg(bf.ci90_x1000[0], 2)} to ${sg(bf.ci90_x1000[1], 2)}); today's blend on the same player-games: ${sg(bf.raw_blend_same_rows_x1000, 2)}. It replaces today's blend only if it is clearly better on 300 or more player-games.`
+      : "Not enough data yet. Exchanges only started posting both sides in the feed this month, so this cannot be tested on past weeks; it starts counting with the first full week of feed prices."}</Typography>
+
+    <Typography variant="subtitle2" component="h4">4 · Value flags against the closing price</Typography>
+    <Typography variant="body2" color="text.secondary">{vs.flagged ? `${vs.flagged} prices flagged as value (worth at least +1% against the exchanges' fair price). ${vs.with_close ? `${vs.with_close} have a closing price: average move ${sg(vs.avg_clv, 2)} points, ${pct(vs.beat_close)} beat the close.` : "None has reached kickoff yet."} ${vs.graded ? `Graded: ${vs.wins} won, ${vs.losses} lost${vs.pushes ? `, ${vs.pushes} pushed` : ""}, ${sg(vs.units, 2)} units.` : ""}`
+      : "No price has been flagged as value yet (0 of the prices checked so far beat the exchanges' fair price). Details are on the Lines tab."}</Typography>
+
+    <Typography variant="subtitle2" component="h4">5 · Is the chance range the right width?</Typography>
+    <Typography variant="body2" color="text.secondary">{S.slate && S.slate.range ? `The range shown on each player is set so about ${Math.round(S.slate.range.cover * 100)}% of sportsbook chances fall inside it. ` : ""}
+      {rc ? `Live check on ${rc.n} player-games: ${pct(rc.inside_share)} fell inside.` : "Live check: needs 30 graded player-games with a price."} When it was set (407 player-games, weeks 2–4) 80% fell inside.</Typography>
+
+    <Typography variant="subtitle2" component="h4">6 · Same-team parlays</Typography>
+    <Typography variant="body2" color="text.secondary">Teammates both scored in 4.6% of 2026 pairs against 5.0% expected from multiplying their chances (about 9% less often). The gap was not large enough to be sure of, so parlay chances are not adjusted; the parlay builder shows a note instead. Opposite-team pairs in the same game matched the estimate.</Typography>
+  </>;
+}
+
 export function ResearchView() {
   const S = useStore();
   useEffect(() => { ensureResearch(); }, []);
@@ -166,6 +231,10 @@ export function ResearchView() {
       <Sec id="model" title="Model and sportsbook data" summary={isSlate ? "This week's model chances, fair odds, uploaded prices and value edge" : `Week ${week}: the model's saved pregame chances`} kinds={isSlate ? ["model", "price"] : ["model"]}>
         <Typography variant="caption" color="text.secondary">{isSlate ? `Model chances as of the ${et(S.meta.refreshed_at, { weekday: "short", hour: "numeric", minute: "2-digit" })} refresh. Each price shows its own capture time; prices over 2 hours old are marked stale and never shown as current.` : "Saved before each game kicked off (pregame only). Sportsbook prices are kept per week and only this week's are loaded, so past prices show as Unavailable."}{two ? " 2+ TD chances are estimates from the anytime chance." : ""}</Typography>
         <Grid label="Model and prices" head={["Player", "Game", two ? "2+ chance" : "TD chance", "Fair odds", "Best price", "Price time", "Value edge"]} rows={modelRows.map((x) => x.row)} />
+      </Sec>
+
+      <Sec id="testing" title="Testing dashboard" summary="Calibration, flat-bet record after the margin, worst slides, results by price, position and week, and closing-price checks" kinds={["done", "model", "price"]}>
+        <TestingDashboard />
       </Sec>
 
       <Sec id="findings" title="Backtesting and findings" summary="Weeks 1–9 point-in-time study, Week 10 forecast, sample sizes and small-sample flags" kinds={["done", "model"]}>

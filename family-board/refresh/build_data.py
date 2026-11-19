@@ -988,6 +988,15 @@ def main() -> int:
     write_json("weekly.json", weekly)
     write_json("validation.json", validation)
     slate["blend"] = blend_setting()
+    try:   # uncertainty range around each chance (grade.RANGE), with the last live re-measurement when there is one
+        import grade
+        slate["range"] = {**grade.RANGE}
+        try:
+            slate["range"]["live"] = json.loads((OUT / "grades.json").read_text()).get("range_check")
+        except (OSError, ValueError):
+            pass
+    except Exception:
+        pass
     add_projected_totals(slate, pbp, games)
     write_json("slate.json", slate)
     # Research tab: per-player, per-game usage (a failure leaves the Research tab's usage section on "Unavailable")

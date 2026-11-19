@@ -146,11 +146,17 @@
     if (!live.length) return { state: "void", why: "No leg's player played." };
     return { state: "win", why: live.length === s.length ? "Every leg scored." : "Every leg that played scored (" + (s.length - live.length) + " void leg dropped)." };
   }
-  /* Model chance that every leg scores. Legs in the same game are treated as independent; flagged. */
+  /* Model chance that every leg scores. Legs are multiplied as independent; same-game and same-team legs are flagged.
+     (Tested Nov 2026, research/parlay_corr.py: teammates both scored a little less often than multiplying says, about
+     9% less in 2026, but the gap was not statistically firm, so the maths is unchanged and the app shows a note.) */
   function parlayChance(legs) {
-    var p = 1, pm = 1, games = {}, same = false;
-    (legs || []).forEach(function (l) { p *= l.p || 0; pm *= (l.p_matchup != null ? l.p_matchup : l.p) || 0; if (games[l.game_id]) same = true; games[l.game_id] = 1; });
-    return { p: (legs || []).length ? p : null, pMatchup: (legs || []).length ? pm : null, sameGame: same };
+    var p = 1, pm = 1, games = {}, teams = {}, same = false, team = false;
+    (legs || []).forEach(function (l) {
+      p *= l.p || 0; pm *= (l.p_matchup != null ? l.p_matchup : l.p) || 0;
+      if (games[l.game_id]) same = true; games[l.game_id] = 1;
+      var tk = l.team ? l.game_id + "|" + l.team : null; if (tk) { if (teams[tk]) team = true; teams[tk] = 1; }
+    });
+    return { p: (legs || []).length ? p : null, pMatchup: (legs || []).length ? pm : null, sameGame: same, sameTeam: team };
   }
 
   /* Suggested research slates. candidates: [{gsis_id, player, team, game_id, p, quality}] */
@@ -336,12 +342,23 @@
      points below the model's chance, i.e. the book pays clearly more than the model's fair odds. A research marker only:
      in testing the sportsbooks' own prices predicted better than the model. Returns {pts, implied} or null. */
   var ABOVE_FAIR_PTS = 3;
-  function aboveFair(modelP, priceRow, nowMs, market) {
+  function aboveFair(modelP, priceRow, nowMs, market, range) {
     if ((market || (priceRow && priceRow.market) || "anytime_td") !== "anytime_td") return null;
     if (!priceRow || !(modelP > 0 && modelP < 1) || !priceFresh(priceRow, nowMs)) return null;
     var imp = americanToProb(priceRow.american); if (!isFinite(imp)) return null;
     var pts = Math.round((modelP - imp) * 1000) / 10; // one decimal, as shown
-    return pts >= ABOVE_FAIR_PTS ? { pts: pts, implied: imp } : null;
+    if (pts < ABOVE_FAIR_PTS) return null;
+    // firm = even the LOW end of the chance range beats the price (null when no range is known)
+    return { pts: pts, implied: imp, firm: range && range.lo != null ? range.lo > imp : null, lo: range ? range.lo : null };
+  }
+  /* Uncertainty range around a touchdown chance: logit(p) +/- z*sd. sd is how far the model's chance typically sits
+     from the sportsbooks' (measured on graded player-games, in logit units); cfg = slate.range {sd_logit, z}.
+     scale shrinks it for a chance already combined with the market (the blend's model weight). A range, not a guarantee. */
+  function chanceRange(p, cfg, scale) {
+    if (!(p > 0 && p < 1) || !cfg || !(cfg.sd_logit > 0)) return null;
+    var w = cfg.sd_logit * (typeof cfg.z === "number" ? cfg.z : 1.28) * (typeof scale === "number" ? scale : 1);
+    var lg = Math.log(p / (1 - p)), f = function (x) { return 1 / (1 + Math.exp(-x)); };
+    return { lo: f(lg - w), hi: f(lg + w) };
   }
   /* ================= Weekly Rankings (pure; tested in tests/lib.test.js) =================
      items: one per player in a game still open, for ONE market: {key, name, chance (model probability for that market),
@@ -663,6 +680,6 @@
   var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, blendChance: blendChance, gamePickKey: gamePickKey, gamePickOffers: gamePickOffers, gradeGamePick: gradeGamePick, gamePickValid: gamePickValid, gamePickRecord: gamePickRecord, noVig: noVig, betValue: betValue, isValue: isValue, lineCosts: lineCosts, valueSummary: valueSummary, lineSummary: lineSummary, bestLines: bestLines, gradeLine: gradeLine, teamRecords: teamRecords, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
-    normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };
+    normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance, chanceRange: chanceRange };
   if (typeof module !== "undefined") module.exports = api; else root.FB = api;
 })(this);

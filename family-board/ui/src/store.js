@@ -30,6 +30,13 @@ export function blendFor(c) {
   const implied = use.map((x) => FB.americanToProb(x.american)); const avg = implied.reduce((a, v) => a + v, 0) / implied.length;
   return { p: FB.blendChance(c.p, implied, b.model_weight), model: c.p, implied: avg, books: use.map((x) => x.book) };
 }
+/* Uncertainty range (slate.range) around a player's anytime chance: around the model's own chance by default, or the
+   shown (model + market) chance, which sits closer to the books, so its range is narrower by the blend's model weight. */
+export function rangeFor(c, shown = false) {
+  const cfg = S.slate && S.slate.range; if (!cfg) return null;
+  const b = shown ? blendFor(c) : null;
+  return FB.chanceRange(b ? b.p : c.p, cfg, b ? (S.slate.blend.model_weight ?? 0.5) : 1);
+}
 export const chanceFor = (c, market = S.weekMarket) => { const b = blendFor(c); const p = b ? b.p : c.p; return market === "2plus_td" ? FB.p2plus(p) : p; };
 const subs = new Set();
 function emit() { S.version++; subs.forEach((f) => f()); }

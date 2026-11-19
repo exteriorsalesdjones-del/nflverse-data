@@ -86,3 +86,6 @@ available books. Quarterbacks keep the model's chance. Test, limits and the two 
 adopted (opponent-adjusted defense splits, role changes): `docs/IMPROVEMENTS_NOV16.md`. "Model vs price", "Above fair"
 and Best Value still compare the model's own chance with the price. The refresh checks the blend on live results every
 run and switches it off if it does worse than the model (`grades.json` `blend_live`).
+
+## Chance range, betting record and exchange-fair trial (Nov 19 2026)
+See `docs/BUILD_NOV19.md`. Range = logit(chance) ± 1.28 × 0.36 (`grade.RANGE`, in `slate.json` `range`), sized so about 80% of model-vs-sportsbook gaps fall inside. `grades.json` carries `betting` (live flat-bet record), `betting_backtest`, `range_check` and `blend_fair_live` (trial; not used by the app).

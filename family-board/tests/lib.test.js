@@ -414,7 +414,7 @@ test("sportsbook team codes match the slate's codes (Rams LAR -> LA)", () => {
 test("Above fair: fresh anytime price whose implied chance is 3+ points below the model's chance", () => {
   const now = Date.parse("2026-11-15T16:00:00Z"); const at = (m) => new Date(now - m * 60000).toISOString();
   // model 44% (fair +127). +150 -> implied 40.0% -> 4.0 points below: flagged
-  assert.deepStrictEqual(FB.aboveFair(0.44, { american: 150, captured_at: at(10) }, now), { pts: 4, implied: 0.4 });
+  assert.deepStrictEqual(FB.aboveFair(0.44, { american: 150, captured_at: at(10) }, now), { pts: 4, implied: 0.4, firm: null, lo: null });
   // +135 -> implied 42.6% -> 1.4 points: better than fair but inside the threshold, not flagged
   assert.strictEqual(FB.aboveFair(0.44, { american: 135, captured_at: at(10) }, now), null);
   // exactly 3.0 points is flagged: model 43%, +150 (40%)
@@ -594,3 +594,22 @@ test("game picks: best offer per side, grading, kickoff rule and record", () => 
   assert.deepStrictEqual([rec.w, rec.l, rec.p, rec.pending, rec.not_counted, rec.n], [1, 1, 1, 1, 1, 5]); assert.ok(Math.abs(rec.units + 0.09) < 1e-9);
 });
 
+
+test("chance range: logit band, shrinks with scale, and the firm-edge check uses its low end", () => {
+  const cfg = { sd_logit: 0.3, z: 1.28 };
+  const r = FB.chanceRange(0.25, cfg);
+  assert.ok(Math.abs(r.lo - 0.185) < 0.003 && Math.abs(r.hi - 0.329) < 0.003, JSON.stringify(r));
+  const half = FB.chanceRange(0.25, cfg, 0.5);
+  assert.ok(half.lo > r.lo && half.hi < r.hi);
+  assert.strictEqual(FB.chanceRange(0.25, null), null);
+  assert.strictEqual(FB.chanceRange(0, cfg), null);
+  const now = Date.parse("2026-11-19T18:00:00Z"); const row = { american: 400, captured_at: new Date(now - 6e5).toISOString() }; // implied 20%
+  assert.strictEqual(FB.aboveFair(0.25, row, now, "anytime_td", r).firm, false);          // low end 18.5% is under the 20% price
+  assert.strictEqual(FB.aboveFair(0.25, { ...row, american: 500 }, now, "anytime_td", r).firm, true);  // 16.7% price: low end clears it
+});
+test("parlay chance flags same-team legs separately from same-game legs", () => {
+  const a = FB.parlayChance([{ p: 0.5, game_id: "g", team: "KC" }, { p: 0.4, game_id: "g", team: "BUF" }]);
+  assert.strictEqual(a.sameGame, true); assert.strictEqual(a.sameTeam, false);
+  const b = FB.parlayChance([{ p: 0.5, game_id: "g", team: "KC" }, { p: 0.4, game_id: "g", team: "KC" }]);
+  assert.strictEqual(b.sameTeam, true); assert.ok(Math.abs(b.p - 0.2) < 1e-9);
+});
