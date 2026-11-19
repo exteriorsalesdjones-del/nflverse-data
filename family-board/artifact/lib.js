@@ -402,6 +402,54 @@
     if (m.ml) { add("ml", "home", home, null, m.ml.home_american, m.ml.fair); add("ml", "away", away, null, m.ml.away_american, m.ml.fair); }
     return out;
   }
+  /* ---------- game picks (spread, total, moneyline) ---------- */
+  function gamePickKey(week, gameId, market) { return "g" + week + "_" + gameId + "_" + market; }
+  /* The best offer for each side among the books (the better number first, then the better price): what a pick records.
+     {spread_home: {book, line, american}, spread_away, total_over, total_under, ml_home, ml_away} */
+  function gamePickOffers(books) {
+    var out = {}, dec = function (a) { var d = americanToDecimal(a); return isFinite(d) ? d : -1; };
+    var put = function (key, book, rank, line, american) {
+      if (american == null || !isFinite(dec(american)) || dec(american) <= 1 || rank == null || !isFinite(rank)) return;
+      var cur = out[key];
+      if (!cur || rank > cur._rank || (rank === cur._rank && dec(american) > dec(cur.american))) out[key] = { book: book, line: line, american: american, _rank: rank };
+    };
+    (books || []).forEach(function (m) {
+      if (m.spread) { put("spread_home", m.book, m.spread.home_line, m.spread.home_line, m.spread.home_american); put("spread_away", m.book, -m.spread.home_line, -m.spread.home_line, m.spread.away_american); }
+      if (m.total) { put("total_over", m.book, -m.total.line, m.total.line, m.total.over_american); put("total_under", m.book, m.total.line, m.total.line, m.total.under_american); }
+      if (m.ml) { put("ml_home", m.book, 0, null, m.ml.home_american); put("ml_away", m.book, 0, null, m.ml.away_american); }
+    });
+    Object.keys(out).forEach(function (k) { delete out[k]._rank; });
+    return out;
+  }
+  /* A game pick against the final score. `line` is the picked side's own line for a spread, the total for over/under.
+     pending until the game is final; win pays the recorded price, loss costs 1 unit, push returns the stake. */
+  function gradeGamePick(pick, game) {
+    if (!pick || !game || game.status !== "final" || game.away_score == null || game.home_score == null) return { state: "pending", units: 0 };
+    var hs = game.home_score, as = game.away_score, res;
+    if (pick.market === "ml") res = hs === as ? "push" : (hs > as) === (pick.side === "home") ? "win" : "loss";
+    else if (pick.market === "spread") { var v = (pick.side === "home" ? hs - as : as - hs) + pick.line; res = v === 0 ? "push" : v > 0 ? "win" : "loss"; }
+    else if (pick.market === "total") { var t = hs + as; res = t === pick.line ? "push" : (t > pick.line) === (pick.side === "over") ? "win" : "loss"; }
+    else return { state: "pending", units: 0 };
+    var d = americanToDecimal(pick.american);
+    return { state: res, units: res === "win" ? (isFinite(d) ? d - 1 : 0) : res === "loss" ? -1 : 0 };
+  }
+  /* Was this pick in place at kickoff? A pick made at or after kickoff never counts. Where a kickoff snapshot recorded
+     game picks, the pick must match it (same market, side and line), so it can't be changed afterwards. */
+  function gamePickValid(pick, game, lock, uid) {
+    var k = etToUtcMs(game && game.kickoff_et), t = Date.parse(pick && pick.picked_at);
+    if (!isFinite(k) || !isFinite(t) || t >= k) return { ok: false, why: "Made at or after kickoff." };
+    if (lock && lock.game_picks) {
+      var f = (lock.game_picks[uid] || {})[pick.key];
+      if (!f || f.side !== pick.side || f.market !== pick.market || (f.line == null ? null : f.line) !== (pick.line == null ? null : pick.line)) return { ok: false, why: "Not in the kickoff snapshot: added or changed after kickoff." };
+    }
+    return { ok: true };
+  }
+  /* Record over a list of {pick, grade}: wins, losses, pushes, pending and units at 1 unit a pick. */
+  function gamePickRecord(graded) {
+    var r = { w: 0, l: 0, p: 0, pending: 0, not_counted: 0, units: 0, n: 0 };
+    (graded || []).forEach(function (x) { r.n++; if (x.state === "win") r.w++; else if (x.state === "loss") r.l++; else if (x.state === "push") r.p++; else if (x.state === "void") r.not_counted++; else r.pending++; r.units += x.units || 0; });
+    return r;
+  }
   /* The value tracker's record: how many flags, how they compared with the closing fair price, and how they finished. */
   function valueSummary(log) {
     log = log || []; var closed = log.filter(function (e) { return typeof e.clv_pts === "number"; }), done = log.filter(function (e) { return e.result; });
@@ -612,7 +660,7 @@
     return { rows: rs, summary: summary, weeks: weeks, cumulative: cumulative, categories: categories, touchdowns: touchdowns, calibration: calibration, extremes: extremes, weekRuns: runs, smallN: SMALL_N };
   }
 
-  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, blendChance: blendChance, noVig: noVig, betValue: betValue, isValue: isValue, lineCosts: lineCosts, valueSummary: valueSummary, lineSummary: lineSummary, bestLines: bestLines, gradeLine: gradeLine, teamRecords: teamRecords, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
+  var api = { dashboard: dashboard, prepareRows: prepareRows, snapshotEligibility: snapshotEligibility, PRICE_FRESH_MIN: PRICE_FRESH_MIN, parseObserved: parseObserved, parseAmerican: parseAmerican, normMarket: normMarket, parseLines: parseLines, lineProblem: lineProblem, bestPrice: bestPrice, bookBoard: bookBoard, lineMoves: lineMoves, p2plus: p2plus, weeklyRankings: weeklyRankings, blendChance: blendChance, gamePickKey: gamePickKey, gamePickOffers: gamePickOffers, gradeGamePick: gradeGamePick, gamePickValid: gamePickValid, gamePickRecord: gamePickRecord, noVig: noVig, betValue: betValue, isValue: isValue, lineCosts: lineCosts, valueSummary: valueSummary, lineSummary: lineSummary, bestLines: bestLines, gradeLine: gradeLine, teamRecords: teamRecords, bestEligiblePrice: bestEligiblePrice, aboveFair: aboveFair, ABOVE_FAIR_PTS: ABOVE_FAIR_PTS, BIG_MOVE_PTS: BIG_MOVE_PTS, etToUtcMs: etToUtcMs, fmtEt: fmtEt, isLocked: isLocked, pickKey: pickKey, validatePick: validatePick,
     americanToProb: americanToProb, americanToDecimal: americanToDecimal, probToAmerican: probToAmerican, edge: edge,
     priceFresh: priceFresh, modelValidated: modelValidated, settle: settle, suggestSlate: suggestSlate, csv: csv,
     normName: normName, normTeam: normTeam, matchOdds: matchOdds, parlayLocked: parlayLocked, settleParlay: settleParlay, parlayChance: parlayChance };

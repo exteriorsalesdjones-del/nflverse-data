@@ -16,7 +16,7 @@ Nothing here places wagers or takes payments. Workbook exports and login logs ar
 ## Shared data (artifact database)
 | Path | Who writes | Contents |
 |---|---|---|
-| `picks/<member id>` | that member (and admins) | `{items: {pickKey: pick}}` |
+| `picks/<member id>` | that member (and admins) | `{items: {pickKey: pick}, game_items: {key: game pick}}` (touchdown picks and Lines-tab game picks) |
 | `odds/w<week>` | admins | imported Anytime TD prices, `pending` or `live` |
 | `locks/<game_id>` | admins and the refresh | kickoff snapshot of submitted picks |
 | `reviews/<game_id>~<play_id>` | admins | attribution override with change history |

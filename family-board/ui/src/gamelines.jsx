@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Box, Button, ButtonBase, Card, CardContent, Chip, Stack, Table, TableBody, TableCell, TableHead, TableRow, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
-import { FB, useStore, ensureLineHistory, focusGame } from "./store.js";
+import { FB, useStore, ensureLineHistory, focusGame, myGamePicks, setGamePick, gamePickRows, nameOf } from "./store.js";
 
 /* Lines tab: each game's main spread, total and moneyline at FanDuel and DraftKings (sportsbook feed), with a one-line
    read of what they imply, the better book on each side, movement this week, weather, each team's season scoring and
@@ -100,6 +100,57 @@ function LinesTable({ g, books, mode }) {
   );
 }
 
+const BK = { FanDuel: "FD", DraftKings: "DK" };
+const pickText = (p) => (p.market === "ml" ? `${p.side === "home" ? p.home : p.away} to win` : p.market === "total" ? `${p.side === "over" ? "Over" : "Under"} ${num1(p.line)}` : `${p.side === "home" ? p.home : p.away} ${ln(p.line)}`);
+const STATE = { win: ["Won", "success"], loss: ["Lost", "error"], push: ["Push", "default"], pending: ["Pending", "default"], void: ["Not counted", "warning"] };
+const unitsTxt = (u) => `${u >= 0 ? "+" : "−"}${Math.abs(u).toFixed(2)}`;
+
+/* Pick a side for a game: spread, total and moneyline, each offered at the better of the two books. One pick per
+   market per game; tap the chosen one again to remove it. Locked at kickoff. */
+function PickRow({ g, books }) {
+  const S = useStore(); const offers = FB.gamePickOffers(books); const mine = myGamePicks();
+  if (!Object.keys(offers).length) return null;
+  const can = !!S.uid && S.dbState !== "off" && S.canWrite !== false;
+  const rows = [["spread", "Spread", [["away", g.away], ["home", g.home]]], ["total", "Total", [["over", "Over"], ["under", "Under"]]], ["ml", "To win", [["away", g.away], ["home", g.home]]]];
+  return (
+    <Box data-testid="pick-row" sx={{ display: "grid", gap: 0.75, borderTop: 1, borderColor: "divider", pt: 1 }}>
+      <Typography variant="subtitle2" component="h5">Your pick{can ? "" : " (sign in to Claude to pick)"}</Typography>
+      {rows.map(([market, label, sides]) => {
+        const cur = mine[FB.gamePickKey(g.week, g.game_id, market)];
+        return (
+          <Box key={market} sx={{ display: "grid", gridTemplateColumns: "56px 1fr 1fr", gap: 0.75, alignItems: "center" }}>
+            <Typography variant="caption" color="text.secondary">{label}</Typography>
+            {sides.map(([side, name]) => {
+              const o = offers[`${market}_${side}`]; const on = !!cur && cur.side === side;
+              const text = market === "ml" ? name : market === "total" ? `${name} ${o ? num1(o.line) : ""}` : `${name} ${o ? ln(o.line) : ""}`;
+              return (
+                <Button key={side} variant={on ? "contained" : "outlined"} disabled={!can || !o} onClick={() => setGamePick(g, market, side, o)} aria-pressed={on}
+                  aria-label={`${on ? "Remove pick" : "Pick"} ${text}${o ? ` at ${am(o.american)} ${o.book}` : ""}`}
+                  sx={{ minHeight: 48, px: 0.5, lineHeight: 1.15, display: "flex", flexDirection: "column", fontSize: 13 }}>
+                  <span>{on ? "✓ " : ""}{text}</span>
+                  <Box component="span" sx={{ fontSize: 11, opacity: 0.85, fontWeight: 400 }}>{o ? `${am(on ? cur.american : o.american)} ${BK[on ? cur.book : o.book] || (on ? cur.book : o.book)}` : "no line"}</Box>
+                </Button>
+              );
+            })}
+          </Box>
+        );
+      })}
+      <Typography variant="caption" color="text.secondary">Each button uses the better of the two books for that side. A pick keeps the line and price shown when you tapped it and locks at kickoff.</Typography>
+    </Box>
+  );
+}
+/* After kickoff: what I picked in this game and how it finished. */
+function MyPicksLine({ g }) {
+  const S = useStore(); const rows = gamePickRows().filter((r) => r.uid === S.uid && r.pick.game_id === g.game_id);
+  if (!rows.length) return null;
+  return (
+    <Box data-testid="my-game-picks" sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, alignItems: "center", borderTop: 1, borderColor: "divider", pt: 1 }}>
+      <Typography variant="subtitle2" component="h5">Your picks</Typography>
+      {rows.map((r) => <Chip key={r.pick.key} size="small" variant="outlined" color={STATE[r.state][1]} label={`${pickText(r.pick)} ${am(r.pick.american)} · ${STATE[r.state][0]}${r.state === "win" || r.state === "loss" ? ` ${unitsTxt(r.units)}` : ""}`} title={r.why || undefined} />)}
+    </Box>
+  );
+}
+
 function GameCard({ g, books, rec, current, mode, sharp }) {
   const final = g.status === "final"; const started = FB.isLocked(g, Date.now());
   const [open, setOpen] = useState(!final);                                   // finished games start collapsed
@@ -135,6 +186,8 @@ function GameCard({ g, books, rec, current, mode, sharp }) {
         <CardContent sx={{ display: "grid", gap: 0.75, pt: 0.5, "&:last-child": { pb: 1.5 } }}>
           {books.length ? <LinesTable g={g} books={books} mode={mode} />
             : <Typography variant="body2" color="text.secondary">{current ? "No lines from the feed for this game yet." : "No sportsbook lines were saved for this game (the feed started in Week 11)."}</Typography>}
+          {current && !started && books.length > 0 && <PickRow g={g} books={books} />}
+          {started && <MyPicksLine g={g} />}
           {books.length > 1 && Object.keys(FB.bestLines(books)).length > 0 && <Typography variant="caption" color="text.secondary">✓ = the better book for that side (a better number first, then a better price).</Typography>}
           {s && s.home_win != null && <Typography variant="caption" color="text.secondary">Win chance is the {fairMl ? "sharp books'" : ""} moneyline with the book's margin removed ({g.away} {pct(1 - s.home_win)}, {g.home} {pct(s.home_win)}).</Typography>}
           {g.proj && <Typography variant="caption" color="text.secondary" data-testid="proj-total">
@@ -194,6 +247,7 @@ export function GameLinesView() {
         {week === cur ? "Main point spread, total and moneyline at FanDuel and DraftKings, from the sportsbook feed. The smaller number beside each line is its price in American odds."
           : "Past week: final scores against the line. Sportsbook lines are shown where they were saved (from Week 11); otherwise the schedule file's closing spread and total."} For reference only: the app doesn't make picks on these.
       </Typography>
+      <GamePicksPanel week={week} />
       {week === cur && any && <ValuePanel by={by} games={games} mode={mode} setMode={setMode} feed={f} />}
       {week === cur && !any && <Alert severity="info" sx={{ borderRadius: 2 }}>{f && f.pulled_at ? "No game lines for this week yet. They arrive with the next sportsbook feed pull." : "Game lines come from the sportsbook feed, which isn't running yet (Admin → Sportsbook feed)."}</Alert>}
       {groups.length === 0 && null}
@@ -205,6 +259,42 @@ export function GameLinesView() {
       ))}
       <Tracker log={(f && f.value_log) || []} />
     </Stack>
+  );
+}
+
+/* My record on game picks, the family standings, and the week's picks (other members' picks appear at kickoff). */
+function GamePicksPanel({ week }) {
+  const S = useStore(); const [open, setOpen] = useState(false);
+  const rows = gamePickRows(); if (!S.uid && !rows.length) return null;
+  const mine = rows.filter((r) => r.uid === S.uid); const rec = FB.gamePickRecord(mine);
+  const by = {}; rows.forEach((r) => { (by[r.uid] ||= []).push(r); });
+  const table = Object.entries(by).map(([uid, rs]) => ({ uid, r: FB.gamePickRecord(rs.filter((x) => x.started)) })).filter((x) => x.r.n).sort((a, b) => b.r.units - a.r.units || b.r.w - a.r.w);
+  const wk = rows.filter((r) => r.pick.week === week).sort((a, b) => String(a.game.kickoff_et).localeCompare(String(b.game.kickoff_et)) || a.uid.localeCompare(b.uid));
+  const recTxt = (r) => `${r.w}-${r.l}${r.p ? `-${r.p}` : ""}`;
+  return (
+    <Card variant="outlined" sx={{ borderRadius: 2 }} data-testid="game-picks-panel">
+      <ButtonBase onClick={() => setOpen(!open)} aria-expanded={open} sx={{ display: "block", width: "100%", textAlign: "left", px: 2, py: 1.5 }}>
+        <Typography variant="h6" component="h3">Game picks</Typography>
+        <Typography variant="body2" color="text.secondary" data-testid="game-picks-summary">
+          {!mine.length ? "No game picks yet. Open a game below and tap a side under \"Your pick\"."
+            : `You: ${recTxt(rec)}${rec.w + rec.l + rec.p ? `, ${unitsTxt(rec.units)} units` : ""}${rec.pending ? ` · ${rec.pending} pending` : ""} · ${wk.filter((r) => r.uid === S.uid).length} pick${wk.filter((r) => r.uid === S.uid).length === 1 ? "" : "s"} in week ${week}`}
+        </Typography>
+      </ButtonBase>
+      {open && <CardContent sx={{ display: "grid", gap: 1, pt: 0, "&:last-child": { pb: 1.5 } }}>
+        {table.length > 0 && <Box data-testid="game-picks-standings">
+          <Typography variant="subtitle2">Family standings (games that have kicked off)</Typography>
+          {table.map((x, i) => <Typography key={x.uid} variant="body2">{i + 1}. {x.uid === S.uid ? "You" : nameOf(x.uid)} · {recTxt(x.r)} · {unitsTxt(x.r.units)} units{x.r.pending ? ` · ${x.r.pending} in progress` : ""}</Typography>)}
+        </Box>}
+        <Typography variant="subtitle2">Week {week}</Typography>
+        {!wk.length && <Typography variant="body2" color="text.secondary">No picks to show for this week yet.</Typography>}
+        {wk.map((r) => (
+          <Typography key={r.uid + r.pick.key} variant="body2" data-testid="game-pick-item">
+            <b>{r.uid === S.uid ? "You" : nameOf(r.uid)}</b> · {r.game.away} at {r.game.home} · {pickText(r.pick)} {am(r.pick.american)} ({r.pick.book}) · {STATE[r.state][0]}{r.state === "win" || r.state === "loss" ? ` ${unitsTxt(r.units)}` : ""}{r.why ? ` (${r.why})` : ""}
+          </Typography>
+        ))}
+        <Typography variant="caption" color="text.secondary">One pick per market per game, graded at the line and price recorded when it was made: a win pays that price on 1 unit, a loss costs 1 unit, a push returns it. Other members' picks appear at kickoff. Family picks only: nothing is wagered here.</Typography>
+      </CardContent>}
+    </Card>
   );
 }
 

@@ -564,3 +564,33 @@ test("fair price: what a bet costs, when it counts as value, and the tracker's r
   assert.deepStrictEqual(FB.valueSummary([]).flagged, 0); assert.strictEqual(FB.valueSummary(null).avg_clv, null);
 });
 
+test("game picks: best offer per side, grading, kickoff rule and record", () => {
+  const fd = { book: "FanDuel", spread: { home_line: -15.5, home_american: -115, away_american: -105 }, total: { line: 40.5, over_american: -115, under_american: -111 }, ml: { away_american: 870, home_american: -1429 } };
+  const dk = { book: "DraftKings", spread: { home_line: -16.5, home_american: -105, away_american: -115 }, total: { line: 41.5, over_american: -108, under_american: -112 }, ml: { away_american: 800, home_american: -1351 } };
+  const o = FB.gamePickOffers([fd, dk]);
+  // the favourite wants -15.5 (FanDuel), the underdog +16.5 (DraftKings); Over the lower total, Under the higher; the better moneyline price
+  assert.deepStrictEqual(o.spread_home, { book: "FanDuel", line: -15.5, american: -115 }); assert.deepStrictEqual(o.spread_away, { book: "DraftKings", line: 16.5, american: -115 });
+  assert.deepStrictEqual(o.total_over, { book: "FanDuel", line: 40.5, american: -115 }); assert.deepStrictEqual(o.total_under, { book: "DraftKings", line: 41.5, american: -112 });
+  assert.deepStrictEqual(o.ml_home, { book: "DraftKings", line: null, american: -1351 }); assert.deepStrictEqual(o.ml_away, { book: "FanDuel", line: null, american: 870 });
+  assert.deepStrictEqual(FB.gamePickOffers([{ book: "A", spread: null, total: null, ml: null }]), {});
+  assert.strictEqual(FB.gamePickKey(11, "2026_11_ARI_KC", "spread"), "g11_2026_11_ARI_KC_spread");
+  const fin = { status: "final", home_score: 27, away_score: 20, kickoff_et: "2026-11-22T13:00" };
+  const g = (market, side, line, american = -110) => FB.gradeGamePick({ market, side, line, american }, fin);
+  assert.deepStrictEqual([g("spread", "home", -6.5).state, g("spread", "home", -7).state, g("spread", "home", -7.5).state, g("spread", "away", 7.5).state], ["win", "push", "loss", "win"]);
+  assert.deepStrictEqual([g("total", "over", 46.5).state, g("total", "under", 47).state, g("total", "under", 47.5).state], ["win", "push", "win"]);
+  assert.deepStrictEqual([g("ml", "home", null, -200).state, g("ml", "away", null, 170).state], ["win", "loss"]);
+  assert.ok(Math.abs(g("spread", "home", -6.5, -110).units - 100 / 110) < 1e-9 && g("ml", "away", null, 170).units === -1 && g("spread", "home", -7).units === 0 && Math.abs(g("total", "over", 46.5, 150).units - 1.5) < 1e-9);
+  assert.strictEqual(FB.gradeGamePick({ market: "spread", side: "home", line: -3, american: -110 }, { status: "upcoming", kickoff_et: "2026-11-22T13:00" }).state, "pending");
+  // kickoff rule (13:00 ET = 18:00Z)
+  const pk = { key: "k", market: "spread", side: "home", line: -3, picked_at: "2026-11-22T17:59:00Z" };
+  assert.strictEqual(FB.gamePickValid(pk, fin, undefined, "u").ok, true);
+  assert.strictEqual(FB.gamePickValid({ ...pk, picked_at: "2026-11-22T18:00:00Z" }, fin, undefined, "u").ok, false);
+  assert.strictEqual(FB.gamePickValid({ ...pk, picked_at: null }, fin, undefined, "u").ok, false);
+  assert.strictEqual(FB.gamePickValid(pk, fin, { game_picks: { u: { k: { market: "spread", side: "home", line: -3 } } } }, "u").ok, true);
+  assert.strictEqual(FB.gamePickValid(pk, fin, { game_picks: { u: { k: { market: "spread", side: "away", line: 3 } } } }, "u").ok, false);   // switched sides after the snapshot
+  assert.strictEqual(FB.gamePickValid(pk, fin, { game_picks: {} }, "u").ok, false);                                                      // not in the snapshot at all
+  assert.strictEqual(FB.gamePickValid(pk, fin, { picks: {} }, "u").ok, true);                                                            // an older snapshot without game picks: time rule only
+  const rec = FB.gamePickRecord([{ state: "win", units: 0.91 }, { state: "loss", units: -1 }, { state: "push", units: 0 }, { state: "pending", units: 0 }, { state: "void", units: 0 }]);
+  assert.deepStrictEqual([rec.w, rec.l, rec.p, rec.pending, rec.not_counted, rec.n], [1, 1, 1, 1, 1, 5]); assert.ok(Math.abs(rec.units + 0.09) < 1e-9);
+});
+

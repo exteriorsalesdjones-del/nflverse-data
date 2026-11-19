@@ -60,7 +60,10 @@ with tempfile.TemporaryDirectory() as t:
         "before": "2026-11-13T01:14:59Z", "exactly": "2026-11-13T01:15:00Z", "after": "2026-11-13T01:16:00Z",
         "nozone": "2026-11-13T01:00:00", "garbage": "yesterday"}.items()}
     items["legacy"] = {"key": "legacy", "game_id": gid, "gsis_id": "legacy", "status": "submitted"}  # older record without a timestamp
-    (T / "picks" / "u1.json").write_text(json.dumps({"data": {"items": items}, "updatedAt": "2026-11-13T02:00:00Z"}))
+    gp = {"gA": {"key": "gA", "game_id": gid, "market": "spread", "side": "home", "line": -3.5, "american": -110, "book": "FanDuel", "picked_at": "2026-11-13T01:00:00Z"},
+          "gB": {"key": "gB", "game_id": gid, "market": "total", "side": "over", "line": 44.5, "american": -105, "book": "DraftKings", "picked_at": "2099-01-01T00:00:00Z"},   # after kickoff
+          "gC": {"key": "gC", "game_id": "other_game", "market": "ml", "side": "away", "line": None, "american": 150, "book": "FanDuel", "picked_at": "2026-11-13T01:00:00Z"}}
+    (T / "picks" / "u1.json").write_text(json.dumps({"data": {"items": items, "game_items": gp}, "updatedAt": "2026-11-13T02:00:00Z"}))
     made = make_locks.main(str(T), str(T / "out"), [])
     assert gid in made
     lock = json.loads((T / "out" / "locks" / f"{gid}.json").read_text())
@@ -68,6 +71,8 @@ with tempfile.TemporaryDirectory() as t:
     assert sorted(lock["review"]["u1"]) == ["after", "exactly", "garbage", "legacy", "nozone"], lock["review"]  # kept visible
     assert "No submission time" in lock["review"]["u1"]["legacy"] and "no time zone" in lock["review"]["u1"]["nozone"]
     assert lock["picks_doc_server_updated_at"] == {"u1": "2026-11-13T02:00:00Z"}
+    # game picks: only the one made before kickoff for THIS game is frozen, with its side, line and price
+    assert lock["game_picks"] == {"u1": {"gA": {"market": "spread", "side": "home", "line": -3.5, "american": -110, "book": "FanDuel"}}}, lock["game_picks"]
     # an existing snapshot is never rebuilt: passing its id leaves it out of the run entirely
     out2 = T / "out2"
     assert make_locks.main(str(T), str(out2), [gid]) == [] and not (out2 / "locks" / f"{gid}.json").exists()

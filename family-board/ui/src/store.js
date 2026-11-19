@@ -440,16 +440,18 @@ let writing = false;
    what this page happens to have loaded. A whole-document save built from a page that is still connecting, showing a
    saved copy, or behind another device would otherwise erase everything it hadn't seen. `change(items)` edits the
    fresh items in place; returning false cancels the save. */
-async function changeMine(coll, change, denied) {
+async function changeMine(coll, change, denied, field = "items") {
   if (!S.db || !S.uid) { toast("Sign in to Claude to save."); return false; }
   if (writing) { toast("Still saving the last change. Try again in a moment."); return false; }
   writing = true;
   try {
     const ref = S.db.doc(`${coll}/${S.uid}`); const snap = await ref.get();
     if (snap.metadata && snap.metadata.fromCache) { toast("Can't reach the family database right now, so nothing was changed. Try again in a moment."); return false; }
-    const items = snap.exists ? structuredClone((snap.data() || {}).items || {}) : {};
+    // the rest of the document is carried over untouched: touchdown picks (items) and game picks (game_items) share it
+    const cur = snap.exists ? structuredClone(snap.data() || {}) : {};
+    const items = cur[field] || {};
     if (change(items) === false) return false;
-    const body = { items, updated_at: new Date().toISOString() };
+    const body = { ...cur, [field]: items, updated_at: new Date().toISOString() };
     await ref.set(body);
     (coll === "picks" ? S.allPicks : S.parlaysAll)[S.uid] = body; emit(); // shown at once, even if the listener is slow
     return true;
@@ -459,6 +461,38 @@ async function changeMine(coll, change, denied) {
   } finally { writing = false; }
 }
 const savePicks = (change) => changeMine("picks", change, "You can view the board but not save picks. Ask the owner for access.");
+
+/* ---------- game picks (Lines tab): spread, total or moneyline, one per game per market ----------
+   Kept in the member's own picks document under `game_items`, beside the touchdown picks, so no new database rule is
+   needed. A pick records the line, price and book at the moment it was made and can be changed until kickoff. */
+export const myGamePicks = () => (S.allPicks[S.uid] && S.allPicks[S.uid].game_items) || {};
+export async function setGamePick(g, market, side, offer) {
+  if (!S.uid || !S.db) { toast("Sign in to Claude to make picks."); return; }
+  if (FB.isLocked(g, Date.now())) { toast("This game has kicked off. Picks are locked."); return; }
+  const key = FB.gamePickKey(g.week, g.game_id, market); const cur = myGamePicks()[key];
+  const same = cur && cur.side === side;
+  const label = market === "ml" ? `${side === "home" ? g.home : g.away} to win` : market === "total" ? `${side === "over" ? "Over" : "Under"} ${offer.line}` : `${side === "home" ? g.home : g.away} ${offer.line > 0 ? "+" : ""}${offer.line}`;
+  const ok = await changeMine("picks", (items) => {
+    if (FB.isLocked(g, Date.now())) { toast("This game has kicked off. Picks are locked."); return false; }
+    if (same) { delete items[key]; return; }
+    items[key] = { key, week: g.week, game_id: g.game_id, away: g.away, home: g.home, market, side, line: offer.line == null ? null : offer.line, american: offer.american, book: offer.book, picked_at: new Date().toISOString() };
+  }, "You can view the board but not save picks. Ask the owner for access.", "game_items");
+  if (ok) toast(same ? `Removed: ${label}.` : `Picked ${label} (${offer.american > 0 ? "+" : ""}${offer.american} at ${offer.book}). Locks at kickoff.`);
+}
+/* Every member's game picks with their grade. Another member's pick is shown only once its game has kicked off. */
+export function gamePickRows(nowMs = Date.now()) {
+  const rows = [];
+  for (const [uid, d] of Object.entries(S.allPicks)) {
+    for (const p of Object.values((d && d.game_items) || {})) {
+      const g = S.gameById[p.game_id]; if (!g) continue;
+      const started = FB.isLocked(g, nowMs); if (uid !== S.uid && !started) continue;
+      const valid = started ? FB.gamePickValid(p, g, S.locks[p.game_id], uid) : { ok: true };
+      const gr = valid.ok ? FB.gradeGamePick(p, g) : { state: "void", units: 0 };
+      rows.push({ uid, pick: p, game: g, started, state: gr.state, units: gr.units, why: valid.ok ? null : valid.why });
+    }
+  }
+  return rows;
+}
 /* What a pick or parlay leg records about the price at the moment it was made. A copy, so later uploads never change it. */
 export function priceRecord(pr, market = "anytime_td") {
   if (!pr) return null;
@@ -593,6 +627,11 @@ export async function freeze(games) {
       const held = sub.filter((p) => !FB.snapshotEligibility(p, g).ok);
       if (held.length) review[uid] = Object.fromEntries(held.map((p) => [p.key, FB.snapshotEligibility(p, g).why]));
     }
+    const game_picks = {}; const kickMs = FB.etToUtcMs(g.kickoff_et);
+    for (const [uid, d] of Object.entries(allPicks)) {
+      const mine = Object.values(d.game_items || {}).filter((p) => p.game_id === g.game_id && Date.parse(p.picked_at) < kickMs);
+      if (mine.length) game_picks[uid] = Object.fromEntries(mine.map((p) => [p.key, { market: p.market, side: p.side, line: p.line == null ? null : p.line, american: p.american, book: p.book }]));
+    }
     const parlays = {};
     for (const [uid, d] of Object.entries(parlaysAll)) {
       for (const par of Object.values(d.items || {})) {
@@ -600,7 +639,7 @@ export async function freeze(games) {
         if (first && first.game_id === g.game_id) (parlays[uid] ||= {})[par.id] = par.legs.map((l) => l.gsis_id);
       }
     }
-    try { await S.db.doc("locks/" + g.game_id).set({ frozen_at: new Date().toISOString(), by: "admin page", picks, review, parlays }); made++; }
+    try { await S.db.doc("locks/" + g.game_id).set({ frozen_at: new Date().toISOString(), by: "admin page", picks, review, parlays, game_picks }); made++; }
     catch (e) { toast("Couldn't snapshot " + g.game_id); return; }
   }
   toast(made ? `Saved ${made} snapshot${made > 1 ? "s" : ""}.` : "Nothing to snapshot: those games already have one.");

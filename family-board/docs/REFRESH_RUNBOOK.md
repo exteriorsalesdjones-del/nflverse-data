@@ -50,7 +50,8 @@ Artifact: https://claude.ai/artifact/6vni4HxfKfykT45J3F5SoD
 5. Kickoff snapshots:
    - `ArtifactData list collection=locks` and note the existing ids.
    - `ArtifactData list collection=picks out_dir=<tmp>` and `ArtifactData list collection=parlays out_dir=<tmp>`.
-   - `python3 refresh/make_locks.py <tmp> <tmp>/out <existing ids...>`
+   - `python3 refresh/make_locks.py <tmp> <tmp>/out <existing ids...>` (the snapshot also freezes each member's game
+     picks, `game_items` in the same picks documents, as `game_picks`; a game with only game picks gets a snapshot too)
    - For each file printed, `ArtifactData set collection=locks doc_id=<game_id> file_path=<file>`
      (create only; never overwrite an existing lock).
    Game window (hourly job): run when a game kicked off in the last 9 hours **or** the published `meta.json` lists a game

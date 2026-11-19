@@ -33,10 +33,12 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
     games = json.loads(GAMES.read_text())
     started = [g for g in games if g["status"] != "upcoming" or kickoff_utc(g["kickoff_et"]) <= now]
     picks = {}
+    game_picks = {}
     doc_updated = {}
     for f in Path(picks_dir, "picks").glob("*.json"):
         doc = json.loads(f.read_text())
         picks[f.stem] = (doc.get("data") or doc).get("items", {})
+        game_picks[f.stem] = (doc.get("data") or doc).get("game_items", {})   # spread / total / moneyline picks (Lines tab)
         doc_updated[f.stem] = doc.get("updatedAt")  # server-written time of the member's last change to ANY pick (audit only)
     # parlays: exported the same way (ArtifactData list collection=parlays out_dir=<dir>) -> <dir>/parlays/<uid>.json
     gmap = {g["game_id"]: g for g in games}
@@ -49,6 +51,7 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
         return min(gs, key=lambda g: kickoff_utc(g["kickoff_et"]))["game_id"] if gs else None
     wanted = {p["game_id"] for items in picks.values() for p in items.values() if p.get("status") == "submitted"}
     wanted |= {first_game(par) for items in parlays.values() for par in items.values()} - {None}
+    wanted |= {p.get("game_id") for items in game_picks.values() for p in items.values()} - {None}
     made = []
     out = Path(out_dir, "locks")
     out.mkdir(parents=True, exist_ok=True)
@@ -86,8 +89,20 @@ def main(picks_dir: str, out_dir: str, existing: list[str]) -> list[str]:
             for pid, par in items.items():
                 if first_game(par) == gid:
                     fpar.setdefault(uid, {})[pid] = [l["gsis_id"] for l in par.get("legs", [])]
+        # game picks made before kickoff, as they stand now: a later change no longer matches and does not count
+        fgame = {}
+        for uid, items in game_picks.items():
+            for k, p in items.items():
+                if p.get("game_id") != gid:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(str(p.get("picked_at")).replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if ts.tzinfo is not None and ts < kickoff_utc(g["kickoff_et"]):
+                    fgame.setdefault(uid, {})[k] = {"market": p.get("market"), "side": p.get("side"), "line": p.get("line"), "american": p.get("american"), "book": p.get("book")}
         audit = {uid: doc_updated.get(uid) for uid in frozen if doc_updated.get(uid)}
-        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen, "review": review, "parlays": fpar,
+        (out / f"{gid}.json").write_text(json.dumps({"frozen_at": now.isoformat(timespec="seconds"), "by": "scheduled refresh", "picks": frozen, "review": review, "parlays": fpar, "game_picks": fgame,
                                                      "picks_doc_server_updated_at": audit}))
         made.append(gid)
     return made
