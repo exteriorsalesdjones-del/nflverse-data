@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Chip, LinearProgress, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
-import { FB, useStore, ensureResearch, effAttr, effCand, chanceFor, boardFor } from "./store.js";
+import { FB, useStore, ensureResearch, setViewWeek, effAttr, effCand, chanceFor, boardFor } from "./store.js";
+import { WeekPicker, pickWeek } from "./shared.jsx";
 import { Icon, P } from "./icons.jsx";
 import { AnalysisReports } from "./analysis.jsx";
 import { lastGameText, ExtrasError } from "./views.jsx";
@@ -62,7 +63,7 @@ function BetTable({ bet, label }) {
         `${r.max_drawdown_units.toFixed(1)} units`, `${r.longest_losing_run} bets`, pct(r.avg_implied), pct(r.avg_model), pct(r.hit_rate)])} />
     <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap" }}>
       <Typography variant="body2">Split by</Typography>
-      <ToggleButtonGroup exclusive size="small" value={seg} onChange={(e, v) => v && setSeg(v)} aria-label={`${label}: split by`} sx={{ "& .MuiToggleButton-root": { minHeight: 40, px: 1.25, textTransform: "none" } }}>
+      <ToggleButtonGroup exclusive size="small" value={seg} onChange={(e, v) => v && setSeg(v)} aria-label={`${label}: split by`} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 1.25, textTransform: "none" } }}>
         {Object.entries(SEG).map(([k, v]) => <ToggleButton key={k} value={k}>{v}</ToggleButton>)}</ToggleButtonGroup>
     </Stack>
     <Grid label={`${label} by ${SEG[seg].toLowerCase()}`} head={["Rule", ...keys.map((k) => (seg === "by_week" ? `Week ${k}` : k))]}
@@ -115,9 +116,10 @@ export function TestingDashboard() {
 export function ResearchView() {
   const S = useStore();
   useEffect(() => { ensureResearch(); }, []);
-  const weeks = useMemo(() => [...new Set(S.games.map((g) => g.week))].sort((a, b) => a - b), [S.games]);
   const slateWeek = S.slate ? S.slate.week : null;
-  const [week, setWeek] = useState(slateWeek || weeks[weeks.length - 1]);
+  // weeks so far, newest first (the same picker and the same chosen week as Lines and TD Log)
+  const weeks = useMemo(() => [...new Set(S.games.map((g) => g.week))].filter((w) => slateWeek == null || w <= slateWeek).sort((a, b) => b - a), [S.games, slateWeek]);
+  const week = pickWeek(weeks, S.viewWeek, slateWeek || weeks[0]);
   const [game, setGame] = useState("all"); const [q, setQ] = useState(""); const [pos, setPos] = useState("All"); const [mk, setMk] = useState(S.weekMarket || "anytime_td");
   if (!S.extrasLoaded) return S.extrasError ? <ExtrasError /> : <LinearProgress aria-label="Loading research data" />;
   const games = S.games.filter((g) => g.week === week).sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et));
@@ -146,6 +148,7 @@ export function ResearchView() {
   const U = S.usage; const ucol = U ? Object.fromEntries(U.cols.map((c, i) => [c, i])) : {};
   const usage = U ? U.rows.filter((r) => r[ucol.week] === week && inGame(r[ucol.game_id]) && matchQ(r[ucol.name], r[ucol.team], r[ucol.opp]) && posOk(r[ucol.pos])) : [];
   usage.sort((a, b) => (b[ucol.tgt] + b[ucol.car] + b[ucol.att]) - (a[ucol.tgt] + a[ucol.car] + a[ucol.att]));
+  const played = games.some((g) => g.status === "final");   // has any game of the chosen week finished?
   const slateCands = isSlate && S.slate ? S.slate.games.filter((g) => inGame(g.game_id)).flatMap((g) => g.teams.flatMap((t) => t.candidates.map((c) => ({ c: effCand(c), g }))))
     .filter(({ c }) => matchQ(c.full_name || c.player, c.team) && posOk(c.pos)) : [];
 
@@ -173,27 +176,26 @@ export function ResearchView() {
   return (
     <Stack spacing={1.5}>
       <Typography variant="h5" component="h2">Research</Typography>
-      <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(4, 1fr)" } }}>
-        <TextField select size="small" label="Season" value={2026} slotProps={{ select: { native: false } }}><MenuItem value={2026}>2026</MenuItem></TextField>
-        <TextField select size="small" label="Week" value={week} onChange={(e) => { setWeek(+e.target.value); setGame("all"); }}>
-          {weeks.map((w) => <MenuItem key={w} value={w}>Week {w}{w === slateWeek ? " (this week)" : ""}</MenuItem>)}</TextField>
-        <TextField select size="small" label="Game" value={game} onChange={(e) => setGame(e.target.value)} sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}>
-          <MenuItem value="all">All games</MenuItem>
+      <WeekPicker weeks={weeks} value={week} current={slateWeek} onChange={(v) => { setViewWeek(v); setGame("all"); }} />
+      <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, "& .MuiInputBase-root": { minHeight: 44 } }}>
+        <TextField select size="small" label="Game" value={game} onChange={(e) => setGame(e.target.value)}>
+          <MenuItem value="all">All week {week} games</MenuItem>
           {games.map((g) => <MenuItem key={g.game_id} value={g.game_id}>{g.away} at {g.home}</MenuItem>)}</TextField>
-        <TextField size="small" label="Search player or team" value={q} onChange={(e) => setQ(e.target.value)} sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }} />
+        <TextField size="small" label="Search player or team" value={q} onChange={(e) => setQ(e.target.value)} />
       </Box>
       <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
-        <ToggleButtonGroup exclusive size="small" value={pos} onChange={(e, v) => v && setPos(v)} aria-label="Position" sx={{ "& .MuiToggleButton-root": { minHeight: 40, px: 1.25 } }}>
+        <ToggleButtonGroup exclusive size="small" value={pos} onChange={(e, v) => v && setPos(v)} aria-label="Position" sx={{ "& .MuiToggleButton-root": { minHeight: 44, minWidth: 44, px: 1.25 } }}>
           {POS.map((p) => <ToggleButton key={p} value={p}>{p}</ToggleButton>)}</ToggleButtonGroup>
-        <ToggleButtonGroup exclusive size="small" value={mk} onChange={(e, v) => v && setMk(v)} aria-label="TD market" sx={{ "& .MuiToggleButton-root": { minHeight: 40, px: 1.25, textTransform: "none" } }}>
+        <ToggleButtonGroup exclusive size="small" value={mk} onChange={(e, v) => v && setMk(v)} aria-label="TD market" sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 1.25, textTransform: "none" } }}>
           <ToggleButton value="anytime_td">Anytime TD</ToggleButton><ToggleButton value="2plus_td">2+ TDs</ToggleButton></ToggleButtonGroup>
       </Stack>
       <Typography variant="caption" color="text.secondary">Model updated {et(S.meta.refreshed_at, { weekday: "short", hour: "numeric", minute: "2-digit" })} · sportsbook prices keep their own capture times · "Unavailable" = no source record; 0 = confirmed zero.</Typography>
 
       <Sec id="usage" title="Player usage" summary={`Week ${week} game-by-game usage${isSlate ? " and Last Game Usage for this week's players" : ""}`} kinds={["done"]} open>
         {!U ? <Typography variant="body2" color="text.secondary">Game-by-game usage: Unavailable (not in this data refresh yet).</Typography> : <>
-          <Grid label="Game-by-game usage" head={["Player", "Wk · opp", "Targets", "Rush att", "Pass att", "GL carries", "EZ targets"]}
-            rows={usage.map((r) => [`${r[ucol.name]} (${r[ucol.pos]} ${r[ucol.team]})`, `${r[ucol.week]} · ${r[ucol.opp]}`, r[ucol.tgt], r[ucol.car], r[ucol.att], r[ucol.gl], r[ucol.ez]])} />
+          {!usage.length && !played ? <Alert severity="info" sx={{ borderRadius: 2 }} data-testid="usage-unplayed">Week {week} hasn't been played yet, so there is no game-by-game usage for it.{isSlate ? " Each player's last game is below." : ""} Pick an earlier week above to see what happened in it.</Alert>
+            : <Grid label="Game-by-game usage" head={["Player", "Wk · opp", "Targets", "Rush att", "Pass att", "GL carries", "EZ targets"]}
+              rows={usage.map((r) => [`${r[ucol.name]} (${r[ucol.pos]} ${r[ucol.team]})`, `${r[ucol.week]} · ${r[ucol.opp]}`, r[ucol.tgt], r[ucol.car], r[ucol.att], r[ucol.gl], r[ucol.ez]])} />}
           <Typography variant="caption" color="text.secondary">From play-by-play (matches nflverse's official weekly stats). GL carries: rushing attempts from inside the 5. EZ targets: targets thrown into the end zone (air-yards proxy). Players who appeared without a target, carry or pass attempt aren't listed (all 0). QB handoffs: Unavailable, because no source records who handed off.</Typography>
         </>}
         {isSlate && <>
@@ -233,6 +235,7 @@ export function ResearchView() {
         <Grid label="Model and prices" head={["Player", "Game", two ? "2+ chance" : "TD chance", "Fair odds", "Best price", "Price time", "Value edge"]} rows={modelRows.map((x) => x.row)} />
       </Sec>
 
+      <Typography variant="overline" component="h3" color="text.secondary" sx={{ pt: 1, lineHeight: 1.6, fontWeight: 700 }} data-testid="season-divider">Whole season · not changed by the week, game or search above</Typography>
       <Sec id="testing" title="Testing dashboard" summary="Calibration, flat-bet record after the margin, worst slides, results by price, position and week, and closing-price checks" kinds={["done", "model", "price"]}>
         <TestingDashboard />
       </Sec>

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Box, Button, ButtonBase, Card, CardContent, Chip, Stack, Typography } from "@mui/material";
-import { FB, useStore, myItems, myGamePicks, myParlays, effCand, chanceFor, boardFor, weekMoves, settlePick, nameOf, focusGame, focusLine } from "./store.js";
+import { Box, Button, ButtonBase, Card, CardContent, Stack, Typography } from "@mui/material";
+import { FB, useStore, effCand, chanceFor, boardFor, weekMoves, settlePick, nameOf, focusGame, focusLine } from "./store.js";
 import { Icon, P } from "./icons.jsx";
 import { PickButton, MoveTag, DbNote } from "./views.jsx";
+import { useMyWeek, MyWeekList } from "./shared.jsx";
 
 /* Home: the week at a glance. Everything here is a summary of another page and links to it; nothing is decided here
    that isn't decided there (same chances, same prices, same settlement). */
@@ -19,8 +20,6 @@ export function until(ms) {
   return d ? `${d} day${d > 1 ? "s" : ""}${h ? ` ${h} h` : ""}` : h ? `${h} h${mm ? ` ${mm} min` : ""}` : `${mm} min`;
 }
 const ago = (iso) => { const ms = Date.now() - Date.parse(iso); return isNaN(ms) ? null : ms < 3600e3 ? `${Math.max(1, Math.round(ms / 60000))} min ago` : ms < 48 * 3600e3 ? `${Math.round(ms / 3600e3)} h ago` : `${Math.round(ms / 864e5)} days ago`; };
-const gamePickText = (p) => (p.market === "ml" ? `${p.side === "home" ? p.home : p.away} to win` : p.market === "total" ? `${p.side === "over" ? "Over" : "Under"} ${p.line}` : `${p.side === "home" ? p.home : p.away} ${p.line > 0 ? "+" : ""}${p.line}`);
-const STATE = { win: ["Won", "success"], loss: ["Lost", "error"], void: ["Void", "default"], needs_review: ["In review", "warning"] };
 
 function Section({ id, title, more, onMore, children }) {
   return (
@@ -59,18 +58,8 @@ export function HomeView() {
   const final = games.filter((g) => (S.gameById[g.game_id] || g).status === "final").length; const live = games.length - open.length - final;
   const next = open[0];
 
-  // ---------- my week
-  const tdPicks = S.uid ? Object.values(myItems()).filter((p) => p.week === wk && p.status === "submitted") : [];
-  const gPicks = S.uid ? Object.values(myGamePicks()).filter((p) => p.week === wk) : [];
-  const parlays = S.uid ? Object.values(myParlays()).filter((p) => p.week === wk) : [];
-  const when = (g) => (g.kickoff_et ? ` · ${FB.fmtEt(FB.etToUtcMs(g.kickoff_et), { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "");
-  const mine = [
-    ...tdPicks.map((p) => { const g = S.gameById[p.game_id] || {}; const r = settlePick(S.uid, p);
-      return { key: p.key, k: FB.etToUtcMs(g.kickoff_et), text: p.player, sub: `${(p.market || "anytime_td") === "2plus_td" ? "2+ TDs" : "Anytime TD"}${g.away ? ` · ${g.away} at ${g.home}` : ""}${when(g)}`, g, state: r.state }; }),
-    ...gPicks.map((p) => { const g = S.gameById[p.game_id] || {};
-      return { key: p.key, k: FB.etToUtcMs(g.kickoff_et), text: gamePickText(p), sub: `Game pick · ${p.away} at ${p.home} · ${am(p.american)} ${p.book || ""}${when(g)}`, g, state: null }; }),
-  ].sort((a, b) => a.k - b.k);
-  const status = (m) => (m.state && STATE[m.state] ? STATE[m.state] : m.g.kickoff_et && FB.isLocked(m.g, now) ? ["Locked", "default"] : ["Open", "primary"]);
+  // ---------- my week (touchdown picks, game picks and parlays: one list, shared with Pick Hub)
+  const { tdPicks, gPicks, parlays, rows: mine } = useMyWeek(wk);
 
   // ---------- top chances (anytime, open games, available players)
   const top = open.flatMap((g) => g.teams.flatMap((t) => t.candidates.map((c) => ({ c: effCand(c), g })))).filter(({ c }) => c.quality !== "unavailable")
@@ -126,14 +115,7 @@ export function HomeView() {
           {S.draft.length > 0 && <ButtonBase onClick={go("parlays")} sx={{ justifyContent: "space-between", px: 1.5, minHeight: 48, borderRadius: 2.5, bgcolor: "secondary.main", color: "secondary.contrastText", fontSize: 15, fontWeight: 700 }}>
             <span>Parlay in progress · {S.draft.length} leg{S.draft.length > 1 ? "s" : ""}</span><span>Finish it ›</span></ButtonBase>}
           {mine.length > 0 ? (
-            <List label="My picks this week">
-              {mine.slice(0, 6).map((m) => { const st = status(m); return (
-                <Box component="li" key={m.key} sx={rowSx}>
-                  <Box sx={{ flex: 1, minWidth: 0 }}><Typography sx={{ fontWeight: 600 }}>{m.text}</Typography><Typography variant="body2" color="text.secondary">{m.sub}</Typography></Box>
-                  <Chip size="small" color={st[1]} variant={st[0] === "Open" ? "outlined" : "filled"} label={st[0]} title={st[0] === "Open" ? "You can change this until kickoff" : undefined} />
-                </Box>); })}
-              {mine.length > 6 && <Box component="li" sx={{ pt: 0.5 }}><Note>and {mine.length - 6} more on My picks.</Note></Box>}
-            </List>
+            <MyWeekList rows={mine} max={6} />
           ) : open.length > 0 ? (
             <>
               <Note>Nothing picked yet for week {wk}.</Note>
@@ -196,7 +178,7 @@ export function HomeView() {
         </> : <Note>No anytime TD price has moved yet this week. A move shows when a sportsbook changes a player's price after it is first seen.</Note>}
       </Section>
 
-      <Section id="family" title="Family" more="Family board" onMore={go("board")}>
+      <Section id="family" title="Pick Hub" more="Open Pick Hub" onMore={go("board")}>
         {Object.keys(thisWeek).length ? <Typography variant="body2"><b>Week {wk}:</b> {Object.entries(thisWeek).sort((a, b) => b[1] - a[1]).map(([uid, n]) => `${nameOf(uid)} ${n} pick${n > 1 ? "s" : ""}`).join(" · ")}</Typography>
           : <Note>No one has made a touchdown pick for week {wk} yet.</Note>}
         {lastWk != null && (!S.extrasLoaded ? <Note>{S.extrasError ? `Week ${lastWk} results didn't load. Check your connection and reopen the app.` : `Loading week ${lastWk} results…`}</Note>

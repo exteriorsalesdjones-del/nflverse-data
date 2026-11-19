@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Box, Button, ButtonBase, Card, CardContent, Chip, Stack, Table, TableBody, TableCell, TableHead, TableRow, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
-import { FB, useStore, ensureLineHistory, focusGame, clearFocusLine, myGamePicks, setGamePick, gamePickRows, nameOf } from "./store.js";
+import { FB, useStore, ensureLineHistory, focusGame, clearFocusLine, setViewWeek, myGamePicks, setGamePick, gamePickRows, nameOf } from "./store.js";
+import { WeekPicker, pickWeek, DayJump, byDay, dayHeadingSx, windowOf } from "./shared.jsx";
+export { windowOf };
 import { Icon, P } from "./icons.jsx";
 
 /* Lines tab: each game's main spread, total and moneyline at FanDuel and DraftKings (sportsbook feed), with a one-line
@@ -15,13 +17,6 @@ const when = (iso) => new Date(iso).toLocaleString("en-US", { timeZone: "America
 const cost = (v) => (v == null ? "—" : (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(1) + "%");
 const kick = (g) => { const k = FB.etToUtcMs(g.kickoff_et); return isNaN(k) ? g.kickoff_et : FB.fmtEt(k, {}) + " ET"; };
 
-/* Thursday / Sunday early / Sunday late / Sunday night / Monday ... from the Eastern kickoff time. */
-export function windowOf(g) {
-  const d = new Date(g.kickoff_et.slice(0, 10) + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
-  const h = Number(g.kickoff_et.slice(11, 13));
-  if (d !== "Sunday") return d;
-  return h < 12 ? "Sunday morning" : h < 15 ? "Sunday early" : h < 19 ? "Sunday late" : "Sunday night";
-}
 const INDOOR = ["dome", "closed"];
 function weatherText(g) {
   const w = g.weather; const roof = (w && w.roof) || g.roof;
@@ -129,7 +124,7 @@ function PickRow({ g, books }) {
                   aria-label={`${on ? "Remove pick" : "Pick"} ${text}${o ? ` at ${am(o.american)} ${o.book}` : ""}`}
                   sx={{ minHeight: 48, px: 0.5, lineHeight: 1.15, display: "flex", flexDirection: "column", fontSize: 13 }}>
                   <span>{on ? "✓ " : ""}{text}</span>
-                  <Box component="span" sx={{ fontSize: 11, opacity: 0.85, fontWeight: 400 }}>{o ? `${am(on ? cur.american : o.american)} ${BK[on ? cur.book : o.book] || (on ? cur.book : o.book)}` : "no line"}</Box>
+                  <Box component="span" sx={{ fontSize: 12, fontWeight: 400 }}>{o ? `${am(on ? cur.american : o.american)} ${BK[on ? cur.book : o.book] || (on ? cur.book : o.book)}` : "no line"}</Box>
                 </Button>
               );
             })}
@@ -197,7 +192,7 @@ function GameCard({ g, books, rec, current, mode, sharp, startOpen, all }) {
             : <Typography variant="body2" color="text.secondary">{current ? "No lines from the feed for this game yet." : "No sportsbook lines were saved for this game (the feed started in Week 11)."}</Typography>}
           {current && !started && books.length > 0 && <PickRow g={g} books={books} />}
           {started && <MyPicksLine g={g} />}
-          {books.length > 1 && Object.keys(FB.bestLines(books)).length > 0 && <Typography variant="caption" color="text.secondary">✓ = the better book for that side (a better number first, then a better price).</Typography>}
+          {books.length > 0 && <Typography variant="caption" color="text.secondary">The smaller number beside each line is its price in American odds.{books.length > 1 && Object.keys(FB.bestLines(books)).length > 0 ? " ✓ = the better book for that side (a better number first, then a better price)." : ""}</Typography>}
           {s && s.home_win != null && <Typography variant="caption" color="text.secondary">Win chance is the {fairMl ? "sharp books'" : ""} moneyline with the book's margin removed ({g.away} {pct(1 - s.home_win)}, {g.home} {pct(s.home_win)}).</Typography>}
           {g.proj && <Typography variant="caption" color="text.secondary" data-testid="proj-total">
             <b>Projected total {num1(g.proj.total)}</b> ({g.away} {num1(g.proj.away.points)}, {g.home} {num1(g.proj.home.points)}){s && s.total != null ? ` · books ${num1(half(s.total))} · ${Math.abs(g.proj.total - s.total) < 0.75 ? "about the same" : `${num1(Math.abs(Math.round((g.proj.total - s.total) * 2) / 2))} ${g.proj.total > s.total ? "higher" : "lower"}`}` : ""}.
@@ -223,16 +218,14 @@ function GameCard({ g, books, rec, current, mode, sharp, startOpen, all }) {
 
 export function GameLinesView() {
   const S = useStore(); const f = S.oddsFeed; const cur = S.slate.week;
-  const [week, setWeek] = useState(cur); const [mode, setMode] = useState("price");
+  const [mode, setMode] = useState("price");
   const [all, setAll] = useState({ n: 0, open: false });        // "Open all games" / "Close all games"
   const [focusId] = useState(() => S.focusLine || null);        // arrived from Home for one game: it starts open
   useEffect(() => { ensureLineHistory(); }, []);
   useEffect(() => { if (!focusId) return; clearFocusLine();
     const t = setTimeout(() => { const el = document.querySelector(`[data-game="${focusId}"]`); if (el) el.scrollIntoView({ block: "start" }); }, 60); return () => clearTimeout(t); }, [focusId]);
-  const jump = (i) => { const el = document.getElementById(`gl-day-${i}`); if (!el) return;
-    el.scrollIntoView({ block: "start", behavior: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-    const h = el.querySelector("h3"); if (h) h.focus({ preventScroll: true }); };
   const weeks = useMemo(() => [...new Set(S.games.map((g) => g.week))].filter((w) => w <= cur).sort((a, b) => b - a), [S.games, cur]);
+  const week = pickWeek(weeks, S.viewWeek, cur);   // the week picked on any tab carries over
   const by = useMemo(() => {
     const out = {};
     if (week === cur && f && f.week === cur) {
@@ -250,36 +243,24 @@ export function GameLinesView() {
     ? S.games.filter((g) => g.week === week).map((g) => ({ ...(S.slate.games.find((x) => x.game_id === g.game_id) || {}), ...g }))
     : S.games.filter((g) => g.week === week);
   games.sort((a, b) => String(a.kickoff_et).localeCompare(String(b.kickoff_et)) || a.game_id.localeCompare(b.game_id));
-  const groups = []; games.forEach((g) => { const w = windowOf(g); if (!groups.length || groups[groups.length - 1][0] !== w) groups.push([w, []]); groups[groups.length - 1][1].push(g); });
+  const groups = byDay(games);
   const any = Object.keys(by).length > 0;
   return (
     <Stack spacing={1.5}>
       <Typography variant="h5" component="h2">Game lines · Week {week}</Typography>
-      <ToggleButtonGroup exclusive size="small" value={week} onChange={(e, v) => { if (v) { setWeek(v); setAll({ n: 0, open: false }); } }} aria-label="Week"
-        sx={{ overflowX: "auto", maxWidth: "100%", "& .MuiToggleButton-root": { minHeight: 44, minWidth: 52, px: 1, flexShrink: 0, textTransform: "none" } }}>
-        {weeks.map((w) => <ToggleButton key={w} value={w} aria-label={`Week ${w}`}>Wk {w}</ToggleButton>)}
-      </ToggleButtonGroup>
-      <Typography variant="body2" color="text.secondary">
-        {week === cur ? "Main point spread, total and moneyline at FanDuel and DraftKings, from the sportsbook feed. The smaller number beside each line is its price in American odds."
-          : "Past week: final scores against the line. Sportsbook lines are shown where they were saved (from Week 11); otherwise the schedule file's closing spread and total."} The app doesn't recommend a side; any game pick is your own call.
+      <WeekPicker weeks={weeks} value={week} current={cur} onChange={(v) => { setViewWeek(v); setAll({ n: 0, open: false }); }} />
+      <Typography variant="body2" color="text.secondary" data-testid="lines-intro">
+        {week === cur ? "FanDuel and DraftKings lines from the sportsbook feed." : "Past week: final scores against the line."} The app doesn't recommend a side; any game pick is your own call.
       </Typography>
       <GamePicksPanel week={week} />
       {week === cur && any && <ValuePanel by={by} games={games} mode={mode} setMode={setMode} feed={f} />}
       {week === cur && !any && <Alert severity="info" sx={{ borderRadius: 2 }}>{f && f.pulled_at ? "No game lines for this week yet. They arrive with the next sportsbook feed pull." : "Game lines come from the sportsbook feed, which isn't running yet (Admin → Sportsbook feed)."}</Alert>}
-      {games.length > 0 && (
-        <Box component="nav" aria-label="Jump to a day" data-testid="day-jump" sx={{ position: "sticky", top: 0, zIndex: 3, bgcolor: "background.default", py: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
-          <Box sx={{ flex: 1, minWidth: 0, display: "flex", gap: 0.75, overflowX: "auto", py: 0.25 }}>
-            {groups.length > 1 && groups.map(([label, gs], i) => (
-              <Button key={label} variant="outlined" onClick={() => jump(i)} aria-label={`Jump to ${label}, ${gs.length} game${gs.length > 1 ? "s" : ""}`}
-                sx={{ minHeight: 44, flexShrink: 0, px: 1.25, borderRadius: 6, bgcolor: "background.paper", whiteSpace: "nowrap", fontSize: 14 }}>{label.replace("Sunday ", "Sun ").replace("Thursday", "Thu").replace("Monday", "Mon").replace("Saturday", "Sat").replace("Friday", "Fri")} · {gs.length}</Button>))}
-          </Box>
-          <Button onClick={() => setAll({ n: all.n + 1, open: !all.open })} aria-pressed={all.open} sx={{ minHeight: 44, flexShrink: 0, whiteSpace: "nowrap" }}>{all.open ? "Close all" : "Open all"}</Button>
-        </Box>
-      )}
+      {games.length > 0 && <DayJump groups={groups} prefix="gl-day"
+        end={<Button onClick={() => setAll({ n: all.n + 1, open: !all.open })} aria-pressed={all.open} sx={{ minHeight: 44, flexShrink: 0, whiteSpace: "nowrap" }}>{all.open ? "Close all" : "Open all"}</Button>} />}
       {games.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ mt: "-4px !important" }}>Tap a game for both books' lines{week === cur ? ", your pick and the details" : " and the details"}.</Typography>}
       {groups.map(([label, gs], i) => (
         <Stack key={label} id={`gl-day-${i}`} spacing={1} component="section" aria-label={label} sx={{ scrollMarginTop: 64 }}>
-          <Typography variant="overline" component="h3" tabIndex={-1} color="text.secondary" sx={{ lineHeight: 1.6, fontWeight: 700, outline: "none" }}>{label} · {gs.length} game{gs.length > 1 ? "s" : ""}</Typography>
+          <Typography variant="overline" component="h3" tabIndex={-1} color="text.secondary" sx={dayHeadingSx}>{label} · {gs.length} game{gs.length > 1 ? "s" : ""}</Typography>
           {gs.map((g) => <GameCard key={g.game_id} g={g} rec={rec} current={week === cur} startOpen={g.game_id === focusId} all={all} mode={week === cur ? mode : "price"} sharp={week === cur && f && f.week === cur ? (f.sharp_lines || {})[g.game_id] : null} books={Object.values(by[g.game_id] || {}).sort((a, b) => a.book.localeCompare(b.book))} />)}
         </Stack>
       ))}
@@ -308,7 +289,7 @@ function GamePicksPanel({ week }) {
       </ButtonBase>
       {open && <CardContent sx={{ display: "grid", gap: 1, pt: 0, "&:last-child": { pb: 1.5 } }}>
         {table.length > 0 && <Box data-testid="game-picks-standings">
-          <Typography variant="subtitle2">Family standings (games that have kicked off)</Typography>
+          <Typography variant="subtitle2">Pick Hub standings (games that have kicked off)</Typography>
           {table.map((x, i) => <Typography key={x.uid} variant="body2">{i + 1}. {x.uid === S.uid ? "You" : nameOf(x.uid)} · {recTxt(x.r)} · {unitsTxt(x.r.units)} units{x.r.pending ? ` · ${x.r.pending} in progress` : ""}</Typography>)}
         </Box>}
         <Typography variant="subtitle2">Week {week}</Typography>
@@ -318,7 +299,7 @@ function GamePicksPanel({ week }) {
             <b>{r.uid === S.uid ? "You" : nameOf(r.uid)}</b> · {r.game.away} at {r.game.home} · {pickText(r.pick)} {am(r.pick.american)} ({r.pick.book}) · {STATE[r.state][0]}{r.state === "win" || r.state === "loss" ? ` ${unitsTxt(r.units)}` : ""}{r.why ? ` (${r.why})` : ""}
           </Typography>
         ))}
-        <Typography variant="caption" color="text.secondary">One pick per market per game, graded at the line and price recorded when it was made: a win pays that price on 1 unit, a loss costs 1 unit, a push returns it. Other members' picks appear at kickoff. Family picks only: nothing is wagered here.</Typography>
+        <Typography variant="caption" color="text.secondary">One pick per market per game, graded at the line and price recorded when it was made: a win pays that price on 1 unit, a loss costs 1 unit, a push returns it. Other members' picks appear at kickoff. Pick Hub picks only: nothing is wagered here.</Typography>
       </CardContent>}
     </Card>
   );
@@ -326,6 +307,7 @@ function GamePicksPanel({ week }) {
 
 /* The switch between prices and cost, and what (if anything) beats the fair price right now. */
 function ValuePanel({ by, games, mode, setMode, feed }) {
+  const [how, setHow] = useState(false);
   const gm = Object.fromEntries(games.map((g) => [g.game_id, g]));
   const all = Object.entries(by).flatMap(([gid, bk]) => (gm[gid] && !FB.isLocked(gm[gid], Date.now()) ? Object.values(bk).flatMap((m) => FB.lineCosts(m, gm[gid].away, gm[gid].home).map((c) => ({ ...c, g: gm[gid] }))) : []));
   const priced = all.filter((c) => c.value != null);
@@ -352,9 +334,10 @@ function ValuePanel({ by, games, mode, setMode, feed }) {
       ) : <Alert severity="info" sx={{ borderRadius: 2 }} data-testid="no-value">No FanDuel or DraftKings game line beats the fair price right now. That is the normal state: these markets are priced tightly.</Alert>}
       {priced.length > 0 && <Typography variant="body2" data-testid="typical-cost">
         <b>Typical cost of a bet this week:</b> spread {say(typical("spread"))} · total {say(typical("total"))} · moneyline {say(typical("ml"))}{td.length ? ` · anytime touchdown ${say(med(td))}` : ""} of the stake.</Typography>}
-      <Typography variant="caption" color="text.secondary">
+      <Box><Button onClick={() => setHow(!how)} aria-expanded={how} aria-controls="value-how" sx={{ ml: -1 }}>{how ? "Hide the explanation" : "What fair price and cost mean"}</Button></Box>
+      {how && <Typography id="value-how" variant="caption" color="text.secondary" data-testid="value-how">
         Fair price = the chance implied by sharp books and exchanges (Pinnacle, Circa, Novig, ProphetX) with their margin removed, at the same line. Cost = what a bet loses on average per dollar if that fair price is right. "Cost" swaps each price for its cost. A price is tagged VALUE only when it beats fair by 1% or more and at least two references agree. No method guarantees a profit.
-      </Typography>
+      </Typography>}
     </CardContent></Card>
   );
 }

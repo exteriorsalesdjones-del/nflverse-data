@@ -5,11 +5,12 @@ import {
   TableContainer, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Typography, useMediaQuery,
 } from "@mui/material";
 import {
-  FB, useStore, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
+  FB, useStore, setViewWeek, gamePickRows, effAttr, effCand, slateCands, myItems, priceFor, settlePick, nameOf, addPick, removePick, setPickStatus,
   rangeFor, exportCsv, freeze, saveReview, setOverride, toast, allLineRows, MARKETS, parseLinesCsv, uploadLines, deleteLines, readLinesShot, readLinesShots, MAX_SHOTS,
   addLeg, removeLeg, setDraft, toggleLeg, inDraft, refFor, crewIndex, setReferees, parseRefText, markInactive, matchLine, ensureExtras, setShotReview, confirmShot, clearSkipped, resetUploadScreen, ensurePregame, setWeekMarket, chanceFor, boardFor, weekMoves, weekRankings, refreshLines, allLineRows as allRows, manualRefresh, liveStatus, blendFor, state, clearFocusGame, saveFeedKey, removeFeedKey, saveParlay, deleteParlay, myParlays, settleParlayFor,
 } from "./store.js";
 import { visuallyHidden } from "@mui/utils";
+import { WeekPicker, pickWeek, DayJump, byDay, dayHeadingSx, gamePickText } from "./shared.jsx";
 import { Icon, P } from "./icons.jsx";
 import { ResultsDashboard } from "./results.jsx";
 import { LivePanel } from "./live.jsx";
@@ -29,7 +30,7 @@ const TYPE = { passing: "Passing", rushing: "Rushing", interception_return: "Int
 const RESULT = { win: ["Won", "success"], loss: ["Lost", "error"], void: ["Void", "default"], pending: ["Pending", "warning"], needs_review: ["Review", "secondary"], draft: ["Draft", "default"] };
 
 const ageTxt = (m) => (m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`);
-const RANK_COLOR = { best: "success.main", worst: "error.main" };
+const RANK_COLOR = { best: "success.main" };   // only the best price is marked; with two books "worst" was just noise
 /* A line move since the first price of the week: green = pays more now, red = pays less. Text says so too (not colour only). */
 export function MoveTag({ m, short }) {
   if (!m) return null; const up = m.dir === "longer";
@@ -61,7 +62,7 @@ function BookList({ c, g, market }) {
         <Box component="li" key={x.book} sx={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 1, px: 1, py: 0.5, borderRadius: 1, border: 1,
           borderColor: RANK_COLOR[x.rank] || "divider", borderLeftWidth: RANK_COLOR[x.rank] ? 4 : 1 }}>
           <Typography sx={{ fontWeight: 700, minWidth: 56, color: RANK_COLOR[x.rank] || "text.primary" }}><Num>{am(x.american)}</Num></Typography>
-          <Typography variant="body2" sx={{ flex: "1 1 112px" }}>{x.book}{x.rank === "best" ? " · Best" : x.rank === "worst" ? " · Worst" : ""}</Typography>
+          <Typography variant="body2" sx={{ flex: "1 1 112px" }}>{x.book}{x.rank === "best" ? " · Best" : ""}</Typography>
           <Typography variant="caption" color="text.secondary">{ageTxt(x.age_min)}{x.fresh ? "" : " · old"}</Typography>
           <MoveTag m={x.move} /><AboveFair c={c} x={x} market={market} />
         </Box>
@@ -74,7 +75,7 @@ function BookList({ c, g, market }) {
    beats both, a note says where; every book is listed in the player details. */
 const isFD = (b) => /^(fd|fan\s*duel)\b/i.test(String(b || "").trim());
 const isDK = (b) => /^(dk|draft\s*kings)\b/i.test(String(b || "").trim());
-function FdDk({ c, g }) {
+function FdDk({ c, g, lead }) {
   const S = useStore(); const b = boardFor(c, g.week, S.weekMarket);
   const books = b ? b.books : []; const fd = books.find((x) => isFD(x.book)); const dk = books.find((x) => isDK(x.book));
   const dec = (x) => FB.americanToDecimal(x.american);
@@ -85,8 +86,8 @@ function FdDk({ c, g }) {
     const hi = better === label;
     return (
       <Box component="span" sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.5, px: 0.75, py: 0.125, borderRadius: 1, border: 1,
-        borderColor: hi ? "success.main" : "divider", bgcolor: hi ? "rgba(46,125,50,0.10)" : "transparent", whiteSpace: "nowrap" }}>
-        <Box component="span" sx={{ color: "text.secondary", fontSize: 12, fontWeight: 600 }}>{label}</Box>
+        borderColor: hi ? "success.main" : "divider", bgcolor: hi ? "rgba(37,107,41,0.10)" : "transparent", whiteSpace: "nowrap" }}>
+        <Box component="span" title={label === "FD" ? "FanDuel" : "DraftKings"} sx={{ color: "text.secondary", fontSize: 12, fontWeight: 600 }}>{label}<Box component="span" sx={visuallyHidden}>{label === "FD" ? " (FanDuel)" : " (DraftKings)"}</Box></Box>
         {x ? <Num sx={{ fontWeight: 700, color: hi ? "success.main" : "text.primary" }}>{am(x.american)}</Num> : <Box component="span" sx={{ color: "text.secondary" }}>—</Box>}
         {x && !x.fresh && <Box component="span" sx={{ color: "text.secondary", fontSize: 12 }}>{ageTxt(x.age_min).replace(" ago", "")}</Box>}
         {x && x.move && <Box component="span" sx={{ fontSize: 12, color: x.move.dir === "longer" ? "success.main" : "error.main" }} title={`Opened ${am(x.move.from)}`}>{x.move.dir === "longer" ? "▲" : "▼"}</Box>}
@@ -98,7 +99,7 @@ function FdDk({ c, g }) {
   };
   return (
     <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75, mt: 0.25 }}>
-      <Cell label="FD" x={fd} /><Cell label="DK" x={dk} />
+      {lead}<Cell label="FD" x={fd} /><Cell label="DK" x={dk} />
       {other && <Typography variant="caption" color="text.secondary">better at {other.book} {am(other.american)} <AboveFair c={c} x={other} market={S.weekMarket} /></Typography>}
     </Box>
   );
@@ -171,8 +172,8 @@ function Sheet({ open, onClose, title, children, actions, top }) {
 export function DbNote() {
   const S = useStore();
   if (S.dbState === "ok") return null;
-  const msg = { connecting: "Connecting to family picks…", slow: "Family picks can't be reached yet. Research still works.",
-    off: "Sign in to Claude to make picks and see the family board.", error: "Lost the connection to the family database. Reconnecting… what you see may be out of date." }[S.dbState];
+  const msg = { connecting: "Connecting to the picks…", slow: "The picks can't be reached yet. Research still works.",
+    off: "Sign in to Claude to make picks and see everyone's picks.", error: "Lost the connection to the picks database. Reconnecting… what you see may be out of date." }[S.dbState];
   return <Alert severity={S.dbState === "error" ? "error" : "info"} sx={{ borderRadius: 2 }}>{msg}</Alert>;
 }
 
@@ -182,6 +183,7 @@ export function WeekView() {
   const [how, setHow] = useState(false); const [sheet, setSheet] = useState(null); const [showLocked, setShowLocked] = useState(false);
   const games = s.games.slice().sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et));
   const open = games.filter((g) => !FB.isLocked(g, now)); const locked = games.filter((g) => FB.isLocked(g, now));
+  const days = byDay(open);
   return (
     <Stack spacing={1.5}>
       <DbNote />
@@ -190,7 +192,7 @@ export function WeekView() {
           <H2>TD Picks · Week {s.week}</H2>
           <Button size="large" startIcon={<Icon d={P.info} />} onClick={() => setHow(true)}>How this works</Button>
         </Stack>
-        <Typography variant="body2" color="text.secondary">{open.length} open games · {locked.length} started or final · sportsbook prices come from {S.oddsFeed && (S.oddsFeed.rows || []).length && S.oddsFeed.week === S.slate.week ? "the FanDuel / DraftKings feed and family uploads" : "family uploads"}{S.slate.blend && S.slate.blend.enabled ? ` · ${S.slate.blend.positions.join("/")} chances combine the model with those prices when fresh` : ""}</Typography>
+        <Typography variant="body2" color="text.secondary" data-testid="week-intro">{open.length} open game{open.length === 1 ? "" : "s"} · {locked.length} started or final</Typography>
         <ToggleButtonGroup exclusive fullWidth size="small" value={S.weekMarket} onChange={(e, v) => v && setWeekMarket(v)} aria-label="Market" sx={{ mt: 1, "& .MuiToggleButton-root": { minHeight: 44, textTransform: "none", fontWeight: 600 } }}>
           <ToggleButton value="anytime_td">Anytime TD</ToggleButton><ToggleButton value="2plus_td">2+ TDs</ToggleButton>
         </ToggleButtonGroup>
@@ -206,12 +208,21 @@ export function WeekView() {
         </Alert>
       )}
       {open.length > 0 && <WeeklyRankings onOpen={setSheet} />}
-      <Typography variant="caption" color="text.secondary">Tap a game to see every player.{s.weather_fetched_at ? ` Weather forecast as of ${et(s.weather_fetched_at, { hour: "numeric", minute: "2-digit" })}.` : ""}</Typography>
-      {open.map((g) => <GameCard key={g.game_id} g={g} onOpen={setSheet} />)}
+      <DayJump groups={days} prefix="tp-day" />
+      <Typography variant="caption" color="text.secondary" sx={{ mt: days.length > 1 ? "-4px !important" : undefined }}>Tap a game to see every player.{s.weather_fetched_at ? ` Weather forecast as of ${et(s.weather_fetched_at, { hour: "numeric", minute: "2-digit" })}.` : ""}</Typography>
+      {days.map(([label, gs], i) => (
+        <Stack key={label} id={`tp-day-${i}`} spacing={1} component="section" aria-label={label} sx={{ scrollMarginTop: 64 }}>
+          <Typography variant="overline" component="h3" tabIndex={-1} color="text.secondary" sx={dayHeadingSx}>{label} · {gs.length} game{gs.length > 1 ? "s" : ""}</Typography>
+          {gs.map((g) => <GameCard key={g.game_id} g={g} onOpen={setSheet} />)}
+        </Stack>
+      ))}
       {locked.length > 0 && (
         <Button variant="outlined" size="large" onClick={() => setShowLocked(!showLocked)}>{showLocked ? "Hide" : "Show"} {locked.length} started or final game{locked.length > 1 ? "s" : ""}</Button>
       )}
-      {showLocked && locked.map((g) => <GameCard key={g.game_id} g={g} onOpen={setSheet} />)}
+      {showLocked && <Stack spacing={1} component="section" aria-label="Started or final">
+        <Typography variant="overline" component="h3" color="text.secondary" sx={dayHeadingSx}>Started or final · {locked.length} game{locked.length > 1 ? "s" : ""}</Typography>
+        {locked.map((g) => <GameCard key={g.game_id} g={g} onOpen={setSheet} />)}
+      </Stack>}
       <HowItWorks open={how} onClose={() => setHow(false)} />
       <PlayerSheet c={sheet} onClose={() => setSheet(null)} />
     </Stack>
@@ -229,7 +240,7 @@ function wxText(w) {
   return (w.roof === "retractable" ? "Retractable roof · " : "") + bits.join(" · ");
 }
 function CrewInfo({ g }) {
-  const S = useStore(); const r = refFor(g); if (!r) return <Typography variant="caption" color="text.secondary" sx={{ display: "block", pb: 0.5 }}>Referee not assigned yet (admins can add it under TD Picks, Prices).</Typography>;
+  const S = useStore(); const r = refFor(g); if (!r) return <Typography variant="caption" color="text.secondary" sx={{ display: "block", pb: 0.5 }}>Referee not assigned yet (admins can add it on the Admin page).</Typography>;
   const c = crewIndex(r.name); const L = S.slate.referees && S.slate.referees.league;
   const cmp = (v, l) => (v > l * 1.08 ? "above avg" : v < l * 0.92 ? "below avg" : "avg");
   return (
@@ -258,8 +269,8 @@ function GameCard({ g, onOpen }) {
     <Card variant="outlined" sx={{ borderRadius: 2, scrollMarginTop: 8 }} data-week-game={g.game_id}>
       <ButtonBase onClick={() => setOpen(!open)} aria-expanded={open} sx={{ display: "flex", width: "100%", textAlign: "left", px: 1.5, py: 1.25, gap: 1, minHeight: 56 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="h6" component="h3">{g.away} at {g.home}</Typography>
-          <Typography variant="body2" color="text.secondary">{kick(g)}{g.teams.every((t) => t.implied_points != null) ? ` · ${g.away} ${g.teams[0].implied_points}, ${g.home} ${g.teams[1].implied_points} pts` : ""}</Typography>
+          <Typography variant="h6" component="h4">{g.away} at {g.home}</Typography>
+          <Typography variant="body2" color="text.secondary">{kick(g)}{g.teams.every((t) => t.implied_points != null) ? ` · expected score ${g.away} ${g.teams[0].implied_points}, ${g.home} ${g.teams[1].implied_points}` : ""}</Typography>
           {g.weather && <Stack direction="row" sx={{ alignItems: "center", gap: 0.75, mt: 0.25, flexWrap: "wrap" }}>
             <WindChip g={g} />
             {!isWindy(g) && <Typography variant="caption" color="text.secondary">{wxText(g.weather)}</Typography>}
@@ -277,7 +288,7 @@ function GameCard({ g, onOpen }) {
           const shown = open ? avail : avail.slice(0, 1);
           return (
             <Box key={t.team} sx={{ borderTop: 1, borderColor: "divider", pt: 0.5 }}>
-              {open && <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 2 }}>{t.team} · {t.implied_points != null ? `${t.implied_points} implied pts · ${t.expected_off_tds} expected TDs` : "no line yet"}</Typography>}
+              {open && <Typography variant="subtitle2" component="h5" sx={{ pt: 0.5 }}>{t.team} <Typography component="span" variant="caption" color="text.secondary">· {t.implied_points != null ? `the betting line expects ${t.implied_points} points, about ${t.expected_off_tds} touchdowns` : "no betting line yet"}</Typography></Typography>}
               {open && <OppAllowed t={t} />}
               {shown.map((c) => <PlayerRow key={c.gsis_id} c={c} g={g} locked={locked} onOpen={onOpen} team={!open} />)}
               {open && out.length > 0 && <Typography variant="body2" color="text.secondary" sx={{ py: 0.5 }}>Not available: {out.map((c) => `${c.full_name || c.player} (${c.injury})`).join(", ")}</Typography>}
@@ -296,11 +307,7 @@ function OppAllowed({ t }) {
   const total = Object.values(by).reduce((a, b) => a + b, 0);
   return (
     <Box sx={{ pb: 0.5 }}>
-      <Typography variant="caption" color="text.secondary">{t.opp} defense has allowed {total} offensive TDs in {t.opp_games} games:</Typography>
-      <Stack direction="row" sx={{ gap: 0.5, flexWrap: "wrap", mt: 0.25 }}>
-        {parts.map((k) => <Chip key={k} size="small" variant="outlined" label={`${by[k]} ${k}`} sx={{ height: 22, fontVariantNumeric: "tabular-nums" }} />)}
-        {!parts.length && <Typography variant="caption" color="text.secondary">none yet</Typography>}
-      </Stack>
+      <Typography variant="caption" color="text.secondary" data-testid="opp-allowed">{t.opp}'s defense has allowed {total} touchdown{total === 1 ? "" : "s"} in {t.opp_games} game{t.opp_games === 1 ? "" : "s"}{parts.length ? `: ${parts.map((k) => `${by[k]} to ${k}s`).join(", ")}.` : "."}</Typography>
     </Box>
   );
 }
@@ -327,28 +334,35 @@ function ParlayButton({ c, locked, size, msg }) {
   );
 }
 function PlayerRow({ c, g, locked, onOpen, team }) {
-  const S = useStore(); const two = S.weekMarket === "2plus_td"; const ch = chanceFor(c);
+  const S = useStore(); const two = S.weekMarket === "2plus_td"; const ch = chanceFor(c); const open = () => onOpen({ ...c, _g: g });
   return (
-    <Stack direction="row" sx={{ alignItems: "center", gap: 1, py: 0.75 }}>
-      <ButtonBase onClick={() => onOpen({ ...c, _g: g })} sx={{ flex: 1, minWidth: 0, justifyContent: "flex-start", textAlign: "left", borderRadius: 1, minHeight: 44, display: "block" }}>
-        <Stack direction="row" sx={{ alignItems: "baseline", gap: 0.75, flexWrap: "wrap" }}>
-          <Typography sx={{ fontWeight: 600, lineHeight: 1.25 }}>{c.full_name || c.player}</Typography>
-          <Typography variant="caption" color="text.secondary">{team ? `${c.team} ` : ""}{c.pos}</Typography>
-          {c.injury && <Chip size="small" color={c.quality === "unavailable" ? "error" : "warning"} variant="outlined" label={c.injury} sx={{ height: 20 }} />}
-          {windHit(c, g) && <Chip size="small" color="warning" variant="outlined" label="Windy" sx={{ height: 20 }} />}
-          {c.role_change && <Chip size="small" color={c.role_change.dir === "up" ? "success" : "default"} variant="outlined" label={c.role_change.dir === "up" ? "Role ↑" : "Role ↓"} sx={{ height: 20 }} />}
-        </Stack>
-        <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-          <LinearProgress variant="determinate" value={Math.min(100, ch * 100 * (two ? 2 : 1))} sx={{ flex: 1, maxWidth: 160, height: 6, borderRadius: 3 }} aria-hidden />
-          <Typography variant="body2" sx={{ fontWeight: 600 }}><Num>{pct(ch)}{two ? " est." : ""}</Num></Typography>
-          <Typography variant="body2" color="text.secondary"><Num>fair {am(two || blendFor(c) ? FB.probToAmerican(ch) : c.fair_american)}</Num></Typography>
-        </Stack>
-        <FdDk c={c} g={g} />
+    <Box sx={{ py: 0.75 }} data-player={c.gsis_id}>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+        <ButtonBase onClick={open} sx={{ flex: 1, minWidth: 0, justifyContent: "flex-start", textAlign: "left", borderRadius: 1, minHeight: 44, display: "block" }}>
+          <Stack direction="row" sx={{ alignItems: "baseline", columnGap: 0.75, flexWrap: "wrap" }}>
+            <Typography sx={{ fontWeight: 600, lineHeight: 1.25 }}>{c.full_name || c.player}</Typography>
+            <Typography variant="caption" color="text.secondary">{team ? `${c.team} ` : ""}{c.pos}</Typography>
+          </Stack>
+          <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+            <LinearProgress variant="determinate" value={Math.min(100, ch * 100 * (two ? 2 : 1))} sx={{ flex: "1 1 36px", maxWidth: 160, height: 6, borderRadius: 3 }} aria-hidden />
+            <Typography variant="body2" sx={{ fontWeight: 600, whiteSpace: "nowrap" }}><Num>{pct(ch)}</Num> {two ? "for 2+ (est.)" : "to score"}</Typography>
+          </Stack>
+        </ButtonBase>
+        <ParlayButton c={c} locked={locked} />
+        <PickButton c={c} g={g} locked={locked} />
+      </Stack>
+      {/* the same tap target for a finger; keyboard and screen-reader users open the details from the name above */}
+      <Box onClick={open} sx={{ cursor: "pointer" }}>
+        {(c.injury || windHit(c, g) || c.role_change) && <Stack direction="row" sx={{ gap: 0.75, flexWrap: "wrap", mt: 0.25 }}>
+          {c.injury && <Chip size="small" color={c.quality === "unavailable" ? "error" : "warning"} variant="outlined" label={c.injury} sx={{ height: 22 }} />}
+          {windHit(c, g) && <Chip size="small" color="warning" variant="outlined" label="Windy" sx={{ height: 22 }} />}
+          {c.role_change && <Chip size="small" color={c.role_change.dir === "up" ? "success" : "default"} variant="outlined" label={c.role_change.dir === "up" ? "Bigger role lately" : "Smaller role lately"}
+            title={`${Math.round(c.role_change.recent * 100)}% of the team's carries and targets in the last 3 games, ${Math.round(c.role_change.season * 100)}% over the season`} sx={{ height: 22 }} />}
+        </Stack>}
+        <FdDk c={c} g={g} lead={<Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "nowrap" }}><Num>model odds {am(two || blendFor(c) ? FB.probToAmerican(ch) : c.fair_american)}</Num></Typography>} />
         <LastGame c={c} />
-      </ButtonBase>
-      <ParlayButton c={c} locked={locked} />
-      <PickButton c={c} g={g} locked={locked} />
-    </Stack>
+      </Box>
+    </Box>
   );
 }
 function PlayerSheet({ c, onClose }) {
@@ -435,7 +449,7 @@ function PlayerSheet({ c, onClose }) {
             <BookList c={c} g={g} market={m} />
           </Box>
         ))}
-        <Typography variant="caption" color="text.secondary">Green = best price, red = worst. ▲ the price pays more than its first price this week, ▼ it pays less ("big" = 2+ points of implied chance). Value math uses only prices under 2 hours old. <Box component="span" sx={{ color: "secondary.main", fontWeight: 700 }}>Above fair</Box> = an anytime price under 2 hours old whose implied chance is {FB.ABOVE_FAIR_PTS}+ points below the model's chance (the book pays clearly more than fair odds). It's the model's view, not a proven edge: in testing, sportsbook prices predicted better than the model.</Typography>
+        <Typography variant="caption" color="text.secondary">Green = best price. ▲ the price pays more than its first price this week, ▼ it pays less ("big" = 2+ points of implied chance). Value math uses only prices under 2 hours old. <Box component="span" sx={{ color: "secondary.main", fontWeight: 700 }}>Above fair</Box> = an anytime price under 2 hours old whose implied chance is {FB.ABOVE_FAIR_PTS}+ points below the model's chance (the book pays clearly more than fair odds). It's the model's view, not a proven edge: in testing, sportsbook prices predicted better than the model.</Typography>
       </Fold>
       <Fold small id="ps-chance" title="Chance and value" summary={`Fair odds ${am(bl ? FB.probToAmerican(ch) : c.fair_american)}${bl ? " · model and prices combined" : " · model only"}`}>
         <DL items={group(["Chance to score", "Likely range", "Fair odds", "2+ TD chance", "Fair price", "Value check price", "Model vs price"])} />
@@ -518,6 +532,17 @@ function HowItWorks({ open, onClose }) {
     <Dialog open={open} onClose={onClose} fullScreen={full} fullWidth maxWidth="md" scroll="paper">
       <DialogTitle>How this works</DialogTitle>
       <DialogContent dividers sx={{ display: "grid", gap: 1.5 }}>
+        <Typography variant="subtitle2" component="h3">Reading a player row</Typography>
+        <Box component="ul" sx={{ m: 0, pl: 2.5, display: "grid", gap: 0.5, "& li": { fontSize: 14 } }} data-testid="row-key">
+          <li><b>44% to score</b>: the chance he scores at least one touchdown in this game.</li>
+          <li><b>Model odds +128</b>: that same chance written as American odds, with no sportsbook margin. A book price that pays more than this is paying more than the model thinks is fair.</li>
+          <li><b>FD</b> and <b>DK</b>: his latest FanDuel and DraftKings prices. Green marks the better of the two. ▲ means the price pays more than when it was first seen this week, ▼ less.</li>
+          <li><b>Bigger / Smaller role lately</b>: his share of the team's carries and targets over the last three games is well above or below his season share.</li>
+          <li><b>Windy</b>: a pass-catcher in an outdoor game with wind of 15 mph or more forecast.</li>
+          <li><b>The betting line expects…</b>: the points and touchdowns the sportsbooks' spread and total imply for his team.</li>
+        </Box>
+        <Typography variant="body2" data-testid="price-source">Sportsbook prices come from {S.oddsFeed && (S.oddsFeed.rows || []).length && S.oddsFeed.week === S.slate.week ? "the FanDuel / DraftKings feed and members' uploads" : "members' uploads"}.{S.slate.blend && S.slate.blend.enabled ? ` For ${S.slate.blend.positions.join(", ")} the chance shown combines the model with those prices when they are under ${FB.PRICE_FRESH_MIN / 60} hours old.` : ""}</Typography>
+        <Typography variant="subtitle2" component="h3">Where the chance comes from</Typography>
         <Typography variant="body2">Each player's chance to score starts from the touchdowns the betting line expects from his team, then his share of the team's carries and targets (2026, with 2025 at half weight), his goal-line role (RBs and QBs: carries inside the 5, goal-to-go carries, QB designed runs and sneaks), his depth-chart spot before kickoff, and his own touchdown rate. The weights are refit every refresh on every game already played. Players must be on their team's active roster. "Fair odds" is that chance written as American odds.</Typography>
         {v.v03 && <Alert severity="info" sx={{ borderRadius: 2 }}>Model {v.v03.model}, adopted after a week-by-week test on 2026 weeks 1–9 ({v.v03.n.toLocaleString()} player-games). Against the previous model on weeks {v.v03.vs_previous.weeks} it improved log loss by {(v.v03.vs_previous.ll_gain * 1000).toFixed(1)}×10⁻³ per player-game (90% range {(v.v03.vs_previous.ci90[0] * 1000).toFixed(1)}–{(v.v03.vs_previous.ci90[1] * 1000).toFixed(1)}), better for every position. Against {v.v03.market.book} prices on weeks {v.v03.market.weeks} ({v.v03.market.n} player-games), the sportsbook's own implied chances (margin included) predicted better than the model{v.v03.market.log_loss_market_raw != null ? `: log loss ${v.v03.market.log_loss_market_raw.toFixed(3)} vs ${v.v03.market.log_loss_model.toFixed(3)}` : ""}. A profitable edge has not been shown.</Alert>}
         <Alert severity="warning" sx={{ borderRadius: 2 }}>Research only. "Value Play" stays off until the model passes its checks{gate.ok ? "" : ` (${gate.reasons.length} still open)`} and real sportsbook prices are imported. A week with no value plays is normal.</Alert>
@@ -558,7 +583,8 @@ export function TouchdownsView() {
   if (!S.extrasLoaded) return S.extrasError ? <ExtrasError /> : <Empty>Loading the season's touchdowns…</Empty>;
   const weeks = [...new Set(S.tds.map((t) => t.week))].sort((a, b) => a - b);
   const settled = weeks.filter((w) => { const g = S.games.filter((x) => x.week === w); return g.length && g.filter((x) => x.status === "final").length * 2 >= g.length; });
-  const wk = f.week === "latest" ? (settled.length ? settled[settled.length - 1] : S.meta.latest_final_week) : f.week;
+  // the week picked on any tab carries over (store.viewWeek); otherwise the latest week with results
+  const wk = f.week === "all" ? "all" : pickWeek(weeks, S.viewWeek, settled.length ? settled[settled.length - 1] : S.meta.latest_final_week);
   const q = (s) => String(s || "").toLowerCase();
   const rows = S.tds.filter((t) => {
     const a = effAttr(t);
@@ -572,13 +598,8 @@ export function TouchdownsView() {
       <H2>TD Log</H2>
       <ResultsStatus />
       <LivePanel />
-      <Box sx={{ overflowX: "auto", mx: -0.5, px: 0.5, pb: 0.5 }}>
-        <ToggleButtonGroup exclusive size="small" value={String(wk)} onChange={(e, v) => { if (v) { setF({ ...f, week: v === "all" ? "all" : +v, game: "" }); setLimit(30); } }}
-          sx={{ "& .MuiToggleButton-root": { minWidth: 48, minHeight: 44, px: 1.5 } }}>
-          {weeks.slice().reverse().map((w) => <ToggleButton key={w} value={String(w)}>Wk {w}</ToggleButton>)}
-          <ToggleButton value="all">All</ToggleButton>
-        </ToggleButtonGroup>
-      </Box>
+      <WeekPicker weeks={weeks.slice().reverse()} value={wk} extra={["all", "All"]}
+        onChange={(v) => { if (v === "all") setF({ ...f, week: "all", game: "" }); else { setViewWeek(v); setF({ ...f, week: "latest", game: "" }); } setLimit(30); }} />
       {wk !== "all" && <WeekGlance w={+wk} pickGame={(gid) => setF({ ...f, game: f.game === gid ? "" : gid })} game={f.game} />}
       <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
         <Typography variant="h6" component="h3" sx={{ flex: 1 }}>{rows.length} touchdown{rows.length === 1 ? "" : "s"}</Typography>
@@ -623,17 +644,15 @@ function ResultsStatus() {
           Last successful check: <b>{et(m.refreshed_at, t)}</b> ({ago < 1 ? "just now" : ageTxt(ago)})<br />
           Results last changed: <b>{m.results_changed_at ? et(m.results_changed_at, t) : "Unavailable until the next check"}</b>
         </Typography>
-        <Button variant="outlined" size="small" disabled={busy} onClick={() => manualRefresh()} sx={{ minHeight: 40, flexShrink: 0 }}>{busy ? "Checking…" : "Refresh results"}</Button>
+        <Button variant="outlined" size="small" disabled={busy} onClick={() => manualRefresh()} sx={{ minHeight: 44, flexShrink: 0 }}>{busy ? "Checking…" : "Refresh results"}</Button>
       </Stack>
       {S.refresh && S.refresh.msg && <Typography variant="body2" role="status" sx={{ mt: 0.5, fontWeight: 600 }}>{S.refresh.msg}</Typography>}
-      <Typography variant="caption" sx={{ display: "block", mt: 0.5 }}>
-        Source: {m.td_source || "nflverse play-by-play, published after each game ends"}.
+      {(live > 0 || (inWindow && ago > 75)) && <Typography variant="caption" sx={{ display: "block", mt: 0.5 }} data-testid="results-note">
         {live > 0 && (liveOn
-          ? ` ${live} game${live > 1 ? "s are" : " is"} in progress: live touchdowns appear below as the live feed publishes them; final results are verified after each game.`
-          : ` ${live} game${live > 1 ? "s are" : " is"} in progress: touchdowns appear after the game ends and the source publishes them.`)}
+          ? `${live} game${live > 1 ? "s are" : " is"} in progress: live touchdowns appear below as the live feed publishes them; final results are verified after each game.`
+          : `${live} game${live > 1 ? "s are" : " is"} in progress: touchdowns appear after the game ends and the source publishes them.`)}
         {inWindow && ago > 75 && " Results may be delayed: the latest check hasn't come through. These are the last successful results."}
-        {" "}Picks and parlay legs settle only after a final game's touchdowns match the official score and each scorer matches the weekly player stats.
-      </Typography>
+      </Typography>}
     </Alert>
   );
 }
@@ -656,14 +675,14 @@ function WeekGlance({ w, pickGame, game }) {
         {games.slice().sort((a, b) => FB.etToUtcMs(a.kickoff_et) - FB.etToUtcMs(b.kickoff_et)).map((g) => {
           if (g.status !== "final") {
             const started = FB.isLocked(g, Date.now()); const lv = S.live.games[g.game_id];
-            if (started && lv) return <Chip key={g.game_id} variant="outlined" color="error" label={`${g.away} ${lv.away_score ?? "–"} · ${g.home} ${lv.home_score ?? "–"} · Live (provisional)`} sx={{ height: 40 }} />;
-            return <Chip key={g.game_id} variant="outlined" label={`${g.away} at ${g.home} · ${started ? "In progress: results after the game" : kick(g)}`} sx={{ height: 40, color: "text.secondary" }} />;
+            if (started && lv) return <Chip key={g.game_id} variant="outlined" color="error" label={`${g.away} ${lv.away_score ?? "–"} · ${g.home} ${lv.home_score ?? "–"} · Live (provisional)`} sx={{ height: 44 }} />;
+            return <Chip key={g.game_id} variant="outlined" label={`${g.away} at ${g.home} · ${started ? "In progress: results after the game" : kick(g)}`} sx={{ height: 44, color: "text.secondary" }} />;
           }
           const rec = S.recon[g.game_id]; const waiting = rec && rec.awaiting_source;
           const held = rec && !waiting && (!rec.reconciled || rec.scorers_verified === false);
           const note = waiting ? " · touchdowns not published yet" : held ? " · held for review" : !rec ? " · reconciling" : rec.scorers_verified !== true ? " · verifying scorers" : "";
           return <Chip key={g.game_id} clickable onClick={() => pickGame(g.game_id)} color={game === g.game_id ? "primary" : held ? "warning" : "default"} variant={game === g.game_id ? "filled" : "outlined"}
-            label={`${g.away} ${g.away_score} · ${g.home} ${g.home_score} · Final${note}`} sx={{ height: 40 }} />;
+            label={`${g.away} ${g.away_score} · ${g.home} ${g.home_score} · Final${note}`} sx={{ height: 44 }} />;
         })}
       </Box>
     </CardContent></Card>
@@ -750,6 +769,7 @@ function Coverage() {
   const S = useStore(); const keys = ["verified_individual", "probable_individual", "shared", "team_unit", "unknown"];
   return (
     <>
+      <Typography variant="body2" color="text.secondary" data-testid="td-source">Source: {S.meta.td_source || "nflverse play-by-play, published after each game ends"}. Picks and parlay legs settle only after a final game's touchdowns match the official score and each scorer matches the weekly player stats.</Typography>
       <Typography variant="body2" color="text.secondary">"Matches official" means each team's touchdowns, kicks, conversions and safeties add up to the official final score. Defender credit uses charting only. Not connected: {S.meta.not_connected.join("; ")}.</Typography>
       {S.weekly.filter((w) => w.final > 0).map((w) => {
         const t = S.tds.filter((x) => x.week === w.week).map(effAttr);
@@ -978,6 +998,7 @@ export function AdminView() {
           </Stack>
         ))}
       </Fold>
+      <RefereeUploads />
       <Fold title="Kickoff snapshots" summary="Settlement only counts picks frozen at kickoff">
         {S.slate.games.map((g) => <Stack key={g.game_id} direction="row" sx={{ gap: 1, alignItems: "center" }}><Typography sx={{ flex: 1 }}>{g.away} at {g.home}</Typography>
           {S.locks[g.game_id] ? <Chip size="small" color="success" variant="outlined" label={"frozen " + et(S.locks[g.game_id].frozen_at, { hour: "numeric", minute: "2-digit" })} />
@@ -1043,13 +1064,13 @@ export function BoardView({ mine: startMine }) {
   return (
     <Stack spacing={1.5}>
       <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-        <H2 sx={{ flex: 1 }}>{view === "mine" ? "My picks" : view === "results" ? "Results" : "Family board"}</H2>
+        <H2 sx={{ flex: 1 }}>{view === "mine" ? "My picks" : view === "results" ? "Results" : "Pick Hub"}</H2>
         <ToggleButtonGroup exclusive size="small" value={view} onChange={(e, v) => v && setView(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 2, textTransform: "none" } }}>
-          <ToggleButton value="family">Family</ToggleButton><ToggleButton value="mine">Mine</ToggleButton><ToggleButton value="results">Results</ToggleButton>
+          <ToggleButton value="family">Everyone</ToggleButton><ToggleButton value="mine">Mine</ToggleButton><ToggleButton value="results">Results</ToggleButton>
         </ToggleButtonGroup>
       </Stack>
       <DbNote />
-      {view === "mine" ? <><MyPicks /><MyParlays /></> : view === "results" ? <ResultsDashboard /> : <FamilyBoard />}
+      {view === "mine" ? <><MyPicks /><MyGamePicks /><MyParlays /></> : view === "results" ? <ResultsDashboard /> : <FamilyBoard />}
     </Stack>
   );
 }
@@ -1073,6 +1094,32 @@ function ParlayCard({ uid, par, r, onDelete }) {
       })}
       {onDelete && <Box><Button onClick={onDelete}>Delete parlay</Button></Box>}
     </CardContent></Card>
+  );
+}
+/* My game picks (spread, total, to win) from the Lines tab, every week, with how each finished. */
+function MyGamePicks() {
+  const S = useStore(); if (!S.uid) return null;
+  const rows = gamePickRows().filter((r) => r.uid === S.uid).sort((a, b) => b.pick.week - a.pick.week || FB.etToUtcMs(a.game.kickoff_et) - FB.etToUtcMs(b.game.kickoff_et));
+  if (!rows.length) return null;
+  const done = rows.filter((r) => r.state === "win" || r.state === "loss"); const units = done.reduce((a, r) => a + (r.units || 0), 0);
+  const LABEL = { win: ["Won", "success"], loss: ["Lost", "error"], push: ["Push", "default"], void: ["Not counted", "warning"] };
+  return (
+    <Box data-testid="my-game-picks-all">
+      <Typography variant="overline" color="text.secondary">My game picks{done.length ? ` · ${done.filter((r) => r.state === "win").length} won, ${done.filter((r) => r.state === "loss").length} lost, ${units >= 0 ? "+" : "−"}${Math.abs(units).toFixed(2)} units` : ""}</Typography>
+      <Stack spacing={1}>
+        {rows.map((r) => { const p = r.pick; const st = r.started ? (LABEL[r.state] || ["Locked", "default"]) : ["Open", "primary"];
+          return (
+            <Card key={p.key} variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 }, display: "grid", gap: 0.5 }}>
+              <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+                <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{gamePickText(p)} <Typography component="span" variant="caption" color="text.secondary"><Num>{am(p.american)}</Num> {p.book}</Typography></Typography>
+                <Chip size="small" color={st[1]} variant={st[0] === "Open" ? "outlined" : "filled"} label={`${st[0]}${r.state === "win" || r.state === "loss" ? ` ${r.units >= 0 ? "+" : "−"}${Math.abs(r.units).toFixed(2)}u` : ""}`} />
+              </Stack>
+              <Typography variant="body2" color="text.secondary">Week {p.week} · {p.away} at {p.home} · {kick(r.game)}{r.why ? ` · ${r.why}` : ""}</Typography>
+              {!r.started && <Box><Button href="#gamelines" sx={{ ml: -1 }}>Change it on Lines</Button></Box>}
+            </CardContent></Card>
+          ); })}
+      </Stack>
+    </Box>
   );
 }
 function MyParlays() {
@@ -1159,7 +1206,6 @@ export function LinesView() {
   return (
     <Stack spacing={1.5}>
       <H2>Prices · Week {week}</H2>
-      <RefereeUploads />
       <DbNote />
       <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ display: "grid", gap: 1.25, p: 1.5, "&:last-child": { pb: 1.5 } }}>
         <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
@@ -1269,12 +1315,12 @@ export function DefenseView() {
   return (
     <Stack spacing={1.5}>
       <H2>Defense · TDs allowed</H2>
-      <Typography variant="body2" color="text.secondary">Offensive touchdowns each defense has allowed, by the scorer's position. Rushing and receiving touchdowns both count. Research only: on its own this hasn't beaten the main odds in testing.</Typography>
+      <Typography variant="body2" color="text.secondary">Touchdowns each defense has allowed, by the scorer's position. Research only: this hasn't beaten the odds in testing.</Typography>
       <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
         <ToggleButtonGroup exclusive size="small" value={span} onChange={(e, v) => v && setSpan(v)} sx={{ "& .MuiToggleButton-root": { minHeight: 44, px: 1.5, textTransform: "none" } }}>
           <ToggleButton value="season">Season</ToggleButton><ToggleButton value="last4">Last 4 weeks</ToggleButton>
         </ToggleButtonGroup>
-        <TextField select size="small" label="Sort by" value={sortBy} onChange={(e) => setSortBy(e.target.value)} sx={{ minWidth: 140 }}>
+        <TextField select size="small" label="Sort by" value={sortBy} onChange={(e) => setSortBy(e.target.value)} sx={{ minWidth: 140, "& .MuiInputBase-root": { minHeight: 44 } }}>
           <MenuItem value="total">Most TDs allowed</MenuItem>{DPOS.map((k) => <MenuItem key={k} value={k}>Most {k} TDs</MenuItem>)}
           <MenuItem value="rush">Most rushing TDs</MenuItem><MenuItem value="rec">Most receiving TDs</MenuItem>
         </TextField>
@@ -1494,7 +1540,7 @@ function OddsThrough({ market }) {
     <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
       <Typography variant="caption" color="text.secondary">{newest ? `Odds through ${et(newest, { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "No odds uploaded yet for this market"}</Typography>
       <Button size="small" disabled={busy || !S.db} onClick={async () => { setBusy(true); const ok = await refreshLines(); setBusy(false); toast(ok ? "Odds refreshed." : "Couldn't refresh the odds. Try again in a moment."); }}
-        sx={{ minHeight: 36, flexShrink: 0 }}>{busy ? "Refreshing…" : "Refresh odds"}</Button>
+        sx={{ minHeight: 44, flexShrink: 0 }}>{busy ? "Refreshing…" : "Refresh odds"}</Button>
     </Stack>
   );
 }

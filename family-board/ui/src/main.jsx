@@ -10,7 +10,7 @@ import { WeekView, TouchdownsView, BoardView, AdminView, ParlaysView, LinesView,
 
 /* Five destinations. Every older page still has its own address (#parlays, #uploads, #touchdowns, ...) and now lives
    inside one of them: SECTION says which tab a page belongs to, SUBNAV lists the pages inside a tab. */
-const TABS = [["home", "Home", P.home], ["week", "TD Picks", P.week], ["gamelines", "Lines", P.lines], ["board", "Family", P.board], ["research", "Research", P.analysis]];
+const TABS = [["home", "Home", P.home], ["week", "TD Picks", P.week], ["gamelines", "Lines", P.lines], ["board", "Pick Hub", P.board], ["research", "Research", P.analysis]];
 const ROUTES = ["home", "week", "parlays", "uploads", "lines", "defense", "touchdowns", "board", "picks", "admin", "analysis", "research", "gamelines"];
 const SECTION = { home: "home", week: "week", parlays: "week", uploads: "week", lines: "week", gamelines: "gamelines", board: "board", picks: "board",
   research: "research", analysis: "research", touchdowns: "research", defense: "research" };
@@ -61,6 +61,9 @@ function makeTheme(mode) {
       primary: { main: dark ? "#3a9d68" : "#1d6b43", contrastText: dark ? "#06110b" : "#ffffff" },
       secondary: { main: dark ? "#c88ee6" : "#8d3fb0" },
       warning: { main: dark ? "#e3a83a" : "#8f5d06" },   // light values chosen for 4.5:1 text contrast on white
+      // green and red text also sit on tinted chips and the off-white page: these keep 4.5:1 there (were 4.49 and 4.50)
+      success: { main: dark ? "#66bb6a" : "#256b29" },
+      error: { main: dark ? "#f6685e" : "#c62828" },
       info: { main: dark ? "#5fb8ea" : "#0b6aa2" },
       background: { default: dark ? "#101512" : "#f3f4ef", paper: dark ? "#171e1a" : "#ffffff" },
       text: { primary: dark ? "#e7ece6" : "#18211b", secondary: dark ? "#9aa79f" : "#5d6a61" },
@@ -72,12 +75,15 @@ function makeTheme(mode) {
       h5: { fontFamily: '"Barlow Condensed", "Arial Narrow", sans-serif', fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em" },
       h6: { fontFamily: '"Barlow Condensed", "Arial Narrow", sans-serif', fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em" },
       button: { fontWeight: 600 },
+      caption: { fontSize: "0.8125rem", lineHeight: 1.45 },   // 13px: the smallest size used for anything people read
     },
     components: {
       MuiTableCell: { styleOverrides: { head: { fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" } } },
       MuiTab: { styleOverrides: { root: { fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 600, fontSize: 16, letterSpacing: "0.04em" } } },
       MuiCard: { defaultProps: { variant: "outlined" } },
-      MuiButton: { styleOverrides: { root: { minHeight: 40, textTransform: "none", fontSize: 15, borderRadius: 10 }, sizeLarge: { minHeight: 48 } } },
+      MuiButton: { styleOverrides: { root: { minHeight: 44, textTransform: "none", fontSize: 15, borderRadius: 10 }, sizeLarge: { minHeight: 48 } } },
+      // a visible keyboard focus ring on every button, tab, chip-button and link (drawn inside so cards don't clip it)
+      MuiButtonBase: { styleOverrides: { root: { "&.Mui-focusVisible": { outline: `2px solid ${dark ? "#e7ece6" : "#18211b"}`, outlineOffset: -2 } } } },
       // readable in both themes: unselected uses the secondary text colour, selected the primary text colour (4.5:1 or better)
       MuiToggleButton: { styleOverrides: { root: { color: dark ? "#a9b5ad" : "#55625a", "&.Mui-selected": { color: dark ? "#e7ece6" : "#123f28" } } } },
       MuiChip: { styleOverrides: { root: { fontWeight: 600 } } },
@@ -132,6 +138,8 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
+      <Box component="a" href="#main-nav" onClick={(e) => { e.preventDefault(); const el = document.querySelector("#main-nav .Mui-selected") || document.querySelector("#main-nav button"); if (el) el.focus(); }}
+        sx={{ position: "absolute", left: 8, top: -60, zIndex: 2000, px: 2, py: 1.25, borderRadius: 2, bgcolor: "background.paper", color: "text.primary", fontWeight: 700, boxShadow: 4, "&:focus": { top: 8 } }}>Skip to the tab bar</Box>
       <AppBar position="static" elevation={0}>
         <Toolbar sx={{ minHeight: 52, px: "max(16px, env(safe-area-inset-left, 0px))", gap: 1 }}>
           <Typography component="h1" sx={{ fontFamily: '"Barlow Condensed", sans-serif', fontWeight: 700, fontSize: 22, textTransform: "uppercase", letterSpacing: "0.02em", flex: 1 }} noWrap>NFL Anytime TD Research</Typography>
@@ -139,14 +147,14 @@ function App() {
           {S.isAdmin && <Button color="inherit" startIcon={<Icon d={P.admin} />} onClick={() => { location.hash = "admin"; }} sx={{ minHeight: 44 }}>Admin</Button>}
         </Toolbar>
       </AppBar>
-      <Container maxWidth="md" sx={{ pt: 2, pb: "calc(150px + env(safe-area-inset-bottom, 0px))", px: "max(16px, env(safe-area-inset-left, 0px))" }}>
+      <Container component="main" maxWidth="md" sx={{ pt: 2, pb: "calc(150px + env(safe-area-inset-bottom, 0px))", px: "max(16px, env(safe-area-inset-left, 0px))" }}>
         {S.meta && S.meta.health && !S.meta.health.ok && <Alert severity="warning" sx={{ mb: 1.5, borderRadius: 2 }}>The last data refresh had a problem: {S.meta.health.problems.join(" ")}</Alert>}
         {S.loadError ? <Alert severity="error">The season data didn't load. Reload the page; if it keeps failing, the last refresh may be incomplete.</Alert>
           : !S.meta ? <Box sx={{ p: 2, color: "text.secondary" }}>Loading the 2026 season…</Box>
           : <>{sub && <SubNav label={sub[0]} items={sub[1]} value={page} notes={subNotes} />}<View /></>}
         {S.meta && <Typography variant="caption" color="text.secondary" sx={{ display: { xs: "block", sm: "none" }, mt: 3, textAlign: "center" }}>{fresh}</Typography>}
       </Container>
-      <Box sx={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 1100 }}>
+      <Box component="nav" aria-label="Main" id="main-nav" sx={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 1100 }}>
         {tab === "week" && <Box sx={{ px: "max(12px, env(safe-area-inset-left, 0px))", pb: 1, maxWidth: 900, mx: "auto" }}><SlateBar /></Box>}
         <Paper elevation={8} square sx={{ pb: "env(safe-area-inset-bottom, 0px)" }}>
           <BottomNavigation showLabels value={navValue} onChange={(e, v) => { location.hash = v; }} sx={{ height: 60, maxWidth: 900, mx: "auto" }}>

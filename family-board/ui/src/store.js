@@ -163,6 +163,8 @@ export function clearFocusGame() { S.focusGame = null; }
 /* Home → Lines for one game: that game's card starts open and scrolls into view. */
 export function focusLine(gameId) { S.focusLine = gameId; location.hash = "gamelines"; emit(); }
 export function clearFocusLine() { S.focusLine = null; }
+/* The week chosen in a week picker, shared by every tab that has one (Lines, TD Log, Research). null = each tab's default. */
+export function setViewWeek(w) { S.viewWeek = typeof w === "number" ? w : null; emit(); }
 const feedRows = (week) => (S.oddsFeed && S.oddsFeed.week === week ? (S.oddsFeed.rows || []).map((r) => ({ ...r, uploaded_by: "feed" })) : []);
 /* The feed's API key. Entered by the app owner on the Admin page and kept in the owner's PRIVATE part of the database
    (data/users/<owner>/oddspapi): no other member, editor or viewer can read it, and it is never in a published file.
