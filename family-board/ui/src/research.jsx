@@ -230,9 +230,9 @@ export function ResearchView() {
             rec ? (rec.reconciled ? "Reconciled with final" : "Held for review") : "Provisional"]; })} />
       </Sec>
 
-      <Sec id="model" title="Model and sportsbook data" summary={isSlate ? "This week's model chances, fair odds, uploaded prices and value edge" : `Week ${week}: the model's saved pregame chances`} kinds={isSlate ? ["model", "price"] : ["model"]}>
+      <Sec id="model" title="Model and sportsbook data" summary={isSlate ? "This week's model chances, fair odds, sportsbook prices and the gap between them" : `Week ${week}: the model's saved pregame chances`} kinds={isSlate ? ["model", "price"] : ["model"]}>
         <Typography variant="caption" color="text.secondary">{isSlate ? `Model chances as of the ${et(S.meta.refreshed_at, { weekday: "short", hour: "numeric", minute: "2-digit" })} refresh. Each price shows its own capture time; prices over 2 hours old are marked stale and never shown as current.` : "Saved before each game kicked off (pregame only). Sportsbook prices are kept per week and only this week's are loaded, so past prices show as Unavailable."}{two ? " 2+ TD chances are estimates from the anytime chance." : ""}</Typography>
-        <Grid label="Model and prices" head={["Player", "Game", two ? "2+ chance" : "TD chance", "Fair odds", "Best price", "Price time", "Value edge"]} rows={modelRows.map((x) => x.row)} />
+        <Grid label="Model and prices" head={["Player", "Game", two ? "2+ chance" : "TD chance", "Fair odds", "Best price", "Price time", "Model vs price"]} rows={modelRows.map((x) => x.row)} />
       </Sec>
 
       <Typography variant="overline" component="h3" color="text.secondary" sx={{ pt: 1, lineHeight: 1.6, fontWeight: 700 }} data-testid="season-divider">Whole season · not changed by the week, game or search above</Typography>

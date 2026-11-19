@@ -553,7 +553,7 @@
     byChance.forEach(function (x, i) { x.chanceRank = cr[i]; });
     var combined = value.map(function (x) { return Object.assign({}, x, { score: (x.valueRank + x.chanceRank) / 2 }); })
       .sort(function (a, b) { return a.score - b.score || b.chance - a.chance || b.edgePts - a.edgePts || byName(a, b); });
-    var empty = value.length ? null : priced.length ? "No players above model fair value" : "No sportsbook prices uploaded for this market";
+    var empty = value.length ? null : priced.length ? "No player's price pays more than the model's odds right now" : "No sportsbook prices uploaded for this market";
     var staleRows = value.filter(function (x) { return x.stale; }).length;
     return { chance: chance, value: value, combined: combined, valueEmpty: empty, eligiblePriced: priced.length,
       staleNote: !value.length || !staleRows ? null : staleRows === value.length ? "Showing last-known odds. All displayed prices are 2+ hours old." : "Some odds are 2+ hours old." };

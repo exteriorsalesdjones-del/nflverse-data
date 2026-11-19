@@ -477,8 +477,8 @@ test("Best Value: fresh first, else the best last-known (stale) price; empty mes
   // no prices at all for this market
   assert.strictEqual(FB.weeklyRankings([it("A", 0.4), it("B", 0.3)], RNOW).valueEmpty, "No sportsbook prices uploaded for this market");
   // prices exist (fresh or stale) but none beats the model
-  assert.strictEqual(FB.weeklyRankings([it("A", 0.3, [px("FanDuel", 100)])], RNOW).valueEmpty, "No players above model fair value");
-  assert.strictEqual(FB.weeklyRankings([it("A", 0.3, [px("FanDuel", 100, 300)])], RNOW).valueEmpty, "No players above model fair value");
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.3, [px("FanDuel", 100)])], RNOW).valueEmpty, "No player's price pays more than the model's odds right now");
+  assert.strictEqual(FB.weeklyRankings([it("A", 0.3, [px("FanDuel", 100, 300)])], RNOW).valueEmpty, "No player's price pays more than the model's odds right now");
   // future-dated or invalid prices never count
   assert.strictEqual(FB.weeklyRankings([it("A", 0.4, [px("FanDuel", 200, -60), px("DraftKings", "abc")])], RNOW).valueEmpty, "No sportsbook prices uploaded for this market");
   // a newer price from the same book replaces its older one (even when the older one paid more)

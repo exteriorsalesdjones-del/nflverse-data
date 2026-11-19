@@ -1522,7 +1522,9 @@ function LineMoves({ week, market }) {
 }
 
 /* =========================== WEEKLY RANKINGS (Week tab) =========================== */
-const RANK_VIEWS = [["chance", "Highest TD Chance"], ["value", "Best Value"], ["combined", "Combined"]];
+// "Model vs Price" was "Best Value": the list shows where the model rates a player above his price, which testing
+// has not shown to be value. The saved choice keeps its old key ("value").
+const RANK_VIEWS = [["chance", "Highest TD Chance"], ["value", "Model vs Price"], ["combined", "Combined"]];
 const edgeTxt = (e) => (e < 0.05 ? "+<0.1" : `+${e.toFixed(1)}`) + " pts";
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* unavailable */ } } };
 /* Price used for a ranked row: book, odds and the time of the ODDS (captured, or upload time when that's all there is), in ET. */
@@ -1562,9 +1564,9 @@ function WeeklyRankings({ onOpen }) {
   const list = r[view]; const shown = all ? list : list.slice(0, 10);
   const mk = two ? "2+ TDs" : "Anytime TD";
   const NOTE = {
-    value: `Model ${two ? "2+ TD chance (estimate)" : "TD chance"} minus the chance implied by the best ${mk} price (book margin included): the best price under 2 hours old, or the best last-known price when every price is older. Only players above the model's fair odds are listed.`,
+    value: `Model ${two ? "2+ TD chance (estimate)" : "TD chance"} minus the chance implied by the best ${mk} price (book margin included): the best price under 2 hours old, or the best last-known price when every price is older. Only players whose price pays more than the model's odds are listed, biggest gap first.`,
     chance: `Every available player in games still open, by the model's ${two ? "estimated 2+ TD chance" : "TD chance"}, priced or not.`,
-    combined: "Players from Best Value, ranked by the average of their value rank and their TD-chance rank within that group (lower is better). Ties: higher chance, then higher edge.",
+    combined: "Players from Model vs Price, ranked by the average of their gap rank and their TD-chance rank within that group (lower is better). Ties: higher chance, then bigger gap.",
   };
   const Row = ({ x, i }) => {
     const g = x.g; const c = x.c; const locked = FB.isLocked(g, Date.now());
@@ -1578,7 +1580,7 @@ function WeeklyRankings({ onOpen }) {
             sx={{ display: "block", width: "100%", textAlign: "left", borderRadius: 1, minHeight: 44 }}>
             <Typography sx={{ fontWeight: 600, lineHeight: 1.3 }}>{x.name} <Typography component="span" variant="caption" color="text.secondary">{c.pos} · {c.team}</Typography></Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{g.away} at {g.home} · {kick(g)}</Typography>
-            <Typography variant="body2"><Num>{view === "combined" ? `Value #${x.valueRank} · Chance #${x.chanceRank} · Model ${pct(x.chance)}${est} · Edge ${edgeTxt(x.edgePts)}` : `Model ${pct(x.chance)}${est} · fair ${am(x.fair)}`}</Num></Typography>
+            <Typography variant="body2"><Num>{view === "combined" ? `Gap rank #${x.valueRank} · Chance rank #${x.chanceRank} · Model ${pct(x.chance)}${est} · gap ${edgeTxt(x.edgePts)}` : `Model ${pct(x.chance)}${est} · fair ${am(x.fair)}`}</Num></Typography>
             {view !== "chance" && <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}><PriceUsed b={x.best} />{x.stale && <> · <StaleTag /></>}</Typography>}
           </ButtonBase>
           <Stack direction="row" sx={{ gap: 1, mt: 0.5 }}>
@@ -1587,7 +1589,7 @@ function WeeklyRankings({ onOpen }) {
           </Stack>
         </Box>
         {right && <Box sx={{ textAlign: "right", flexShrink: 0, maxWidth: 96, pt: 0.25 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.1 }}>{view === "value" ? "Edge" : "Score"}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.1 }} title={view === "value" ? "The model's chance minus the chance the price implies" : "Average of the gap rank and the chance rank"}>{view === "value" ? "Gap" : "Score"}</Typography>
           <Typography sx={{ fontWeight: 700, color: "text.primary" }}><Num>{right}</Num></Typography>
           {x.stale && <Typography variant="caption" sx={{ display: "block", lineHeight: 1.15, color: "warning.main" }}>Based on stale odds</Typography>}
         </Box>}
